@@ -1,568 +1,355 @@
 // lib/widgets/inner_background.dart
-import 'dart:ui' as ui;
 import 'dart:math' as math;
+import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import '../themes/app_theme.dart';
 
-/// Unique animated background with floating organic shapes and aurora-like gradients
+/// HOLOGRAPHIC FLUX BACKGROUND
+/// - Unimaginable, layered, animated: swirling ribbons + prismatic strokes + bokeh glows
+/// - Uses ONLY colors from your AppTheme/AppColors
+/// - Lightweight: one controller, low-alpha paints, careful segment counts
 class BackgroundWidget extends StatefulWidget {
   const BackgroundWidget({
     Key? key,
     this.animate = true,
-    this.intensity = 1.0,
-    this.variant = BackgroundVariant.aurora,
+    this.intensity = 1.0,       // 0.5 subtle … 1.0 rich … 1.5 bold
+    this.style = HoloStyle.flux, // choose between flux / prism / vapor
   }) : super(key: key);
 
   final bool animate;
   final double intensity;
-  final BackgroundVariant variant;
+  final HoloStyle style;
 
   @override
   State<BackgroundWidget> createState() => _BackgroundWidgetState();
 }
 
-enum BackgroundVariant {
-  aurora,       // Smooth flowing gradients like northern lights
-  crystalline,  // Geometric crystal-like patterns
-  organic,      // Floating organic shapes
-  mesh,         // Modern gradient mesh
-}
+enum HoloStyle { flux, prism, vapor }
 
 class _BackgroundWidgetState extends State<BackgroundWidget>
     with SingleTickerProviderStateMixin {
-  late AnimationController _controller;
-  late Animation<double> _flowAnimation;
-  late Animation<double> _pulseAnimation;
+  late final AnimationController _ctrl = AnimationController(
+    vsync: this,
+    duration: const Duration(seconds: 28),
+  )..addListener(() => setState(() {}));
 
   @override
   void initState() {
     super.initState();
-    _controller = AnimationController(
-      duration: const Duration(seconds: 20),
-      vsync: this,
-    );
+    if (widget.animate) _ctrl.repeat();
+  }
 
-    _flowAnimation = Tween<double>(
-      begin: 0.0,
-      end: 1.0,
-    ).animate(CurvedAnimation(
-      parent: _controller,
-      curve: Curves.easeInOut,
-    ));
-
-    _pulseAnimation = Tween<double>(
-      begin: 0.95,
-      end: 1.05,
-    ).animate(CurvedAnimation(
-      parent: _controller,
-      curve: Curves.easeInOut,
-    ));
-
-    if (widget.animate) {
-      _controller.repeat();
+  @override
+  void didUpdateWidget(covariant BackgroundWidget oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.animate && !_ctrl.isAnimating) {
+      _ctrl.repeat();
+    } else if (!widget.animate && _ctrl.isAnimating) {
+      _ctrl.stop();
     }
   }
 
   @override
   void dispose() {
-    _controller.dispose();
+    _ctrl.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final cs = Theme.of(context).colorScheme;
+    final isDark = cs.brightness == Brightness.dark;
 
-    return AnimatedBuilder(
-      animation: _controller,
-      builder: (context, _) {
-        return Container(
-          decoration: BoxDecoration(
-            gradient: LinearGradient(
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-              colors: isDark
-                  ? [
-                AppColors.deep,
-                AppColors.darken(AppColors.deep, 0.1),
-              ]
-                  : [
-                AppColors.offWhite,
-                AppColors.mintBgLight.withOpacity(0.5),
-              ],
-            ),
-          ),
-          child: CustomPaint(
-            painter: _getBackgroundPainter(),
-            size: Size.infinite,
-          ),
-        );
-      },
+    return CustomPaint(
+      painter: _HoloPainter(
+        t: _ctrl.value,
+        style: widget.style,
+        intensity: widget.intensity,
+        isDark: isDark,
+        cs: cs,
+      ),
+      size: Size.infinite,
     );
-  }
-
-  CustomPainter _getBackgroundPainter() {
-    switch (widget.variant) {
-      case BackgroundVariant.aurora:
-        return AuroraBackgroundPainter(
-          flowProgress: _flowAnimation.value,
-          pulseScale: _pulseAnimation.value,
-          intensity: widget.intensity,
-          isDark: Theme.of(context).brightness == Brightness.dark,
-        );
-      case BackgroundVariant.crystalline:
-        return CrystallineBackgroundPainter(
-          flowProgress: _flowAnimation.value,
-          intensity: widget.intensity,
-          isDark: Theme.of(context).brightness == Brightness.dark,
-        );
-      case BackgroundVariant.organic:
-        return OrganicBackgroundPainter(
-          flowProgress: _flowAnimation.value,
-          pulseScale: _pulseAnimation.value,
-          intensity: widget.intensity,
-          isDark: Theme.of(context).brightness == Brightness.dark,
-        );
-      case BackgroundVariant.mesh:
-        return MeshBackgroundPainter(
-          flowProgress: _flowAnimation.value,
-          intensity: widget.intensity,
-          isDark: Theme.of(context).brightness == Brightness.dark,
-        );
-    }
   }
 }
 
-/// Aurora-like flowing gradients
-class AuroraBackgroundPainter extends CustomPainter {
-  final double flowProgress;
-  final double pulseScale;
+/// Core painter: different “unimaginable” modes that all feel premium.
+class _HoloPainter extends CustomPainter {
+  final double t;          // 0..1 time
+  final HoloStyle style;
   final double intensity;
   final bool isDark;
+  final ColorScheme cs;
 
-  AuroraBackgroundPainter({
-    required this.flowProgress,
-    required this.pulseScale,
+  _HoloPainter({
+    required this.t,
+    required this.style,
     required this.intensity,
     required this.isDark,
+    required this.cs,
   });
 
   @override
   void paint(Canvas canvas, Size size) {
+    // Base gradient wash (very soft, respects theme)
+    _paintBaseGradient(canvas, size);
+
+    switch (style) {
+      case HoloStyle.flux:
+        _paintFluxRibbons(canvas, size);
+        _paintPrismaticStrokes(canvas, size);
+        _paintBokehGlows(canvas, size);
+        break;
+      case HoloStyle.prism:
+        _paintPrismaticField(canvas, size);
+        _paintBokehGlows(canvas, size, fewer: true);
+        break;
+      case HoloStyle.vapor:
+        _paintVaporWaves(canvas, size);
+        _paintBokehGlows(canvas, size, tiny: true);
+        break;
+    }
+
+    _paintVignette(canvas, size); // focus content
+  }
+
+  // ───────────────────────────────── Base wash
+  void _paintBaseGradient(Canvas canvas, Size size) {
     final rect = Offset.zero & size;
+    final c1 = isDark ? AppColors.deep : AppColors.offWhite;
+    // keep subtle second stop to match brand feel
+    final c2 = isDark ? AppColors.darken(AppColors.deep, .08) : AppColors.mintBgLight.withOpacity(.65);
 
-    // Create flowing aurora waves
+    final base = Paint()
+      ..shader = ui.Gradient.linear(
+        rect.topLeft,
+        rect.bottomRight,
+        [c1, c2],
+      );
+
+    canvas.drawRect(rect, base);
+  }
+
+  // ───────────────────────────────── HoloStyle.flux — swirling ribbons
+  void _paintFluxRibbons(Canvas canvas, Size size) {
+    final cx = size.width * .5;
+    final cy = size.height * (.40 + .05 * math.sin(t * math.pi * 2));
+    final baseR = size.shortestSide * (.28 + .02 * math.cos(t * math.pi * 2));
+    final segments = 160; // balanced perf/quality
+
+    // Palette from theme
+    final a = AppColors.primary;
+    final b = AppColors.secondary;
+    final m = AppColors.mintBg;
+
+    // Three layered ribbons with phase offsets
     for (int i = 0; i < 3; i++) {
-      final phase = flowProgress * 2 * math.pi + (i * math.pi / 3);
-      final offsetY = size.height * (0.3 + i * 0.15);
-
+      final phase = t * math.pi * 2 + i * (math.pi / 3);
+      final swell = 0.22 + 0.05 * math.sin(phase * 1.3 + i);
       final path = Path();
-      path.moveTo(0, offsetY);
 
-      for (double x = 0; x <= size.width; x += 10) {
-        final y = offsetY +
-            math.sin((x / size.width) * 4 * math.pi + phase) * 40 * pulseScale +
-            math.sin((x / size.width) * 2 * math.pi - phase) * 20;
+      for (int s = 0; s <= segments; s++) {
+        final th = (s / segments) * math.pi * 2;
+        // Spiral radius with “breathing”
+        final r = baseR *
+            (1.0 +
+                0.06 * math.sin(2.0 * th + phase) +
+                swell * math.sin(th * 1.5 - phase * .7));
 
-        if (x == 0) {
+        final x = cx + r * math.cos(th + i * .12);
+        final y = cy + r * math.sin(th + i * .12);
+
+        if (s == 0) {
           path.moveTo(x, y);
         } else {
           path.lineTo(x, y);
         }
       }
-
-      path.lineTo(size.width, size.height);
-      path.lineTo(0, size.height);
       path.close();
 
-      final gradient = ui.Gradient.linear(
-        Offset(0, offsetY - 50),
-        Offset(0, size.height),
-        [
-          _getAuroraColor(i).withOpacity(0.15 * intensity),
-          _getAuroraColor(i).withOpacity(0.03 * intensity),
-        ],
-        [0.0, 1.0],
+      // Ribbon gradient & blur
+      final grad = ui.Gradient.radial(
+        Offset(cx, cy),
+        baseR * 1.2,
+        switch (i) {
+          0 => [a.withOpacity(.28 * intensity), a.withOpacity(.05 * intensity)],
+          1 => [b.withOpacity(.24 * intensity), b.withOpacity(.04 * intensity)],
+          _ => [m.withOpacity(.20 * intensity), m.withOpacity(.03 * intensity)],
+        },
       );
 
-      final paint = Paint()
-        ..shader = gradient
-        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 20);
+      final p = Paint()
+        ..shader = grad
+        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 24);
 
-      canvas.drawPath(path, paint);
-    }
-
-    // Add glowing orbs
-    _drawGlowingOrbs(canvas, size);
-  }
-
-  Color _getAuroraColor(int index) {
-    final colors = isDark
-        ? [
-      AppColors.primary.withOpacity(0.8),
-      AppColors.secondary.withOpacity(0.7),
-      const Color(0xFF6BC39B).withOpacity(0.6),
-    ]
-        : [
-      AppColors.primary,
-      AppColors.secondary,
-      AppColors.mintBg,
-    ];
-    return colors[index % colors.length];
-  }
-
-  void _drawGlowingOrbs(Canvas canvas, Size size) {
-    final positions = [
-      Offset(size.width * 0.2, size.height * 0.3),
-      Offset(size.width * 0.7, size.height * 0.5),
-      Offset(size.width * 0.4, size.height * 0.7),
-    ];
-
-    for (var i = 0; i < positions.length; i++) {
-      final offset = positions[i];
-      final movingOffset = Offset(
-        offset.dx + math.sin(flowProgress * 2 * math.pi + i) * 30,
-        offset.dy + math.cos(flowProgress * 2 * math.pi + i) * 20,
-      );
-
-      final paint = Paint()
-        ..shader = ui.Gradient.radial(
-          movingOffset,
-          100 * pulseScale,
-          [
-            _getAuroraColor(i).withOpacity(0.3 * intensity),
-            _getAuroraColor(i).withOpacity(0.0),
-          ],
-        )
-        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 40);
-
-      canvas.drawCircle(movingOffset, 80 * pulseScale, paint);
+      canvas.drawPath(path, p);
     }
   }
 
-  @override
-  bool shouldRepaint(AuroraBackgroundPainter oldDelegate) =>
-      oldDelegate.flowProgress != flowProgress ||
-          oldDelegate.pulseScale != pulseScale ||
-          oldDelegate.intensity != intensity ||
-          oldDelegate.isDark != isDark;
-}
-
-/// Geometric crystalline patterns
-class CrystallineBackgroundPainter extends CustomPainter {
-  final double flowProgress;
-  final double intensity;
-  final bool isDark;
-
-  CrystallineBackgroundPainter({
-    required this.flowProgress,
-    required this.intensity,
-    required this.isDark,
-  });
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final random = math.Random(42);
-
-    // Draw crystalline shapes
-    for (int i = 0; i < 12; i++) {
-      final x = random.nextDouble() * size.width;
-      final y = random.nextDouble() * size.height;
-      final radius = 50 + random.nextDouble() * 100;
-      final rotation = flowProgress * math.pi * 2 + (i * math.pi / 6);
+  // ───────────────────────────────── Flux helpers: prismatic strokes
+  void _paintPrismaticStrokes(Canvas canvas, Size size) {
+    final rnd = math.Random(7);
+    final count = 9;
+    for (int i = 0; i < count; i++) {
+      final w = size.width * (.12 + rnd.nextDouble() * .10);
+      final h = size.height * (.010 + rnd.nextDouble() * .018);
+      final x = rnd.nextDouble() * (size.width - w);
+      final y = rnd.nextDouble() * (size.height - h);
 
       canvas.save();
-      canvas.translate(x, y);
-      canvas.rotate(rotation);
+      final rot = (i * .25) + math.sin((t + i * .07) * math.pi * 2) * .12;
+      canvas.translate(x + w / 2, y + h / 2);
+      canvas.rotate(rot);
+      canvas.translate(-(x + w / 2), -(y + h / 2));
 
-      final path = _createCrystalPath(radius);
+      final rrect = RRect.fromRectAndRadius(
+        Rect.fromLTWH(x, y, w, h),
+        const Radius.circular(18),
+      );
 
-      final paint = Paint()
-        ..style = PaintingStyle.fill
+      final stroke = Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1.2
         ..shader = ui.Gradient.linear(
-          Offset(-radius, -radius),
-          Offset(radius, radius),
+          Offset(x, y),
+          Offset(x + w, y + h),
           [
-            _getCrystalColor(i).withOpacity(0.1 * intensity),
-            _getCrystalColor(i).withOpacity(0.02 * intensity),
+            AppColors.primary.withOpacity(.22 * intensity),
+            AppColors.secondary.withOpacity(.18 * intensity),
           ],
         );
 
-      canvas.drawPath(path, paint);
-
-      // Draw crystal edges
-      final edgePaint = Paint()
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 1
-        ..color = _getCrystalColor(i).withOpacity(0.2 * intensity);
-
-      canvas.drawPath(path, edgePaint);
-
+      canvas.drawRRect(rrect, stroke);
       canvas.restore();
     }
   }
 
-  Path _createCrystalPath(double radius) {
-    final path = Path();
-    const sides = 6;
-
-    for (int i = 0; i <= sides; i++) {
-      final angle = (i * 2 * math.pi) / sides;
-      final x = radius * math.cos(angle);
-      final y = radius * math.sin(angle);
-
-      if (i == 0) {
-        path.moveTo(x, y);
-      } else {
-        path.lineTo(x, y);
-      }
-    }
-
-    path.close();
-    return path;
-  }
-
-  Color _getCrystalColor(int index) {
-    return index % 2 == 0
-        ? (isDark ? const Color(0xFF6BC39B) : AppColors.primary)
-        : (isDark ? const Color(0xFF74C5A4) : AppColors.secondary);
-  }
-
-  @override
-  bool shouldRepaint(CrystallineBackgroundPainter oldDelegate) =>
-      oldDelegate.flowProgress != flowProgress ||
-          oldDelegate.intensity != intensity ||
-          oldDelegate.isDark != isDark;
-}
-
-/// Floating organic shapes
-class OrganicBackgroundPainter extends CustomPainter {
-  final double flowProgress;
-  final double pulseScale;
-  final double intensity;
-  final bool isDark;
-
-  OrganicBackgroundPainter({
-    required this.flowProgress,
-    required this.pulseScale,
-    required this.intensity,
-    required this.isDark,
-  });
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    // Draw multiple organic blobs
-    final blobs = [
-      _BlobConfig(
-        center: Offset(size.width * 0.3, size.height * 0.2),
-        radius: 120,
-        color: AppColors.primary,
-        phase: 0,
-      ),
-      _BlobConfig(
-        center: Offset(size.width * 0.7, size.height * 0.4),
-        radius: 100,
-        color: AppColors.secondary,
-        phase: math.pi / 3,
-      ),
-      _BlobConfig(
-        center: Offset(size.width * 0.5, size.height * 0.7),
-        radius: 140,
-        color: AppColors.mintBg,
-        phase: 2 * math.pi / 3,
-      ),
-      _BlobConfig(
-        center: Offset(size.width * 0.2, size.height * 0.6),
-        radius: 80,
-        color: isDark ? const Color(0xFF6BC39B) : AppColors.mintBgLight,
-        phase: math.pi,
-      ),
-    ];
-
-    for (final blob in blobs) {
-      _drawOrganicBlob(canvas, blob, flowProgress, pulseScale);
-    }
-  }
-
-  void _drawOrganicBlob(
-      Canvas canvas,
-      _BlobConfig config,
-      double progress,
-      double scale,
-      ) {
-    final path = Path();
-    const points = 8;
-
-    for (int i = 0; i <= points; i++) {
-      final angle = (i * 2 * math.pi) / points;
-      final phase = progress * 2 * math.pi + config.phase;
-
-      // Create organic variation
-      final radiusVariation = config.radius * scale +
-          math.sin(angle * 2 + phase) * 20 +
-          math.cos(angle * 3 - phase) * 15;
-
-      final x = config.center.dx + radiusVariation * math.cos(angle);
-      final y = config.center.dy + radiusVariation * math.sin(angle);
-
-      if (i == 0) {
-        path.moveTo(x, y);
-      } else {
-        final prevAngle = ((i - 1) * 2 * math.pi) / points;
-        final prevRadiusVariation = config.radius * scale +
-            math.sin(prevAngle * 2 + phase) * 20 +
-            math.cos(prevAngle * 3 - phase) * 15;
-
-        final prevX = config.center.dx + prevRadiusVariation * math.cos(prevAngle);
-        final prevY = config.center.dy + prevRadiusVariation * math.sin(prevAngle);
-
-        final cpX1 = prevX + (x - prevX) * 0.3;
-        final cpY1 = prevY + (y - prevY) * 0.3;
-        final cpX2 = x - (x - prevX) * 0.3;
-        final cpY2 = y - (y - prevY) * 0.3;
-
-        path.cubicTo(cpX1, cpY1, cpX2, cpY2, x, y);
-      }
-    }
-
-    path.close();
-
-    final paint = Paint()
-      ..shader = ui.Gradient.radial(
-        config.center,
-        config.radius * 1.5,
-        [
-          config.color.withOpacity(0.15 * intensity),
-          config.color.withOpacity(0.02 * intensity),
-        ],
-      )
-      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 30);
-
-    canvas.drawPath(path, paint);
-  }
-
-  @override
-  bool shouldRepaint(OrganicBackgroundPainter oldDelegate) =>
-      oldDelegate.flowProgress != flowProgress ||
-          oldDelegate.pulseScale != pulseScale ||
-          oldDelegate.intensity != intensity ||
-          oldDelegate.isDark != isDark;
-}
-
-/// Modern gradient mesh background
-class MeshBackgroundPainter extends CustomPainter {
-  final double flowProgress;
-  final double intensity;
-  final bool isDark;
-
-  MeshBackgroundPainter({
-    required this.flowProgress,
-    required this.intensity,
-    required this.isDark,
-  });
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final meshPoints = <Offset>[];
-    const cols = 5;
-    const rows = 5;
-
-    // Generate mesh grid points with animated distortion
+  // ───────────────────────────────── Prism field (alt style)
+  void _paintPrismaticField(Canvas canvas, Size size) {
+    final cols = 6, rows = 8;
     for (int i = 0; i < rows; i++) {
       for (int j = 0; j < cols; j++) {
-        final baseX = (size.width / (cols - 1)) * j;
-        final baseY = (size.height / (rows - 1)) * i;
+        final cellW = size.width / cols;
+        final cellH = size.height / rows;
+        final cx = j * cellW + cellW / 2;
+        final cy = i * cellH + cellH / 2;
 
-        final distortionX = math.sin(flowProgress * 2 * math.pi + i * 0.5) * 20;
-        final distortionY = math.cos(flowProgress * 2 * math.pi + j * 0.5) * 20;
+        final r = math.min(cellW, cellH) * (.42 + .08 * math.sin((t + i * .07 + j * .05) * math.pi * 2));
+        final rot = (i + j) * .12 + math.cos((t + i * .03) * math.pi * 2) * .15;
 
-        meshPoints.add(Offset(
-          baseX + distortionX,
-          baseY + distortionY,
-        ));
-      }
-    }
+        canvas.save();
+        canvas.translate(cx, cy);
+        canvas.rotate(rot);
 
-    // Draw mesh connections
-    final meshPaint = Paint()
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 0.5
-      ..color = (isDark ? AppColors.mintBgLight : AppColors.primary)
-          .withOpacity(0.1 * intensity);
-
-    // Draw horizontal lines
-    for (int i = 0; i < rows; i++) {
-      final path = Path();
-      for (int j = 0; j < cols; j++) {
-        final point = meshPoints[i * cols + j];
-        if (j == 0) {
-          path.moveTo(point.dx, point.dy);
-        } else {
-          path.lineTo(point.dx, point.dy);
-        }
-      }
-      canvas.drawPath(path, meshPaint);
-    }
-
-    // Draw vertical lines
-    for (int j = 0; j < cols; j++) {
-      final path = Path();
-      for (int i = 0; i < rows; i++) {
-        final point = meshPoints[i * cols + j];
-        if (i == 0) {
-          path.moveTo(point.dx, point.dy);
-        } else {
-          path.lineTo(point.dx, point.dy);
-        }
-      }
-      canvas.drawPath(path, meshPaint);
-    }
-
-    // Add gradient nodes at intersection points
-    for (final point in meshPoints) {
-      final gradientPaint = Paint()
-        ..shader = ui.Gradient.radial(
-          point,
-          50,
-          [
-            _getMeshNodeColor(point, size).withOpacity(0.3 * intensity),
-            _getMeshNodeColor(point, size).withOpacity(0.0),
-          ],
+        final rr = RRect.fromRectAndRadius(
+          Rect.fromCenter(center: Offset.zero, width: r * 1.6, height: r * .38),
+          const Radius.circular(18),
         );
 
-      canvas.drawCircle(point, 30, gradientPaint);
+        final p = Paint()
+          ..shader = ui.Gradient.linear(
+            const Offset(-60, 0),
+            const Offset(60, 0),
+            [
+              AppColors.primary.withOpacity(.12 * intensity),
+              AppColors.secondary.withOpacity(.12 * intensity),
+            ],
+          )
+          ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 14);
+
+        canvas.drawRRect(rr, p);
+
+        final edge = Paint()
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 0.9
+          ..color = AppColors.mintBgLight.withOpacity(.35 * intensity);
+
+        canvas.drawRRect(rr, edge);
+        canvas.restore();
+      }
     }
   }
 
-  Color _getMeshNodeColor(Offset point, Size size) {
-    final distanceFromCenter = (point - Offset(size.width / 2, size.height / 2)).distance;
-    final maxDistance = size.shortestSide / 2;
-    final ratio = (distanceFromCenter / maxDistance).clamp(0.0, 1.0);
-
-    if (ratio < 0.5) {
-      return isDark ? const Color(0xFF6BC39B) : AppColors.primary;
-    } else {
-      return isDark ? const Color(0xFF74C5A4) : AppColors.secondary;
+  // ───────────────────────────────── Vapor waves (alt style)
+  void _paintVaporWaves(Canvas canvas, Size size) {
+    final lines = 8;
+    for (int i = 0; i < lines; i++) {
+      final y0 = size.height * (.15 + i * .1);
+      final path = Path();
+      for (double x = 0; x <= size.width; x += 8) {
+        final y = y0 +
+            math.sin((x / size.width) * math.pi * 4 + t * math.pi * 2 + i) * 24 +
+            math.cos((x / size.width) * math.pi * 2 - t * math.pi * 2 - i) * 12;
+        (x == 0) ? path.moveTo(x, y) : path.lineTo(x, y);
+      }
+      final stroke = Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1.2
+        ..shader = ui.Gradient.linear(
+          Offset(0, y0 - 24),
+          Offset(0, y0 + 24),
+          [
+            AppColors.primary.withOpacity(.16 * intensity),
+            AppColors.secondary.withOpacity(.06 * intensity),
+          ],
+        );
+      canvas.drawPath(path, stroke);
     }
+  }
+
+  // ───────────────────────────────── Shared: bokeh glows
+  void _paintBokehGlows(Canvas canvas, Size size, {bool fewer = false, bool tiny = false}) {
+    final n = fewer ? 4 : (tiny ? 3 : 6);
+    final radiusBase = tiny ? 50.0 : 90.0;
+
+    for (int i = 0; i < n; i++) {
+      final ox = size.width * (.15 + .7 * _hash(i, 0.37));
+      final oy = size.height * (.20 + .6 * _hash(i, 0.71));
+
+      final px = ox + math.sin(t * math.pi * 2 + i) * 40;
+      final py = oy + math.cos(t * math.pi * 2 + i * .6) * 28;
+
+      final r = radiusBase * (1 + .15 * math.sin(t * math.pi * 2 + i * .9));
+
+      final paint = Paint()
+        ..shader = ui.Gradient.radial(
+          Offset(px, py),
+          r,
+          [
+            AppColors.primary.withOpacity(.22 * intensity),
+            AppColors.secondary.withOpacity(.00),
+          ],
+        )
+        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 36);
+
+      canvas.drawCircle(Offset(px, py), r * .9, paint);
+    }
+  }
+
+  // ───────────────────────────────── Subtle vignette (edge fade)
+  void _paintVignette(Canvas canvas, Size size) {
+    final vignette = Paint()
+      ..shader = ui.Gradient.radial(
+        Offset(size.width * .5, size.height * .55),
+        size.longestSide * .75,
+        [
+          Colors.transparent,
+          (isDark ? Colors.black : AppColors.deep).withOpacity(isDark ? .32 : .06),
+        ],
+      );
+    canvas.drawRect(Offset.zero & size, vignette);
+  }
+
+  // small deterministic pseudo-random (no allocations)
+  double _hash(int i, double seed) {
+    final s = math.sin(i * 127.1 + seed * 311.7) * 43758.5453;
+    return s - s.floorToDouble();
   }
 
   @override
-  bool shouldRepaint(MeshBackgroundPainter oldDelegate) =>
-      oldDelegate.flowProgress != flowProgress ||
-          oldDelegate.intensity != intensity ||
-          oldDelegate.isDark != isDark;
-}
-
-class _BlobConfig {
-  final Offset center;
-  final double radius;
-  final Color color;
-  final double phase;
-
-  _BlobConfig({
-    required this.center,
-    required this.radius,
-    required this.color,
-    required this.phase,
-  });
+  bool shouldRepaint(covariant _HoloPainter old) =>
+      old.t != t ||
+          old.style != style ||
+          old.intensity != intensity ||
+          old.isDark != isDark;
 }

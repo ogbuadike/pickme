@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "836831611903",
+    "project_id": "pick-me-46b4e",
+    "storage_bucket": "pick-me-46b4e.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:836831611903:android:7f342987af72bcfd7af5ca",
+        "android_client_info": {
+          "package_name": "com.pickme.pickme"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyA5crvDMblFtfSBWuJ2A63dpuOw4GC1ZcM"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

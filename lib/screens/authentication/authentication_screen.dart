@@ -22,7 +22,7 @@ class AuthenticationScreen extends StatefulWidget {
 }
 
 class _AuthenticationScreenState extends State<AuthenticationScreen>
-    with TickerProviderStateMixin {
+    with SingleTickerProviderStateMixin {
   // PIN state
   static const int _pinLen = 4;
   final List<String> _pin = List.filled(_pinLen, '');
@@ -45,37 +45,34 @@ class _AuthenticationScreenState extends State<AuthenticationScreen>
   Timer? _unlockTicker;
   Duration _remaining = Duration.zero;
 
-  // Animations
-  late final AnimationController _shakeCtrl = AnimationController(
-    vsync: this,
-    duration: const Duration(milliseconds: 400),
-  );
-  late final Animation<double> _shakeAnim = TweenSequence<double>([
-    TweenSequenceItem(tween: Tween(begin: 0, end: -12), weight: 1),
-    TweenSequenceItem(tween: Tween(begin: -12, end: 10), weight: 2),
-    TweenSequenceItem(tween: Tween(begin: 10, end: -8), weight: 2),
-    TweenSequenceItem(tween: Tween(begin: -8, end: 6), weight: 2),
-    TweenSequenceItem(tween: Tween(begin: 6, end: 0), weight: 1),
-  ]).animate(CurvedAnimation(parent: _shakeCtrl, curve: Curves.elasticOut));
-
-  late final AnimationController _fadeInCtrl = AnimationController(
-    vsync: this,
-    duration: const Duration(milliseconds: 800),
-  );
+  // Simple pulse animation for dots
+  late final AnimationController _pulseController;
+  late final Animation<double> _pulseAnimation;
 
   @override
   void initState() {
     super.initState();
     _api = ApiClient(http.Client(), context);
+    _pulseController = AnimationController(
+      duration: const Duration(milliseconds: 1000),
+      vsync: this,
+    )..repeat(reverse: true);
+
+    _pulseAnimation = Tween<double>(
+      begin: 0.5,
+      end: 1.0,
+    ).animate(CurvedAnimation(
+      parent: _pulseController,
+      curve: Curves.easeInOut,
+    ));
+
     _init();
-    _fadeInCtrl.forward();
   }
 
   @override
   void dispose() {
     _unlockTicker?.cancel();
-    _shakeCtrl.dispose();
-    _fadeInCtrl.dispose();
+    _pulseController.dispose();
     super.dispose();
   }
 
@@ -151,15 +148,7 @@ class _AuthenticationScreenState extends State<AuthenticationScreen>
     }
 
     final full = _pin.join();
-    if (!bypass && full.length < _pinLen) {
-      showToastNotification(
-        context: context,
-        title: 'Incomplete PIN',
-        message: 'Please enter your 4-digit PIN',
-        isSuccess: false,
-      );
-      return;
-    }
+    if (!bypass && full.length < _pinLen) return;
 
     final uid = _prefs.getString('user_id') ?? '';
     if (uid.isEmpty && !bypass) {
@@ -209,9 +198,6 @@ class _AuthenticationScreenState extends State<AuthenticationScreen>
     final attempts = (_prefs.getInt('failed_attempts') ?? 0) + 1;
     await _prefs.setInt('failed_attempts', attempts);
     _resetPin();
-
-    // Shake animation
-    _shakeCtrl.forward().then((_) => _shakeCtrl.reset());
     HapticFeedback.heavyImpact();
 
     if (attempts >= 5) {
@@ -285,30 +271,82 @@ class _AuthenticationScreenState extends State<AuthenticationScreen>
 
   @override
   Widget build(BuildContext context) {
-    final screenSize = MediaQuery.of(context).size;
-    final isSmallScreen = screenSize.width < 360;
-    final isTablet = screenSize.width > 600;
+    final size = MediaQuery.of(context).size;
+    final isSmallScreen = size.width < 360;
 
     return Scaffold(
       backgroundColor: Theme.of(context).colorScheme.background,
       body: Stack(
         children: [
-          // Animated background
-          const BackgroundWidget(
-            showGrid: false,
-            intensity: 0.8,
+          // Simple gradient background
+          Container(
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topCenter,
+                end: Alignment.bottomCenter,
+                colors: [
+                  AppColors.primary.withOpacity(0.1),
+                  AppColors.offWhite,
+                ],
+              ),
+            ),
           ),
 
           // Main content
           SafeArea(
-            child: FadeTransition(
-              opacity: CurvedAnimation(
-                parent: _fadeInCtrl,
-                curve: Curves.easeOut,
+            child: SingleChildScrollView(
+              child: Container(
+                height: size.height - MediaQuery.of(context).padding.top,
+                padding: EdgeInsets.symmetric(horizontal: isSmallScreen ? 20 : 32),
+                child: Column(
+                  children: [
+                    const Spacer(flex: 2),
+                    _buildLogo(),
+                    const SizedBox(height: 48),
+                    _buildWelcomeText(),
+                    const SizedBox(height: 48),
+                    _buildPinDots(),
+                    const SizedBox(height: 32),
+                    if (_biometricAvailable) _buildBiometricHint(),
+                    const Spacer(flex: 3),
+                    _buildNumPad(isSmallScreen),
+                    const SizedBox(height: 32),
+                  ],
+                ),
               ),
-              child: _buildContent(isSmallScreen, isTablet),
             ),
           ),
+
+          // Loading overlay
+          if (_loading)
+            Container(
+              color: Colors.black26,
+              child: Center(
+                child: Container(
+                  padding: const EdgeInsets.all(32),
+                  decoration: BoxDecoration(
+                    color: AppColors.surface,
+                    borderRadius: BorderRadius.circular(16),
+                  ),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      CircularProgressIndicator(
+                        valueColor: AlwaysStoppedAnimation<Color>(AppColors.primary),
+                      ),
+                      const SizedBox(height: 16),
+                      Text(
+                        'Verifying...',
+                        style: TextStyle(
+                          color: AppColors.textPrimary,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
 
           // Lock overlay
           if (_locked) _buildLockOverlay(),
@@ -317,334 +355,186 @@ class _AuthenticationScreenState extends State<AuthenticationScreen>
     );
   }
 
-  Widget _buildContent(bool isSmallScreen, bool isTablet) {
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final maxContentWidth = isTablet ? 500.0 : double.infinity;
-
-        return Center(
-          child: Container(
-            width: maxContentWidth,
-            padding: EdgeInsets.symmetric(
-              horizontal: isSmallScreen ? 16 : 24,
-            ),
-            child: Column(
-              children: [
-                SizedBox(height: constraints.maxHeight * 0.05),
-                _buildHeader(),
-                const Spacer(),
-                AnimatedBuilder(
-                  animation: _shakeAnim,
-                  builder: (context, child) {
-                    return Transform.translate(
-                      offset: Offset(_shakeAnim.value, 0),
-                      child: _buildPinSection(isSmallScreen),
-                    );
-                  },
-                ),
-                if (_loading) _buildLoadingIndicator(),
-                const Spacer(),
-                _buildKeypad(constraints, isSmallScreen),
-                SizedBox(height: constraints.maxHeight * 0.03),
-              ],
-            ),
+  Widget _buildLogo() {
+    return Container(
+      width: 100,
+      height: 100,
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: AppColors.surface,
+        shape: BoxShape.circle,
+        boxShadow: [
+          BoxShadow(
+            color: AppColors.primary.withOpacity(0.2),
+            blurRadius: 30,
+            offset: const Offset(0, 10),
           ),
-        );
-      },
+        ],
+      ),
+      child: Image.asset(
+        'image/pickme.png',
+        fit: BoxFit.contain,
+      ),
     );
   }
 
-  Widget _buildHeader() {
+  Widget _buildWelcomeText() {
     return Column(
       children: [
-        // Logo with glow effect
-        Container(
-          width: 80,
-          height: 80,
-          decoration: BoxDecoration(
-            shape: BoxShape.circle,
-            color: AppColors.surface,
-            boxShadow: [
-              BoxShadow(
-                color: AppColors.primary.withOpacity(0.3),
-                blurRadius: 20,
-                spreadRadius: 5,
-              ),
-            ],
-          ),
-          padding: const EdgeInsets.all(12),
-          child: Image.asset(
-            'image/pickme.png',
-            fit: BoxFit.contain,
-          ),
-        ),
-        const SizedBox(height: 20),
         Text(
           'Welcome back',
-          style: Theme.of(context).textTheme.bodyLarge?.copyWith(
+          style: TextStyle(
+            fontSize: 16,
             color: AppColors.textSecondary,
-            letterSpacing: 0.5,
+            fontWeight: FontWeight.w500,
           ),
         ),
-        const SizedBox(height: 4),
+        const SizedBox(height: 8),
         Text(
           _username ?? 'User',
-          style: Theme.of(context).textTheme.headlineMedium?.copyWith(
-            fontWeight: FontWeight.w900,
+          style: TextStyle(
+            fontSize: 28,
             color: AppColors.textPrimary,
-            letterSpacing: -0.5,
+            fontWeight: FontWeight.w800,
           ),
         ),
       ],
     );
   }
 
-  Widget _buildPinSection(bool isSmallScreen) {
-    final boxSize = isSmallScreen ? 48.0 : 56.0;
-    final spacing = isSmallScreen ? 8.0 : 12.0;
+  Widget _buildPinDots() {
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: List.generate(_pinLen, (index) {
+        final filled = _pin[index].isNotEmpty;
+        final active = index == _cursor;
 
-    return Column(
-      children: [
-        Text(
-          'Enter PIN',
-          style: Theme.of(context).textTheme.titleMedium?.copyWith(
-            color: AppColors.textSecondary,
-            letterSpacing: 1.2,
-            fontWeight: FontWeight.w600,
-          ),
-        ),
-        const SizedBox(height: 24),
-        Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: List.generate(_pinLen, (i) {
-            final active = i == _cursor && !_locked;
-            final filled = _pin[i].isNotEmpty;
-
-            return AnimatedContainer(
-              duration: const Duration(milliseconds: 300),
-              curve: Curves.easeOutBack,
-              margin: EdgeInsets.symmetric(horizontal: spacing),
-              width: boxSize,
-              height: boxSize,
+        return AnimatedBuilder(
+          animation: _pulseAnimation,
+          builder: (context, child) {
+            return Container(
+              margin: const EdgeInsets.symmetric(horizontal: 12),
+              width: 16,
+              height: 16,
               decoration: BoxDecoration(
+                shape: BoxShape.circle,
                 color: filled
-                    ? AppColors.primary.withOpacity(0.1)
-                    : AppColors.surface.withOpacity(0.9),
-                borderRadius: BorderRadius.circular(16),
+                    ? AppColors.primary
+                    : active
+                    ? AppColors.primary.withOpacity(_pulseAnimation.value * 0.3)
+                    : AppColors.mintBgLight,
                 border: Border.all(
                   color: active
-                      ? AppColors.primary
-                      : (filled ? AppColors.primary.withOpacity(0.5) : AppColors.mintBgLight),
-                  width: active ? 2.5 : 1.5,
-                ),
-                boxShadow: [
-                  if (active)
-                    BoxShadow(
-                      color: AppColors.primary.withOpacity(0.25),
-                      blurRadius: 20,
-                      spreadRadius: 2,
-                    ),
-                ],
-              ),
-              child: Center(
-                child: AnimatedScale(
-                  duration: const Duration(milliseconds: 200),
-                  scale: filled ? 1.0 : 0.0,
-                  child: Container(
-                    width: 14,
-                    height: 14,
-                    decoration: BoxDecoration(
-                      color: AppColors.primary,
-                      shape: BoxShape.circle,
-                      boxShadow: [
-                        BoxShadow(
-                          color: AppColors.primary.withOpacity(0.4),
-                          blurRadius: 8,
-                        ),
-                      ],
-                    ),
-                  ),
+                      ? AppColors.primary.withOpacity(_pulseAnimation.value)
+                      : AppColors.mintBgLight,
+                  width: active ? 2 : 1,
                 ),
               ),
             );
-          }),
-        ),
-        const SizedBox(height: 32),
-        if (_biometricAvailable)
-          _buildBiometricButton(),
-      ],
+          },
+        );
+      }),
     );
   }
 
-  Widget _buildBiometricButton() {
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        onTap: _locked ? null : _biometric,
-        borderRadius: BorderRadius.circular(30),
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(30),
-            border: Border.all(
-              color: AppColors.primary.withOpacity(0.3),
-              width: 1,
-            ),
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(
-                Icons.fingerprint_rounded,
-                color: AppColors.primary,
-                size: 24,
-              ),
-              const SizedBox(width: 8),
-              Text(
-                'Use Biometrics',
-                style: TextStyle(
-                  color: AppColors.primary,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-            ],
-          ),
+  Widget _buildBiometricHint() {
+    return TextButton.icon(
+      onPressed: _locked ? null : _biometric,
+      icon: Icon(
+        Icons.fingerprint,
+        color: AppColors.primary.withOpacity(0.7),
+      ),
+      label: Text(
+        'Use biometrics',
+        style: TextStyle(
+          color: AppColors.primary.withOpacity(0.7),
         ),
       ),
     );
   }
 
-  Widget _buildLoadingIndicator() {
-    return Container(
-      margin: const EdgeInsets.only(top: 16),
-      child: LinearProgressIndicator(
-        minHeight: 3,
-        backgroundColor: AppColors.mintBgLight.withOpacity(0.3),
-        valueColor: AlwaysStoppedAnimation<Color>(AppColors.primary),
-      ),
-    );
-  }
-
-  Widget _buildKeypad(BoxConstraints constraints, bool isSmallScreen) {
-    final buttonSize = _calculateButtonSize(constraints, isSmallScreen);
+  Widget _buildNumPad(bool isSmallScreen) {
+    final buttonSize = isSmallScreen ? 60.0 : 72.0;
+    final spacing = isSmallScreen ? 16.0 : 20.0;
 
     return Column(
-      mainAxisSize: MainAxisSize.min,
       children: [
-        for (int row = 0; row < 4; row++) ...[
-          Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              for (int col = 0; col < 3; col++)
-                _buildKeypadButton(row, col, buttonSize),
-            ],
+        // Numbers 1-9
+        for (int row = 0; row < 3; row++)
+          Padding(
+            padding: EdgeInsets.only(bottom: spacing),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                for (int col = 0; col < 3; col++)
+                  Padding(
+                    padding: EdgeInsets.symmetric(horizontal: spacing / 2),
+                    child: _NumButton(
+                      label: '${row * 3 + col + 1}',
+                      size: buttonSize,
+                      onTap: () => _handleInput('${row * 3 + col + 1}'),
+                      disabled: _locked || _loading,
+                    ),
+                  ),
+              ],
+            ),
           ),
-          if (row < 3) SizedBox(height: isSmallScreen ? 8 : 12),
-        ],
+        // Bottom row
+        Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Padding(
+              padding: EdgeInsets.symmetric(horizontal: spacing / 2),
+              child: _NumButton(
+                icon: Icons.fingerprint,
+                size: buttonSize,
+                onTap: _biometric,
+                disabled: _locked || _loading || !_biometricAvailable,
+                isPrimary: true,
+              ),
+            ),
+            Padding(
+              padding: EdgeInsets.symmetric(horizontal: spacing / 2),
+              child: _NumButton(
+                label: '0',
+                size: buttonSize,
+                onTap: () => _handleInput('0'),
+                disabled: _locked || _loading,
+              ),
+            ),
+            Padding(
+              padding: EdgeInsets.symmetric(horizontal: spacing / 2),
+              child: _NumButton(
+                icon: Icons.backspace_outlined,
+                size: buttonSize,
+                onTap: _handleBackspace,
+                disabled: _locked || _loading || _cursor == 0,
+              ),
+            ),
+          ],
+        ),
       ],
     );
   }
 
-  Size _calculateButtonSize(BoxConstraints constraints, bool isSmallScreen) {
-    final availableWidth = constraints.maxWidth - 32;
-    final buttonWidth = (availableWidth / 3.5).clamp(70.0, 100.0);
-    final buttonHeight = isSmallScreen ? 52.0 : 60.0;
-    return Size(buttonWidth, buttonHeight);
-  }
-
-  Widget _buildKeypadButton(int row, int col, Size size) {
-    String? label;
-    IconData? icon;
-    VoidCallback? onTap;
-    Color? color;
-
-    if (row < 3) {
-      final number = (row * 3 + col + 1).toString();
-      label = number;
-      onTap = () => _handleKeypadTap(number);
-    } else {
-      switch (col) {
-        case 0:
-          icon = Icons.fingerprint_rounded;
-          onTap = _biometricAvailable ? _biometric : null;
-          color = AppColors.primary;
-          break;
-        case 1:
-          label = '0';
-          onTap = () => _handleKeypadTap('0');
-          break;
-        case 2:
-          icon = Icons.backspace_outlined;
-          onTap = _handleBackspace;
-          color = AppColors.error;
-          break;
-      }
-    }
-
-    final isDisabled = _locked || _loading;
-
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 6),
-      child: Material(
-        color: Colors.transparent,
-        child: InkWell(
-          onTap: isDisabled ? null : onTap,
-          borderRadius: BorderRadius.circular(size.height / 2),
-          child: AnimatedContainer(
-            duration: const Duration(milliseconds: 200),
-            width: size.width,
-            height: size.height,
-            decoration: BoxDecoration(
-              color: AppColors.surface.withOpacity(isDisabled ? 0.3 : 0.9),
-              borderRadius: BorderRadius.circular(size.height / 2),
-              border: Border.all(
-                color: color?.withOpacity(0.3) ?? AppColors.mintBgLight,
-                width: 1,
-              ),
-            ),
-            child: Center(
-              child: label != null
-                  ? Text(
-                label,
-                style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                  fontWeight: FontWeight.w700,
-                  color: isDisabled
-                      ? AppColors.textSecondary.withOpacity(0.3)
-                      : AppColors.textPrimary,
-                ),
-              )
-                  : Icon(
-                icon,
-                color: isDisabled
-                    ? AppColors.textSecondary.withOpacity(0.3)
-                    : (color ?? AppColors.textSecondary),
-                size: 24,
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  void _handleKeypadTap(String digit) {
+  void _handleInput(String digit) {
     if (_locked || _loading || _cursor >= _pinLen) return;
 
-    HapticFeedback.selectionClick();
+    HapticFeedback.lightImpact();
     setState(() {
       _pin[_cursor] = digit;
       _cursor++;
     });
 
     if (_cursor == _pinLen) {
-      Future.delayed(const Duration(milliseconds: 300), _submitPin);
+      Future.delayed(const Duration(milliseconds: 200), _submitPin);
     }
   }
 
   void _handleBackspace() {
     if (_locked || _loading || _cursor == 0) return;
 
-    HapticFeedback.selectionClick();
+    HapticFeedback.lightImpact();
     setState(() {
       _cursor--;
       _pin[_cursor] = '';
@@ -652,12 +542,11 @@ class _AuthenticationScreenState extends State<AuthenticationScreen>
   }
 
   Widget _buildLockOverlay() {
-    final minutes = _remaining.inMinutes.remainder(60);
-    final seconds = _remaining.inSeconds.remainder(60);
+    final minutes = _remaining.inMinutes;
+    final seconds = _remaining.inSeconds % 60;
 
-    return AnimatedContainer(
-      duration: const Duration(milliseconds: 300),
-      color: Colors.black.withOpacity(0.7),
+    return Container(
+      color: Colors.black54,
       child: Center(
         child: Container(
           margin: const EdgeInsets.all(32),
@@ -665,76 +554,108 @@ class _AuthenticationScreenState extends State<AuthenticationScreen>
           decoration: BoxDecoration(
             color: AppColors.surface,
             borderRadius: BorderRadius.circular(24),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withOpacity(0.2),
-                blurRadius: 20,
-                offset: const Offset(0, 10),
-              ),
-            ],
           ),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Container(
-                width: 64,
-                height: 64,
-                decoration: BoxDecoration(
-                  color: AppColors.error.withOpacity(0.1),
-                  shape: BoxShape.circle,
-                ),
-                child: Icon(
-                  Icons.lock_clock_rounded,
-                  size: 32,
-                  color: AppColors.error,
-                ),
+              Icon(
+                Icons.lock_clock,
+                size: 48,
+                color: AppColors.error,
               ),
               const SizedBox(height: 24),
               Text(
-                'Account Locked',
-                style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                  fontWeight: FontWeight.w800,
+                'Too many attempts',
+                style: TextStyle(
+                  fontSize: 20,
+                  fontWeight: FontWeight.w700,
                   color: AppColors.textPrimary,
                 ),
               ),
-              const SizedBox(height: 12),
+              const SizedBox(height: 16),
               Text(
-                'Too many failed attempts',
-                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                'Try again in',
+                style: TextStyle(
                   color: AppColors.textSecondary,
                 ),
               ),
-              const SizedBox(height: 24),
-              Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 24,
-                  vertical: 16,
-                ),
-                decoration: BoxDecoration(
-                  color: AppColors.mintBgLight.withOpacity(0.5),
-                  borderRadius: BorderRadius.circular(16),
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(
-                      Icons.timer_outlined,
-                      color: AppColors.primary,
-                      size: 20,
-                    ),
-                    const SizedBox(width: 12),
-                    Text(
-                      '${minutes.toString().padLeft(2, '0')}:${seconds.toString().padLeft(2, '0')}',
-                      style: Theme.of(context).textTheme.headlineMedium?.copyWith(
-                        fontWeight: FontWeight.w700,
-                        color: AppColors.primary,
-                        fontFeatures: [const FontFeature.tabularFigures()],
-                      ),
-                    ),
-                  ],
+              const SizedBox(height: 8),
+              Text(
+                '${minutes.toString().padLeft(2, '0')}:${seconds.toString().padLeft(2, '0')}',
+                style: TextStyle(
+                  fontSize: 32,
+                  fontWeight: FontWeight.w800,
+                  color: AppColors.primary,
                 ),
               ),
             ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// Custom number button widget
+class _NumButton extends StatelessWidget {
+  final String? label;
+  final IconData? icon;
+  final double size;
+  final VoidCallback onTap;
+  final bool disabled;
+  final bool isPrimary;
+
+  const _NumButton({
+    this.label,
+    this.icon,
+    required this.size,
+    required this.onTap,
+    this.disabled = false,
+    this.isPrimary = false,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final backgroundColor = isPrimary
+        ? AppColors.primary.withOpacity(disabled ? 0.3 : 1.0)
+        : AppColors.surface;
+
+    final contentColor = isPrimary
+        ? AppColors.surface
+        : disabled
+        ? AppColors.textSecondary.withOpacity(0.3)
+        : AppColors.textPrimary;
+
+    return Material(
+      color: backgroundColor,
+      shape: CircleBorder(
+        side: BorderSide(
+          color: disabled
+              ? AppColors.mintBgLight.withOpacity(0.5)
+              : AppColors.mintBgLight,
+          width: 1,
+        ),
+      ),
+      child: InkWell(
+        onTap: disabled ? null : onTap,
+        customBorder: const CircleBorder(),
+        child: Container(
+          width: size,
+          height: size,
+          alignment: Alignment.center,
+          child: label != null
+              ? Text(
+            label!,
+            style: TextStyle(
+              fontSize: 24,
+              fontWeight: FontWeight.w600,
+              color: contentColor,
+            ),
+          )
+              : Icon(
+            icon,
+            size: 24,
+            color: contentColor,
           ),
         ),
       ),

@@ -1,7 +1,7 @@
 // lib/screens/set_pin.dart
-import 'dart:async';
 import 'dart:convert';
-import 'dart:ui' as ui;
+import 'dart:math' as math;
+import 'dart:ui';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -39,8 +39,12 @@ class _SetPinScreenState extends State<SetPinScreen>
   bool _busy = false;
 
   // Shake animation on mismatch
-  late AnimationController _shake;
-  late Animation<double> _shakeAnim;
+  late final AnimationController _shake;
+  late final Animation<double> _shakeAnim;
+
+  // Floating header logo (subtle)
+  late final AnimationController _float;
+  late final Animation<double> _logoFloat;
 
   @override
   void initState() {
@@ -57,11 +61,21 @@ class _SetPinScreenState extends State<SetPinScreen>
       TweenSequenceItem(tween: Tween(begin: 8, end: -6), weight: 2),
       TweenSequenceItem(tween: Tween(begin: -6, end: 0), weight: 1),
     ]).animate(CurvedAnimation(parent: _shake, curve: Curves.easeOut));
+
+    _float = AnimationController(
+      duration: const Duration(seconds: 3),
+      vsync: this,
+    )..repeat(reverse: true);
+
+    _logoFloat = Tween<double>(begin: -6.0, end: 6.0).animate(
+      CurvedAnimation(parent: _float, curve: Curves.easeInOut),
+    );
   }
 
   @override
   void dispose() {
     _shake.dispose();
+    _float.dispose();
     super.dispose();
   }
 
@@ -80,14 +94,12 @@ class _SetPinScreenState extends State<SetPinScreen>
 
     if (_cursor == _pinLen) {
       if (_confirmPhase) {
-        // Compare both
         if (_pin.join() == _confirm.join()) {
           _submit();
         } else {
           _mismatch();
         }
       } else {
-        // Move to confirm phase
         setState(() {
           _confirmPhase = true;
           _cursor = 0;
@@ -100,7 +112,6 @@ class _SetPinScreenState extends State<SetPinScreen>
     if (_busy) return;
     if (_cursor == 0) {
       if (_confirmPhase) {
-        // Go back to create phase if user clears all in confirm
         setState(() {
           _confirm.fillRange(0, _pinLen, '');
           _confirmPhase = false;
@@ -189,128 +200,258 @@ class _SetPinScreenState extends State<SetPinScreen>
   // ── UI ─────────────────────────────────────────────────────────────────
   @override
   Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    final tt = Theme.of(context).textTheme;
+    final size = MediaQuery.of(context).size;
+    final isLandscape = size.width > size.height;
+    final isTablet = size.shortestSide > 600;
+    final isSmallPhone = size.width < 360;
 
     return Scaffold(
+      backgroundColor: Theme.of(context).colorScheme.background,
       body: Stack(
         children: [
-          const BackgroundWidget(showGrid: true, intensity: 1.0),
+          // Holographic background to match the rest of the app
+          const BackgroundWidget(
+            style: HoloStyle.vapor,
+            animate: true,
+            intensity: 0.8,
+          ),
 
           SafeArea(
-            child: Column(
-              children: [
-                const SizedBox(height: 24),
-                _topBar(tt, cs),
-                const Spacer(),
-                AnimatedBuilder(
-                  animation: _shake,
-                  builder: (context, child) {
-                    return Transform.translate(
-                      offset: Offset(_shakeAnim.value, 0),
-                      child: child,
-                    );
-                  },
-                  child: _pinPanel(tt, cs),
+            child: Center(
+              child: SingleChildScrollView(
+                padding: EdgeInsets.symmetric(
+                  horizontal: isTablet ? 64 : (isSmallPhone ? 20 : 32),
+                  vertical: 24,
                 ),
-                const SizedBox(height: 16),
-                if (_busy) CircularProgressIndicator(color: cs.primary),
-                const Spacer(),
-                _keypad(cs, tt),
-              ],
+                child: ConstrainedBox(
+                  constraints: BoxConstraints(
+                    maxWidth: isTablet ? 520 : 440,
+                  ),
+                  child: _FrostedCard(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        _HeaderLogo(float: _logoFloat),
+                        const SizedBox(height: 16),
+                        Text(
+                          _confirmPhase ? 'Re-enter to confirm' : 'Create a 4-digit PIN',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                            fontSize: isTablet ? 28 : (isSmallPhone ? 22 : 26),
+                            fontWeight: FontWeight.w800,
+                            color: AppColors.textPrimary,
+                          ),
+                        ),
+                        const SizedBox(height: 6),
+                        const Text(
+                          'Use digits you’ll remember',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                            color: AppColors.textSecondary,
+                            fontSize: 14,
+                          ),
+                        ),
+                        const SizedBox(height: 22),
+
+                        // PIN boxes (shake on mismatch)
+                        AnimatedBuilder(
+                          animation: _shake,
+                          builder: (context, child) {
+                            return Transform.translate(
+                              offset: Offset(_shakeAnim.value, 0),
+                              child: child,
+                            );
+                          },
+                          child: _PinDots(
+                            length: _pinLen,
+                            filledCount:
+                            (_confirmPhase ? _confirm : _pin).where((e) => e.isNotEmpty).length,
+                            cursor: _cursor,
+                          ),
+                        ),
+
+                        const SizedBox(height: 24),
+
+                        if (_busy)
+                          const Padding(
+                            padding: EdgeInsets.only(bottom: 8.0),
+                            child: SizedBox(
+                              height: 24,
+                              width: 24,
+                              child: CircularProgressIndicator(strokeWidth: 2.4),
+                            ),
+                          ),
+
+                        // Numpad
+                        _PinPad(
+                          onTap: _tap,
+                          onBackspace: _backspace,
+                          disabled: _busy,
+                          isTablet: isTablet,
+                          isSmallPhone: isSmallPhone,
+                        ),
+
+                        const SizedBox(height: 12),
+
+                        // Footer row: Back & Reset
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            TextButton.icon(
+                              onPressed: _busy
+                                  ? null
+                                  : () => Navigator.pushReplacementNamed(
+                                  context, AppRoutes.login),
+                              icon: const Icon(Icons.arrow_back_rounded),
+                              label: const Text('Back'),
+                              style: TextButton.styleFrom(
+                                foregroundColor: AppColors.primary,
+                              ),
+                            ),
+                            TextButton(
+                              onPressed: (!_confirmPhase || _busy) ? null : _resetAll,
+                              style: TextButton.styleFrom(
+                                foregroundColor: AppColors.error,
+                              ),
+                              child: const Text('Reset'),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
             ),
           ),
         ],
       ),
     );
   }
+}
 
-  Widget _topBar(TextTheme tt, ColorScheme cs) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 16),
-      child: Row(
-        children: [
-          IconButton(
-            onPressed: _busy
-                ? null
-                : () => Navigator.pushReplacementNamed(context, AppRoutes.login),
-            icon: Icon(Icons.arrow_back_rounded, color: cs.onBackground),
-            tooltip: 'Back to Login',
+/// Frosted container (same vibe as Login/Registration)
+class _FrostedCard extends StatelessWidget {
+  const _FrostedCard({required this.child});
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(24),
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
+        child: Container(
+          padding: const EdgeInsets.all(28),
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              colors: [
+                AppColors.surface.withOpacity(0.92),
+                AppColors.mintBgLight.withOpacity(0.35),
+              ],
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+            ),
+            borderRadius: BorderRadius.circular(24),
+            border: Border.all(color: AppColors.mintBgLight.withOpacity(0.5), width: 1),
+            boxShadow: [
+              BoxShadow(
+                color: AppColors.deep.withOpacity(0.10),
+                blurRadius: 20,
+                offset: const Offset(0, 10),
+              ),
+            ],
           ),
-          const Spacer(),
-          Text('Set your PIN',
-              style: tt.titleLarge?.copyWith(fontWeight: FontWeight.w800)),
-          const Spacer(),
-          TextButton(
-            onPressed: (!_confirmPhase || _busy) ? null : _resetAll,
-            child: const Text('Reset'),
-          ),
-        ],
+          child: child,
+        ),
       ),
     );
   }
+}
 
-  Widget _pinPanel(TextTheme tt, ColorScheme cs) {
-    final heading = _confirmPhase ? 'Re-enter to confirm' : 'Create a 4-digit PIN';
-    final sub =
-    _confirmPhase ? 'Make sure it matches your first entry' : 'Use digits you remember';
+/// Floating Pick Me round logo
+class _HeaderLogo extends StatelessWidget {
+  const _HeaderLogo({required this.float});
+  final Animation<double> float;
 
-    return Column(
-      children: [
-        // Brand capsule (consistent with Login/Authentication)
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-          decoration: BoxDecoration(
-            color: cs.primary,
-            borderRadius: BorderRadius.circular(28),
-            boxShadow: [
-              BoxShadow(color: cs.primary.withOpacity(.35), blurRadius: 22, spreadRadius: 1),
-              BoxShadow(color: cs.primary.withOpacity(.18), blurRadius: 8, offset: const Offset(0, 3)),
-            ],
+  @override
+  Widget build(BuildContext context) {
+    final size = MediaQuery.of(context).size.shortestSide > 600 ? 96.0 : 84.0;
+
+    return AnimatedBuilder(
+      animation: float,
+      builder: (_, __) {
+        return Transform.translate(
+          offset: Offset(0, float.value),
+          child: Container(
+            width: size,
+            height: size,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              gradient: const LinearGradient(
+                colors: [AppColors.primary, AppColors.secondary],
+              ),
+              boxShadow: [
+                BoxShadow(
+                  color: AppColors.primary.withOpacity(0.30),
+                  blurRadius: 20,
+                  spreadRadius: 2,
+                ),
+              ],
+            ),
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Image.asset(
+                'image/pickme.png',
+                fit: BoxFit.contain,
+                color: AppColors.surface,
+              ),
+            ),
           ),
-          child: Row(mainAxisSize: MainAxisSize.min, children: [
-            const Icon(Icons.directions_car_rounded, size: 22, color: Colors.white),
-            const SizedBox(width: 8),
-            Text('Pick Me',
-                style: tt.labelLarge?.copyWith(
-                    color: Colors.white, fontWeight: FontWeight.w800)),
-          ]),
-        ),
-
-        const SizedBox(height: 12),
-        Text(heading, style: tt.headlineMedium?.copyWith(fontWeight: FontWeight.w800)),
-        const SizedBox(height: 4),
-        Text(sub, style: tt.bodyMedium?.copyWith(color: AppColors.textSecondary)),
-        const SizedBox(height: 18),
-        _pinBoxes(cs),
-      ],
+        );
+      },
     );
   }
+}
 
-  Widget _pinBoxes(ColorScheme cs) {
-    final active = _confirmPhase ? _confirm : _pin;
+/// PIN indicator: four rounded boxes with filled dots
+class _PinDots extends StatelessWidget {
+  const _PinDots({
+    required this.length,
+    required this.filledCount,
+    required this.cursor,
+  });
+
+  final int length;
+  final int filledCount;
+  final int cursor;
+
+  @override
+  Widget build(BuildContext context) {
+    final isSmallPhone = MediaQuery.of(context).size.width < 360;
+
     return Row(
       mainAxisAlignment: MainAxisAlignment.center,
-      children: List.generate(_pinLen, (i) {
-        final isActive = i == _cursor;
-        final filled = active[i].isNotEmpty;
+      children: List.generate(length, (i) {
+        final filled = i < filledCount;
+        final active = i == cursor;
 
         return AnimatedContainer(
           duration: const Duration(milliseconds: 160),
-          margin: const EdgeInsets.symmetric(horizontal: 8),
-          width: 56,
-          height: 56,
+          margin: EdgeInsets.symmetric(horizontal: isSmallPhone ? 6 : 8),
+          width: isSmallPhone ? 48 : 56,
+          height: isSmallPhone ? 48 : 56,
           decoration: BoxDecoration(
-            color: Colors.white,
+            color: AppColors.surface,
             borderRadius: BorderRadius.circular(14),
             border: Border.all(
-              color: isActive ? cs.primary : cs.surfaceVariant,
-              width: isActive ? 2 : 1,
+              color: active ? AppColors.primary : AppColors.mintBgLight,
+              width: active ? 2 : 1,
             ),
             boxShadow: [
-              if (isActive)
+              if (active)
                 BoxShadow(
-                  color: cs.primary.withOpacity(.22),
+                  color: AppColors.primary.withOpacity(.20),
                   blurRadius: 16,
                   offset: const Offset(0, 6),
                 ),
@@ -319,10 +460,10 @@ class _SetPinScreenState extends State<SetPinScreen>
           child: Center(
             child: AnimatedContainer(
               duration: const Duration(milliseconds: 140),
-              width: filled ? 12 : 0,
-              height: filled ? 12 : 0,
-              decoration: BoxDecoration(
-                color: cs.primary,
+              width: filled ? (isSmallPhone ? 10 : 12) : 0,
+              height: filled ? (isSmallPhone ? 10 : 12) : 0,
+              decoration: const BoxDecoration(
+                color: AppColors.primary,
                 shape: BoxShape.circle,
               ),
             ),
@@ -331,64 +472,176 @@ class _SetPinScreenState extends State<SetPinScreen>
       }),
     );
   }
+}
 
-  Widget _keypad(ColorScheme cs, TextTheme tt) {
-    Widget numBtn(String n, {VoidCallback? onTap}) {
-      return SizedBox(
-        width: 86,
-        height: 64,
-        child: ElevatedButton(
-          onPressed: _busy ? null : onTap,
-          style: ButtonStyle(
-            elevation: const MaterialStatePropertyAll(0),
-            shape: const MaterialStatePropertyAll(StadiumBorder()),
-            backgroundColor: MaterialStateProperty.resolveWith((states) {
-              if (states.contains(MaterialState.disabled)) return cs.surfaceVariant;
-              return cs.surface;
-            }),
-            foregroundColor: MaterialStatePropertyAll(cs.onSurface),
-            side: MaterialStatePropertyAll(BorderSide(color: cs.surfaceVariant)),
-          ),
-          child: Text(n, style: tt.titleLarge?.copyWith(fontWeight: FontWeight.w800)),
-        ),
-      );
-    }
+/// Numeric keypad (matches Authentication numpad look)
+class _PinPad extends StatelessWidget {
+  const _PinPad({
+    required this.onTap,
+    required this.onBackspace,
+    required this.disabled,
+    required this.isTablet,
+    required this.isSmallPhone,
+  });
 
-    Widget backspace() => IconButton(
-      onPressed: (_busy || _cursor == 0) ? null : _backspace,
-      icon: Icon(Icons.backspace_rounded, size: 28, color: cs.error),
-      tooltip: 'Delete',
+  final void Function(String) onTap;
+  final VoidCallback onBackspace;
+  final bool disabled;
+  final bool isTablet;
+  final bool isSmallPhone;
+
+  @override
+  Widget build(BuildContext context) {
+    final size = isTablet ? 70.0 : (isSmallPhone ? 55.0 : 60.0);
+    final spacing = isTablet ? 16.0 : (isSmallPhone ? 10.0 : 12.0);
+
+    Widget row(List<Widget> children) => Padding(
+      padding: EdgeInsets.only(bottom: spacing),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: children
+            .map((w) => Padding(
+          padding: EdgeInsets.symmetric(horizontal: spacing / 2),
+          child: w,
+        ))
+            .toList(),
+      ),
     );
 
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 24),
-      child: Column(
-        children: [
-          Row(mainAxisAlignment: MainAxisAlignment.spaceEvenly, children: [
-            numBtn('1', onTap: () => _tap('1')),
-            numBtn('2', onTap: () => _tap('2')),
-            numBtn('3', onTap: () => _tap('3')),
+    return Column(
+      children: [
+        for (int r = 0; r < 3; r++)
+          row([
+            for (int c = 0; c < 3; c++)
+              _NumpadButton(
+                label: '${r * 3 + c + 1}',
+                size: size,
+                onTap: () => onTap('${r * 3 + c + 1}'),
+                disabled: disabled,
+              ),
           ]),
-          const SizedBox(height: 10),
-          Row(mainAxisAlignment: MainAxisAlignment.spaceEvenly, children: [
-            numBtn('4', onTap: () => _tap('4')),
-            numBtn('5', onTap: () => _tap('5')),
-            numBtn('6', onTap: () => _tap('6')),
-          ]),
-          const SizedBox(height: 10),
-          Row(mainAxisAlignment: MainAxisAlignment.spaceEvenly, children: [
-            numBtn('7', onTap: () => _tap('7')),
-            numBtn('8', onTap: () => _tap('8')),
-            numBtn('9', onTap: () => _tap('9')),
-          ]),
-          const SizedBox(height: 10),
-          Row(mainAxisAlignment: MainAxisAlignment.spaceEvenly, children: [
-            // Spacer button to balance layout
-            const SizedBox(width: 86, height: 64),
-            numBtn('0', onTap: () => _tap('0')),
-            backspace(),
-          ]),
-        ],
+        Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            // spacer to balance
+            SizedBox(width: size, height: size),
+            Padding(
+              padding: EdgeInsets.symmetric(horizontal: spacing / 2),
+              child: _NumpadButton(
+                label: '0',
+                size: size,
+                onTap: () => onTap('0'),
+                disabled: disabled,
+              ),
+            ),
+            Padding(
+              padding: EdgeInsets.symmetric(horizontal: spacing / 2),
+              child: _NumpadButton(
+                icon: Icons.backspace_outlined,
+                size: size,
+                onTap: onBackspace,
+                disabled: disabled,
+                accent: true,
+              ),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+}
+
+class _NumpadButton extends StatelessWidget {
+  const _NumpadButton({
+    this.label,
+    this.icon,
+    required this.size,
+    required this.onTap,
+    this.disabled = false,
+    this.accent = false,
+  });
+
+  final String? label;
+  final IconData? icon;
+  final double size;
+  final VoidCallback onTap;
+  final bool disabled;
+  final bool accent;
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedOpacity(
+      opacity: disabled ? 0.4 : 1.0,
+      duration: const Duration(milliseconds: 180),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: disabled ? null : () {
+            HapticFeedback.lightImpact();
+            onTap();
+          },
+          borderRadius: BorderRadius.circular(size / 2),
+          child: Container(
+            width: size,
+            height: size,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              gradient: accent && !disabled
+                  ? LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: [
+                  AppColors.primary.withOpacity(0.18),
+                  AppColors.secondary.withOpacity(0.18),
+                ],
+              )
+                  : null,
+              color: !accent
+                  ? AppColors.surface.withOpacity(0.8)
+                  : null,
+              border: Border.all(
+                color: disabled
+                    ? AppColors.mintBgLight.withOpacity(0.2)
+                    : (accent
+                    ? AppColors.primary.withOpacity(0.4)
+                    : AppColors.mintBgLight.withOpacity(0.45)),
+                width: 1.5,
+              ),
+              boxShadow: !disabled
+                  ? [
+                BoxShadow(
+                  color: (accent ? AppColors.primary : AppColors.deep)
+                      .withOpacity(0.10),
+                  blurRadius: 10,
+                  offset: const Offset(0, 4),
+                ),
+              ]
+                  : null,
+            ),
+            child: Center(
+              child: label != null
+                  ? Text(
+                label!,
+                style: TextStyle(
+                  fontSize: size * 0.35,
+                  fontWeight: FontWeight.w700,
+                  color: disabled
+                      ? AppColors.textSecondary.withOpacity(0.3)
+                      : AppColors.textPrimary,
+                ),
+              )
+                  : Icon(
+                icon,
+                size: size * 0.35,
+                color: disabled
+                    ? AppColors.textSecondary.withOpacity(0.3)
+                    : (accent
+                    ? AppColors.primary
+                    : AppColors.textPrimary),
+              ),
+            ),
+          ),
+        ),
       ),
     );
   }

@@ -122,6 +122,24 @@ class _AuthenticationScreenState extends State<AuthenticationScreen>
       final canCheck = await _localAuth.canCheckBiometrics;
       final supported = await _localAuth.isDeviceSupported();
       final types = await _localAuth.getAvailableBiometrics();
+
+      // Accept weak/iris as well – many devices report face as WEAK.
+      final hasBio = types.contains(BiometricType.fingerprint) ||
+          types.contains(BiometricType.face) ||
+          types.contains(BiometricType.strong) ||
+          types.contains(BiometricType.weak) ||
+          types.contains(BiometricType.iris);
+
+      _biometricAvailable = canCheck && supported && hasBio;
+    } catch (_) {
+      _biometricAvailable = false;
+    }
+
+    /*
+    try {
+      final canCheck = await _localAuth.canCheckBiometrics;
+      final supported = await _localAuth.isDeviceSupported();
+      final types = await _localAuth.getAvailableBiometrics();
       _biometricAvailable = canCheck &&
           supported &&
           (types.contains(BiometricType.fingerprint) ||
@@ -130,6 +148,7 @@ class _AuthenticationScreenState extends State<AuthenticationScreen>
     } catch (e) {
       _biometricAvailable = false;
     }
+     */
 
     // Check lock status
     final lockStr = _prefs.getString('lock_time');
@@ -271,22 +290,38 @@ class _AuthenticationScreenState extends State<AuthenticationScreen>
     if (!_biometricAvailable) return;
 
     try {
-      final authenticated = await _localAuth.authenticate(
+      final ok = await _localAuth.authenticate(
         localizedReason: 'Verify your identity',
         options: const AuthenticationOptions(
-          biometricOnly: true,
+          biometricOnly: true,        // keep true since you want strictly biometrics
           stickyAuth: true,
+          useErrorDialogs: true,      // let OS show helpful messages
+          sensitiveTransaction: true, // newer Android guidance
         ),
       );
-      if (authenticated) {
+      if (ok) {
         await _submitPin(bypass: true);
       }
     } on PlatformException catch (e) {
-      String message = 'Authentication failed';
-      if (e.code == 'NotEnrolled') {
-        message = 'No biometrics enrolled';
-      } else if (e.code == 'LockedOut') {
-        message = 'Too many failed attempts';
+      // LOG THIS to see the actual cause
+      debugPrint('local_auth error: code=${e.code}, message=${e.message}');
+      var message = 'Authentication failed';
+      switch (e.code) {
+        case 'NotEnrolled':
+          message = 'No biometrics enrolled on this device.';
+          break;
+        case 'NotAvailable':
+          message = 'Biometric authentication is not available on this device.';
+          break;
+        case 'PasscodeNotSet':
+          message = 'Set a device screen lock to enable biometrics.';
+          break;
+        case 'LockedOut':
+          message = 'Too many attempts. Try again later.';
+          break;
+        case 'PermanentlyLockedOut':
+          message = 'Biometrics locked. Use device PIN to unlock biometrics.';
+          break;
       }
       showToastNotification(
         context: context,
@@ -536,7 +571,7 @@ class _AuthenticationScreenState extends State<AuthenticationScreen>
         color: AppColors.surface.withOpacity(0.1),
         borderRadius: BorderRadius.circular(20),
         border: Border.all(
-          color: AppColors.mintBgLight.withOpacity(0.3),
+          color: AppColors.primary.withOpacity(0.3),
           width: 1,
         ),
       ),

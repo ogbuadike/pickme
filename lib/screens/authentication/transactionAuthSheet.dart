@@ -82,7 +82,77 @@ class _TransactionPinBottomSheetState extends State<TransactionPinBottomSheet> {
     });
   }
 
+  Future<void> _biometric() async {
+    if (_locked) {
+      _showLockedMessage();
+      return;
+    }
+    if (!_biometricAvailable) return;
+
+    try {
+      final ok = await _localAuth.authenticate(
+        localizedReason: 'Verify your identity',
+        options: const AuthenticationOptions(
+          biometricOnly: true,        // keep true since you want strictly biometrics
+          stickyAuth: true,
+          useErrorDialogs: true,      // let OS show helpful messages
+          sensitiveTransaction: true, // newer Android guidance
+        ),
+      );
+      if (ok) {
+        await _submitPin(bypass: true);
+      }
+    } on PlatformException catch (e) {
+      // LOG THIS to see the actual cause
+      debugPrint('local_auth error: code=${e.code}, message=${e.message}');
+      var message = 'Authentication failed';
+      switch (e.code) {
+        case 'NotEnrolled':
+          message = 'No biometrics enrolled on this device.';
+          break;
+        case 'NotAvailable':
+          message = 'Biometric authentication is not available on this device.';
+          break;
+        case 'PasscodeNotSet':
+          message = 'Set a device screen lock to enable biometrics.';
+          break;
+        case 'LockedOut':
+          message = 'Too many attempts. Try again later.';
+          break;
+        case 'PermanentlyLockedOut':
+          message = 'Biometrics locked. Use device PIN to unlock biometrics.';
+          break;
+      }
+      showToastNotification(
+        context: context,
+        title: 'Biometric Error',
+        message: message,
+        isSuccess: false,
+      );
+    }
+  }
+
+
   Future<void> _checkBiometricAvailability() async {
+
+    try {
+      final canCheck = await _localAuth.canCheckBiometrics;
+      final supported = await _localAuth.isDeviceSupported();
+      final types = await _localAuth.getAvailableBiometrics();
+
+      // Accept weak/iris as well – many devices report face as WEAK.
+      final hasBio = types.contains(BiometricType.fingerprint) ||
+          types.contains(BiometricType.face) ||
+          types.contains(BiometricType.strong) ||
+          types.contains(BiometricType.weak) ||
+          types.contains(BiometricType.iris);
+
+      _biometricAvailable = canCheck && supported && hasBio;
+    } catch (_) {
+      _biometricAvailable = false;
+    }
+
+    /*
     try {
       final canCheckBiometrics = await _localAuth.canCheckBiometrics;
       final hasBiometrics = await _localAuth.isDeviceSupported();
@@ -99,6 +169,7 @@ class _TransactionPinBottomSheetState extends State<TransactionPinBottomSheet> {
         _isBiometricAvailable = false;
       });
     }
+    */
   }
 
   void _checkLockStatus() {

@@ -1,6 +1,8 @@
 // lib/screens/authentication.dart
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math' as math;
+import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:local_auth/local_auth.dart';
@@ -22,7 +24,7 @@ class AuthenticationScreen extends StatefulWidget {
 }
 
 class _AuthenticationScreenState extends State<AuthenticationScreen>
-    with SingleTickerProviderStateMixin {
+    with TickerProviderStateMixin {
   // PIN state
   static const int _pinLen = 4;
   final List<String> _pin = List.filled(_pinLen, '');
@@ -45,25 +47,58 @@ class _AuthenticationScreenState extends State<AuthenticationScreen>
   Timer? _unlockTicker;
   Duration _remaining = Duration.zero;
 
-  // Simple pulse animation for dots
-  late final AnimationController _pulseController;
-  late final Animation<double> _pulseAnimation;
+  // Animations
+  late final AnimationController _dotController;
+  late final AnimationController _logoController;
+  late final AnimationController _fadeController;
+
+  late final Animation<double> _dotScale;
+  late final Animation<double> _logoFloat;
+  late final Animation<double> _fadeIn;
 
   @override
   void initState() {
     super.initState();
     _api = ApiClient(http.Client(), context);
-    _pulseController = AnimationController(
-      duration: const Duration(milliseconds: 1000),
+
+    // Setup animations
+    _dotController = AnimationController(
+      duration: const Duration(milliseconds: 300),
+      vsync: this,
+    );
+
+    _logoController = AnimationController(
+      duration: const Duration(seconds: 3),
       vsync: this,
     )..repeat(reverse: true);
 
-    _pulseAnimation = Tween<double>(
-      begin: 0.5,
+    _fadeController = AnimationController(
+      duration: const Duration(milliseconds: 800),
+      vsync: this,
+    )..forward();
+
+    _dotScale = Tween<double>(
+      begin: 0.0,
       end: 1.0,
     ).animate(CurvedAnimation(
-      parent: _pulseController,
+      parent: _dotController,
+      curve: Curves.elasticOut,
+    ));
+
+    _logoFloat = Tween<double>(
+      begin: -8.0,
+      end: 8.0,
+    ).animate(CurvedAnimation(
+      parent: _logoController,
       curve: Curves.easeInOut,
+    ));
+
+    _fadeIn = Tween<double>(
+      begin: 0.0,
+      end: 1.0,
+    ).animate(CurvedAnimation(
+      parent: _fadeController,
+      curve: Curves.easeOut,
     ));
 
     _init();
@@ -72,7 +107,9 @@ class _AuthenticationScreenState extends State<AuthenticationScreen>
   @override
   void dispose() {
     _unlockTicker?.cancel();
-    _pulseController.dispose();
+    _dotController.dispose();
+    _logoController.dispose();
+    _fadeController.dispose();
     super.dispose();
   }
 
@@ -223,6 +260,7 @@ class _AuthenticationScreenState extends State<AuthenticationScreen>
       for (var i = 0; i < _pinLen; i++) _pin[i] = '';
       _cursor = 0;
     });
+    _dotController.reverse();
   }
 
   Future<void> _biometric() async {
@@ -272,81 +310,34 @@ class _AuthenticationScreenState extends State<AuthenticationScreen>
   @override
   Widget build(BuildContext context) {
     final size = MediaQuery.of(context).size;
-    final isSmallScreen = size.width < 360;
+    final padding = MediaQuery.of(context).padding;
+    final isLandscape = size.width > size.height;
+    final isTablet = size.shortestSide > 600;
+    final isSmallPhone = size.width < 360;
 
     return Scaffold(
       backgroundColor: Theme.of(context).colorScheme.background,
       body: Stack(
         children: [
-          // Simple gradient background
-          Container(
-            decoration: BoxDecoration(
-              gradient: LinearGradient(
-                begin: Alignment.topCenter,
-                end: Alignment.bottomCenter,
-                colors: [
-                  AppColors.primary.withOpacity(0.1),
-                  AppColors.offWhite,
-                ],
-              ),
-            ),
+          // Premium holographic background
+          const BackgroundWidget(
+            style: HoloStyle.flux,
+            animate: true,
+            intensity: 0.7,
           ),
 
-          // Main content
+          // Main content with proper responsive layout
           SafeArea(
-            child: SingleChildScrollView(
-              child: Container(
-                height: size.height - MediaQuery.of(context).padding.top,
-                padding: EdgeInsets.symmetric(horizontal: isSmallScreen ? 20 : 32),
-                child: Column(
-                  children: [
-                    const Spacer(flex: 2),
-                    _buildLogo(),
-                    const SizedBox(height: 48),
-                    _buildWelcomeText(),
-                    const SizedBox(height: 48),
-                    _buildPinDots(),
-                    const SizedBox(height: 32),
-                    if (_biometricAvailable) _buildBiometricHint(),
-                    const Spacer(flex: 3),
-                    _buildNumPad(isSmallScreen),
-                    const SizedBox(height: 32),
-                  ],
-                ),
-              ),
+            child: FadeTransition(
+              opacity: _fadeIn,
+              child: isLandscape
+                  ? _buildLandscapeLayout(size, padding, isTablet)
+                  : _buildPortraitLayout(size, padding, isTablet, isSmallPhone),
             ),
           ),
 
           // Loading overlay
-          if (_loading)
-            Container(
-              color: Colors.black26,
-              child: Center(
-                child: Container(
-                  padding: const EdgeInsets.all(32),
-                  decoration: BoxDecoration(
-                    color: AppColors.surface,
-                    borderRadius: BorderRadius.circular(16),
-                  ),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      CircularProgressIndicator(
-                        valueColor: AlwaysStoppedAnimation<Color>(AppColors.primary),
-                      ),
-                      const SizedBox(height: 16),
-                      Text(
-                        'Verifying...',
-                        style: TextStyle(
-                          color: AppColors.textPrimary,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ),
+          if (_loading) _buildLoadingOverlay(),
 
           // Lock overlay
           if (_locked) _buildLockOverlay(),
@@ -355,109 +346,310 @@ class _AuthenticationScreenState extends State<AuthenticationScreen>
     );
   }
 
-  Widget _buildLogo() {
-    return Container(
-      width: 100,
-      height: 100,
-      padding: const EdgeInsets.all(20),
-      decoration: BoxDecoration(
-        color: AppColors.surface,
-        shape: BoxShape.circle,
-        boxShadow: [
-          BoxShadow(
-            color: AppColors.primary.withOpacity(0.2),
-            blurRadius: 30,
-            offset: const Offset(0, 10),
+  Widget _buildPortraitLayout(Size size, EdgeInsets padding, bool isTablet, bool isSmallPhone) {
+    final keypadSize = isTablet ? 400.0 : (isSmallPhone ? 280.0 : 320.0);
+
+    return Center(
+      child: SingleChildScrollView(
+        child: Padding(
+          padding: EdgeInsets.symmetric(
+            horizontal: isTablet ? 64 : (isSmallPhone ? 20 : 32),
+            vertical: 24,
           ),
-        ],
-      ),
-      child: Image.asset(
-        'image/pickme.png',
-        fit: BoxFit.contain,
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              _buildLogo(isTablet ? 120 : (isSmallPhone ? 80 : 100)),
+              SizedBox(height: isSmallPhone ? 24 : 32),
+              _buildWelcomeSection(isTablet, isSmallPhone),
+              SizedBox(height: isSmallPhone ? 32 : 48),
+              _buildPinIndicator(isSmallPhone),
+              SizedBox(height: isSmallPhone ? 24 : 32),
+              if (_biometricAvailable) ...[
+                _buildBiometricButton(isTablet),
+                SizedBox(height: isSmallPhone ? 32 : 48),
+              ],
+              Container(
+                width: keypadSize,
+                constraints: BoxConstraints(
+                  maxWidth: size.width - 40,
+                  maxHeight: isSmallPhone ? 320 : 400,
+                ),
+                child: _buildNumPad(isTablet, isSmallPhone, false),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }
 
-  Widget _buildWelcomeText() {
+  Widget _buildLandscapeLayout(Size size, EdgeInsets padding, bool isTablet) {
+    return Center(
+      child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: Container(
+          width: math.max(size.width, 600),
+          padding: EdgeInsets.symmetric(
+            horizontal: isTablet ? 64 : 32,
+            vertical: 16,
+          ),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+            children: [
+              // Left side - Logo and info
+              Expanded(
+                flex: isTablet ? 3 : 2,
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    _buildLogo(isTablet ? 100 : 80),
+                    const SizedBox(height: 16),
+                    _buildWelcomeSection(isTablet, false),
+                    const SizedBox(height: 24),
+                    _buildPinIndicator(false),
+                    if (_biometricAvailable) ...[
+                      const SizedBox(height: 16),
+                      _buildBiometricButton(isTablet),
+                    ],
+                  ],
+                ),
+              ),
+
+              // Divider
+              Container(
+                width: 1,
+                height: size.height * 0.5,
+                margin: const EdgeInsets.symmetric(horizontal: 32),
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                    colors: [
+                      Colors.transparent,
+                      AppColors.mintBgLight.withOpacity(0.3),
+                      AppColors.mintBgLight.withOpacity(0.3),
+                      Colors.transparent,
+                    ],
+                  ),
+                ),
+              ),
+
+              // Right side - Numpad
+              Expanded(
+                flex: isTablet ? 2 : 2,
+                child: Container(
+                  constraints: BoxConstraints(
+                    maxWidth: 320,
+                    maxHeight: size.height - 100,
+                  ),
+                  child: _buildNumPad(isTablet, false, true),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildLogo(double size) {
+    return AnimatedBuilder(
+      animation: _logoFloat,
+      builder: (context, child) {
+        return Transform.translate(
+          offset: Offset(0, _logoFloat.value),
+          child: Container(
+            width: size,
+            height: size,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              gradient: LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: [
+                  AppColors.surface,
+                  AppColors.mintBgLight.withOpacity(0.9),
+                ],
+              ),
+              boxShadow: [
+                BoxShadow(
+                  color: AppColors.primary.withOpacity(0.3),
+                  blurRadius: 30,
+                  spreadRadius: 5,
+                  offset: Offset(0, _logoFloat.value + 10),
+                ),
+                BoxShadow(
+                  color: AppColors.secondary.withOpacity(0.2),
+                  blurRadius: 20,
+                  spreadRadius: 2,
+                  offset: Offset(0, _logoFloat.value + 5),
+                ),
+              ],
+            ),
+            child: Padding(
+              padding: EdgeInsets.all(size * 0.2),
+              child: Image.asset(
+                'image/pickme.png',
+                fit: BoxFit.contain,
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildWelcomeSection(bool isTablet, bool isSmallPhone) {
+    final titleSize = isTablet ? 32.0 : (isSmallPhone ? 24.0 : 28.0);
+    final subtitleSize = isTablet ? 18.0 : (isSmallPhone ? 14.0 : 16.0);
+
     return Column(
       children: [
         Text(
-          'Welcome back',
+          'Welcome Back',
           style: TextStyle(
-            fontSize: 16,
+            fontSize: subtitleSize,
             color: AppColors.textSecondary,
             fontWeight: FontWeight.w500,
+            letterSpacing: 0.5,
           ),
         ),
         const SizedBox(height: 8),
         Text(
           _username ?? 'User',
           style: TextStyle(
-            fontSize: 28,
+            fontSize: titleSize,
             color: AppColors.textPrimary,
             fontWeight: FontWeight.w800,
+            letterSpacing: -0.5,
           ),
         ),
       ],
     );
   }
 
-  Widget _buildPinDots() {
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.center,
-      children: List.generate(_pinLen, (index) {
-        final filled = _pin[index].isNotEmpty;
-        final active = index == _cursor;
+  Widget _buildPinIndicator(bool isSmallPhone) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+      decoration: BoxDecoration(
+        color: AppColors.surface.withOpacity(0.1),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(
+          color: AppColors.mintBgLight.withOpacity(0.3),
+          width: 1,
+        ),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: List.generate(_pinLen, (index) {
+          final filled = _pin[index].isNotEmpty;
+          final active = index == _cursor && !_locked;
 
-        return AnimatedBuilder(
-          animation: _pulseAnimation,
-          builder: (context, child) {
-            return Container(
-              margin: const EdgeInsets.symmetric(horizontal: 12),
-              width: 16,
-              height: 16,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                color: filled
-                    ? AppColors.primary
-                    : active
-                    ? AppColors.primary.withOpacity(_pulseAnimation.value * 0.3)
-                    : AppColors.mintBgLight,
-                border: Border.all(
-                  color: active
-                      ? AppColors.primary.withOpacity(_pulseAnimation.value)
-                      : AppColors.mintBgLight,
-                  width: active ? 2 : 1,
+          return AnimatedBuilder(
+            animation: _dotScale,
+            builder: (context, child) {
+              return Container(
+                margin: EdgeInsets.symmetric(
+                  horizontal: isSmallPhone ? 8 : 12,
                 ),
-              ),
-            );
-          },
-        );
-      }),
+                width: isSmallPhone ? 14 : 16,
+                height: isSmallPhone ? 14 : 16,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: filled
+                      ? AppColors.primary
+                      : active
+                      ? AppColors.primary.withOpacity(0.2)
+                      : Colors.transparent,
+                  border: Border.all(
+                    color: active
+                        ? AppColors.primary
+                        : filled
+                        ? AppColors.primary.withOpacity(0.6)
+                        : AppColors.mintBgLight.withOpacity(0.5),
+                    width: active ? 2.5 : 1.5,
+                  ),
+                ),
+                child: filled
+                    ? Transform.scale(
+                  scale: _cursor > index ? 1.0 : _dotScale.value,
+                  child: Container(
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: AppColors.primary,
+                    ),
+                  ),
+                )
+                    : null,
+              );
+            },
+          );
+        }),
+      ),
     );
   }
 
-  Widget _buildBiometricHint() {
-    return TextButton.icon(
-      onPressed: _locked ? null : _biometric,
-      icon: Icon(
-        Icons.fingerprint,
-        color: AppColors.primary.withOpacity(0.7),
-      ),
-      label: Text(
-        'Use biometrics',
-        style: TextStyle(
-          color: AppColors.primary.withOpacity(0.7),
+  Widget _buildBiometricButton(bool isTablet) {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: _locked ? null : _biometric,
+        borderRadius: BorderRadius.circular(30),
+        child: Container(
+          padding: EdgeInsets.symmetric(
+            horizontal: isTablet ? 32 : 24,
+            vertical: isTablet ? 14 : 12,
+          ),
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              colors: [
+                AppColors.primary.withOpacity(0.1),
+                AppColors.secondary.withOpacity(0.1),
+              ],
+            ),
+            borderRadius: BorderRadius.circular(30),
+            border: Border.all(
+              color: AppColors.primary.withOpacity(0.3),
+              width: 1,
+            ),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                Icons.fingerprint_rounded,
+                color: AppColors.primary,
+                size: isTablet ? 28 : 24,
+              ),
+              const SizedBox(width: 12),
+              Text(
+                'Use Biometrics',
+                style: TextStyle(
+                  color: AppColors.primary,
+                  fontWeight: FontWeight.w600,
+                  fontSize: isTablet ? 16 : 14,
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );
   }
 
-  Widget _buildNumPad(bool isSmallScreen) {
-    final buttonSize = isSmallScreen ? 60.0 : 72.0;
-    final spacing = isSmallScreen ? 16.0 : 20.0;
+  Widget _buildNumPad(bool isTablet, bool isSmallPhone, bool isLandscape) {
+    final buttonSize = isTablet
+        ? 70.0
+        : (isSmallPhone ? 55.0 : (isLandscape ? 50.0 : 60.0));
+    final spacing = isTablet
+        ? 16.0
+        : (isSmallPhone ? 10.0 : (isLandscape ? 8.0 : 12.0));
 
     return Column(
+      mainAxisSize: MainAxisSize.min,
+      mainAxisAlignment: MainAxisAlignment.center,
       children: [
         // Numbers 1-9
         for (int row = 0; row < 3; row++)
@@ -469,7 +661,7 @@ class _AuthenticationScreenState extends State<AuthenticationScreen>
                 for (int col = 0; col < 3; col++)
                   Padding(
                     padding: EdgeInsets.symmetric(horizontal: spacing / 2),
-                    child: _NumButton(
+                    child: _NumpadButton(
                       label: '${row * 3 + col + 1}',
                       size: buttonSize,
                       onTap: () => _handleInput('${row * 3 + col + 1}'),
@@ -485,17 +677,17 @@ class _AuthenticationScreenState extends State<AuthenticationScreen>
           children: [
             Padding(
               padding: EdgeInsets.symmetric(horizontal: spacing / 2),
-              child: _NumButton(
-                icon: Icons.fingerprint,
+              child: _NumpadButton(
+                icon: Icons.fingerprint_rounded,
                 size: buttonSize,
                 onTap: _biometric,
                 disabled: _locked || _loading || !_biometricAvailable,
-                isPrimary: true,
+                accent: true,
               ),
             ),
             Padding(
               padding: EdgeInsets.symmetric(horizontal: spacing / 2),
-              child: _NumButton(
+              child: _NumpadButton(
                 label: '0',
                 size: buttonSize,
                 onTap: () => _handleInput('0'),
@@ -504,7 +696,7 @@ class _AuthenticationScreenState extends State<AuthenticationScreen>
             ),
             Padding(
               padding: EdgeInsets.symmetric(horizontal: spacing / 2),
-              child: _NumButton(
+              child: _NumpadButton(
                 icon: Icons.backspace_outlined,
                 size: buttonSize,
                 onTap: _handleBackspace,
@@ -526,8 +718,10 @@ class _AuthenticationScreenState extends State<AuthenticationScreen>
       _cursor++;
     });
 
+    _dotController.forward();
+
     if (_cursor == _pinLen) {
-      Future.delayed(const Duration(milliseconds: 200), _submitPin);
+      Future.delayed(const Duration(milliseconds: 300), _submitPin);
     }
   }
 
@@ -541,54 +735,181 @@ class _AuthenticationScreenState extends State<AuthenticationScreen>
     });
   }
 
+  Widget _buildLoadingOverlay() {
+    return Container(
+      color: Colors.black.withOpacity(0.7),
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 5, sigmaY: 5),
+        child: Center(
+          child: Container(
+            padding: const EdgeInsets.all(40),
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: [
+                  AppColors.surface.withOpacity(0.95),
+                  AppColors.mintBgLight.withOpacity(0.95),
+                ],
+              ),
+              borderRadius: BorderRadius.circular(24),
+              border: Border.all(
+                color: AppColors.primary.withOpacity(0.3),
+                width: 1,
+              ),
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                SizedBox(
+                  width: 48,
+                  height: 48,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 3,
+                    valueColor: AlwaysStoppedAnimation<Color>(
+                      AppColors.primary,
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 24),
+                Text(
+                  'Verifying PIN',
+                  style: TextStyle(
+                    color: AppColors.textPrimary,
+                    fontSize: 18,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  'Please wait...',
+                  style: TextStyle(
+                    color: AppColors.textSecondary,
+                    fontSize: 14,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _buildLockOverlay() {
     final minutes = _remaining.inMinutes;
     final seconds = _remaining.inSeconds % 60;
 
     return Container(
-      color: Colors.black54,
-      child: Center(
-        child: Container(
-          margin: const EdgeInsets.all(32),
-          padding: const EdgeInsets.all(32),
-          decoration: BoxDecoration(
-            color: AppColors.surface,
-            borderRadius: BorderRadius.circular(24),
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(
-                Icons.lock_clock,
-                size: 48,
-                color: AppColors.error,
+      color: Colors.black.withOpacity(0.8),
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
+        child: Center(
+          child: Container(
+            margin: const EdgeInsets.all(32),
+            padding: const EdgeInsets.all(40),
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: [
+                  AppColors.surface,
+                  AppColors.mintBgLight,
+                ],
               ),
-              const SizedBox(height: 24),
-              Text(
-                'Too many attempts',
-                style: TextStyle(
-                  fontSize: 20,
-                  fontWeight: FontWeight.w700,
-                  color: AppColors.textPrimary,
+              borderRadius: BorderRadius.circular(32),
+              border: Border.all(
+                color: AppColors.error.withOpacity(0.3),
+                width: 2,
+              ),
+              boxShadow: [
+                BoxShadow(
+                  color: AppColors.error.withOpacity(0.2),
+                  blurRadius: 30,
+                  spreadRadius: 5,
                 ),
-              ),
-              const SizedBox(height: 16),
-              Text(
-                'Try again in',
-                style: TextStyle(
-                  color: AppColors.textSecondary,
+              ],
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  width: 80,
+                  height: 80,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    gradient: LinearGradient(
+                      colors: [
+                        AppColors.error.withOpacity(0.1),
+                        AppColors.error.withOpacity(0.2),
+                      ],
+                    ),
+                    border: Border.all(
+                      color: AppColors.error.withOpacity(0.3),
+                      width: 2,
+                    ),
+                  ),
+                  child: Icon(
+                    Icons.lock_clock_rounded,
+                    size: 40,
+                    color: AppColors.error,
+                  ),
                 ),
-              ),
-              const SizedBox(height: 8),
-              Text(
-                '${minutes.toString().padLeft(2, '0')}:${seconds.toString().padLeft(2, '0')}',
-                style: TextStyle(
-                  fontSize: 32,
-                  fontWeight: FontWeight.w800,
-                  color: AppColors.primary,
+                const SizedBox(height: 32),
+                Text(
+                  'Account Locked',
+                  style: TextStyle(
+                    fontSize: 24,
+                    fontWeight: FontWeight.w800,
+                    color: AppColors.textPrimary,
+                  ),
                 ),
-              ),
-            ],
+                const SizedBox(height: 12),
+                Text(
+                  'Too many failed attempts',
+                  style: TextStyle(
+                    fontSize: 16,
+                    color: AppColors.textSecondary,
+                  ),
+                ),
+                const SizedBox(height: 32),
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 32,
+                    vertical: 20,
+                  ),
+                  decoration: BoxDecoration(
+                    color: AppColors.surface.withOpacity(0.5),
+                    borderRadius: BorderRadius.circular(20),
+                    border: Border.all(
+                      color: AppColors.mintBgLight.withOpacity(0.5),
+                      width: 1,
+                    ),
+                  ),
+                  child: Column(
+                    children: [
+                      Text(
+                        'Try again in',
+                        style: TextStyle(
+                          color: AppColors.textSecondary,
+                          fontSize: 14,
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        '${minutes.toString().padLeft(2, '0')}:${seconds.toString().padLeft(2, '0')}',
+                        style: TextStyle(
+                          fontSize: 40,
+                          fontWeight: FontWeight.w900,
+                          color: AppColors.primary,
+                          letterSpacing: 2,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
           ),
         ),
       ),
@@ -596,66 +917,95 @@ class _AuthenticationScreenState extends State<AuthenticationScreen>
   }
 }
 
-// Custom number button widget
-class _NumButton extends StatelessWidget {
+// Premium number pad button
+class _NumpadButton extends StatelessWidget {
   final String? label;
   final IconData? icon;
   final double size;
   final VoidCallback onTap;
   final bool disabled;
-  final bool isPrimary;
+  final bool accent;
 
-  const _NumButton({
+  const _NumpadButton({
     this.label,
     this.icon,
     required this.size,
     required this.onTap,
     this.disabled = false,
-    this.isPrimary = false,
+    this.accent = false,
   });
 
   @override
   Widget build(BuildContext context) {
-    final backgroundColor = isPrimary
-        ? AppColors.primary.withOpacity(disabled ? 0.3 : 1.0)
-        : AppColors.surface;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
 
-    final contentColor = isPrimary
-        ? AppColors.surface
-        : disabled
-        ? AppColors.textSecondary.withOpacity(0.3)
-        : AppColors.textPrimary;
-
-    return Material(
-      color: backgroundColor,
-      shape: CircleBorder(
-        side: BorderSide(
-          color: disabled
-              ? AppColors.mintBgLight.withOpacity(0.5)
-              : AppColors.mintBgLight,
-          width: 1,
-        ),
-      ),
-      child: InkWell(
-        onTap: disabled ? null : onTap,
-        customBorder: const CircleBorder(),
-        child: Container(
-          width: size,
-          height: size,
-          alignment: Alignment.center,
-          child: label != null
-              ? Text(
-            label!,
-            style: TextStyle(
-              fontSize: 24,
-              fontWeight: FontWeight.w600,
-              color: contentColor,
+    return AnimatedOpacity(
+      opacity: disabled ? 0.4 : 1.0,
+      duration: const Duration(milliseconds: 200),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: disabled ? null : onTap,
+          borderRadius: BorderRadius.circular(size / 2),
+          child: Container(
+            width: size,
+            height: size,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              gradient: accent && !disabled
+                  ? LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: [
+                  AppColors.primary.withOpacity(0.2),
+                  AppColors.secondary.withOpacity(0.2),
+                ],
+              )
+                  : null,
+              color: !accent
+                  ? (isDark
+                  ? AppColors.surface.withOpacity(0.05)
+                  : AppColors.surface.withOpacity(0.7))
+                  : null,
+              border: Border.all(
+                color: disabled
+                    ? AppColors.mintBgLight.withOpacity(0.2)
+                    : (accent
+                    ? AppColors.primary.withOpacity(0.4)
+                    : AppColors.mintBgLight.withOpacity(0.4)),
+                width: 1.5,
+              ),
+              boxShadow: !disabled ? [
+                BoxShadow(
+                  color: (accent ? AppColors.primary : AppColors.deep)
+                      .withOpacity(0.1),
+                  blurRadius: 10,
+                  offset: const Offset(0, 4),
+                ),
+              ] : null,
             ),
-          )
-              : Icon(
-            icon,
-            size: 24,
-            color: contentColor,
+            child: Center(
+              child: label != null
+                  ? Text(
+                label!,
+                style: TextStyle(
+                  fontSize: size * 0.35,
+                  fontWeight: FontWeight.w700,
+                  color: disabled
+                      ? AppColors.textSecondary.withOpacity(0.3)
+                      : AppColors.textPrimary,
+                ),
+              )
+                  : Icon(
+                icon,
+                size: size * 0.35,
+                color: disabled
+                    ? AppColors.textSecondary.withOpacity(0.3)
+                    : (accent
+                    ? AppColors.primary
+                    : AppColors.textPrimary),
+              ),
+            ),
           ),
         ),
       ),

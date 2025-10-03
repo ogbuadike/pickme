@@ -1,203 +1,193 @@
+// lib/screens/forgot_password.dart
+import 'dart:convert';
+import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:http/http.dart' as http;
+
 import '../../themes/app_theme.dart';
-import '../../utility/notification.dart';  // Import the reusable notification function
+import '../../utility/notification.dart';
 import '../../api/api_client.dart';
 import '../../api/url.dart';
-import 'package:http/http.dart' as http;  // Import http for ApiClient
-import 'dart:convert';  // Import jsonDecode function
-
-
-
-
+import '../../routes/routes.dart';
+import '../../widgets/inner_background.dart';
 
 class ForgotPasswordScreen extends StatefulWidget {
   const ForgotPasswordScreen({super.key});
 
   @override
-  _ForgotPasswordScreenState createState() => _ForgotPasswordScreenState();
+  State<ForgotPasswordScreen> createState() => _ForgotPasswordScreenState();
 }
 
 class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
   final _emailController = TextEditingController();
-  final FirebaseAuth _auth = FirebaseAuth.instance;
+  final _formKey = GlobalKey<FormState>();
   late ApiClient _apiClient;
-  bool _isLoading = false; // Add a loading state variable
+  final FirebaseAuth _auth = FirebaseAuth.instance;
+
+  bool _busy = false;
 
   @override
   void initState() {
     super.initState();
-    // Initialize ApiClient with context
     _apiClient = ApiClient(http.Client(), context);
   }
 
+  @override
+  void dispose() {
+    _emailController.dispose();
+    super.dispose();
+  }
 
-
-  // Handle password reset request
   Future<void> _handlePasswordReset() async {
+    if (!(_formKey.currentState?.validate() ?? false)) return;
+
+    setState(() => _busy = true);
     final email = _emailController.text.trim();
 
-    if (email.isEmpty) {
-      // Show error notification with device info
-      showToastNotification(
-        context: context,
-        title: 'Error',
-        message: 'Email cant be empty',
-        isSuccess: false,
-      );
-      return;
-    }
-
-    setState(() {
-      _isLoading = true; // Set loading state to true
-    });
-
     try {
-
-      // add api logic here
-      // Prepare data to be sent to the server
-      final data = {
-        'email': email,
-      };
-      // Send the password reset request to the server
+      // Call your backend
       final response = await _apiClient.request(
-        ApiConstants.restPwdEndpoint, // API endpoint
-        method: 'POST', // HTTP method
-        data: data, // Payload
+        ApiConstants.restPwdEndpoint,
+        method: 'POST',
+        data: {'email': email},
       );
 
       final responseData = jsonDecode(response.body);
 
-      if (response.statusCode == 200) {
-        if (responseData['error'] == false) {
-          // Success case
-          showToastNotification(
-            context: context,
-            title: 'Success',
-            message: responseData['message'],
-            isSuccess: true,
-          );
-          Navigator.pop(context); // Go back to the previous screen
-        } else {
-          // Error case
-          showToastNotification(
-            context: context,
-            title: 'Error',
-            message: responseData['message'], // Use message from the server
-            isSuccess: false,
-          );
-        }
+      if (response.statusCode == 200 && responseData['error'] == false) {
+        showToastNotification(
+          context: context,
+          title: 'Success',
+          message: responseData['message'] ?? 'Password reset link sent',
+          isSuccess: true,
+        );
+        if (!mounted) return;
+        Navigator.pop(context);
       } else {
-        // Handle unexpected status codes
         showToastNotification(
           context: context,
           title: 'Error',
-          message: 'Unexpected server response: ${response.statusCode}',
+          message: responseData['message'] ?? 'Unable to reset password',
           isSuccess: false,
         );
       }
-    } catch (error) {
-      //print(error);
+
+      // (Optional) Also send Firebase reset email if you use Firebase auth emails
+      // await _auth.sendPasswordResetEmail(email: email);
+
+    } catch (e) {
       showToastNotification(
         context: context,
         title: 'Error',
-        message: error.toString(),
+        message: e.toString(),
         isSuccess: false,
       );
-    }finally {
-      setState(() {
-        _isLoading = false; // Set loading state to false
-      });
+    } finally {
+      if (mounted) setState(() => _busy = false);
     }
-
-
   }
-
 
   @override
   Widget build(BuildContext context) {
+    final size = MediaQuery.of(context).size;
+    final isTablet = size.shortestSide > 600;
+
     return Scaffold(
+      backgroundColor: Theme.of(context).colorScheme.background,
       body: Stack(
         children: [
-          // Custom background painter
-          CustomPaint(
-            size: MediaQuery.of(context).size,
-            painter: CurvedBackgroundPainter(
-              topColor: AppColors.darkColor, // Replace with your desired top color
-              bottomColor: AppColors.accentColor, // Replace with your desired bottom color
-            ),
+          const BackgroundWidget(
+            style: HoloStyle.vapor,
+            animate: true,
+            intensity: 0.8,
           ),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 24.0),
-            child: SingleChildScrollView(
-              child: Center(
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    SizedBox(height: MediaQuery.of(context).size.height * 0.2), // Adjust top spacing
-
-                    // App Logo and Forgot Password Heading
-                    Center(
+          SafeArea(
+            child: Center(
+              child: SingleChildScrollView(
+                padding: EdgeInsets.symmetric(
+                  horizontal: isTablet ? 64 : 32,
+                  vertical: 24,
+                ),
+                child: ConstrainedBox(
+                  constraints: BoxConstraints(maxWidth: isTablet ? 520 : 420),
+                  child: _FrostedCard(
+                    child: Form(
+                      key: _formKey,
                       child: Column(
+                        mainAxisSize: MainAxisSize.min,
                         children: [
-                          Image.asset('images/logo.png', height: 50), // Placeholder for your logo
-                          const SizedBox(height: 16.0),
-                          const Text('Forgot Password', style: AppTextStyles.heading),
+                          _HeaderLogo(),
+                          const SizedBox(height: 18),
+                          Text(
+                            'Forgot Password',
+                            style: TextStyle(
+                              fontSize: isTablet ? 30 : 26,
+                              fontWeight: FontWeight.w800,
+                              color: AppColors.textPrimary,
+                            ),
+                          ),
+                          const SizedBox(height: 8),
+                          const Text(
+                            'Enter your email address to receive a reset link',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                              color: AppColors.textSecondary,
+                              fontSize: 14,
+                            ),
+                          ),
+                          const SizedBox(height: 24),
+
+                          _FieldWrapper(
+                            child: TextFormField(
+                              controller: _emailController,
+                              keyboardType: TextInputType.emailAddress,
+                              textInputAction: TextInputAction.done,
+                              autofillHints: const [AutofillHints.email, AutofillHints.username],
+                              decoration: _inputDecoration(
+                                label: 'Email Address',
+                                icon: Icons.email_rounded,
+                              ),
+                              validator: (v) {
+                                final s = (v ?? '').trim();
+                                if (s.isEmpty) return 'Email can’t be empty';
+                                final ok = RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]+$').hasMatch(s);
+                                return ok ? null : 'Enter a valid email';
+                              },
+                              onFieldSubmitted: (_) => _busy ? null : _handlePasswordReset(),
+                            ),
+                          ),
+
+                          const SizedBox(height: 22),
+
+                          _PrimaryGradientButton(
+                            label: 'Reset Password',
+                            busy: _busy,
+                            onPressed: _busy
+                                ? null
+                                : () {
+                              HapticFeedback.lightImpact();
+                              _handlePasswordReset();
+                            },
+                          ),
+
+                          const SizedBox(height: 16),
+
+                          TextButton(
+                            onPressed: _busy
+                                ? null
+                                : () => Navigator.pushReplacementNamed(context, AppRoutes.login),
+                            style: TextButton.styleFrom(
+                              foregroundColor: AppColors.primary,
+                              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                            ),
+                            child: const Text('Back to Login'),
+                          ),
                         ],
                       ),
                     ),
-                    const SizedBox(height: 32.0),
-
-                    // Email Input Field
-                    TextField(
-                      controller: _emailController,
-                      keyboardType: TextInputType.emailAddress,
-                      decoration: const InputDecoration(
-                        labelText: 'Email',
-                        prefixIcon: Icon(Icons.email, color: AppColors.primaryColor),
-                      ),
-                      style: const TextStyle(color: AppColors.primaryColor),
-                    ),
-                    const SizedBox(height: 32.0),
-
-                    // Reset Password Button
-                    SizedBox(
-                      width: double.infinity,
-                      child: ElevatedButton(
-                        onPressed: _isLoading
-                            ? null // Disable the button when loading
-                            : () async {
-                          await _handlePasswordReset();
-                        },
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: Colors.white,
-                          foregroundColor: Colors.black,
-                        ),
-                        child: _isLoading
-                            ? const CircularProgressIndicator() // Show loader when loading
-                            : const Text('Rest Password'),
-                      ),
-                    ),
-                    const SizedBox(height: 16.0),
-
-                    // Back to Login Button
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        TextButton(
-                          onPressed: () {
-                            Navigator.pop(context);
-                          },
-                          child: Text(
-                            'Back to Login',
-                            style: AppTextStyles.bodyText.copyWith(color: AppColors.primaryColor),
-                          ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 16.0), // Add bottom spacing to prevent clipping
-                  ],
+                  ),
                 ),
               ),
             ),
@@ -207,5 +197,190 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
     );
   }
 
+  // Shared UI bits (kept inline for this file)
 
+  InputDecoration _inputDecoration({required String label, required IconData icon}) {
+    return InputDecoration(
+      labelText: label,
+      prefixIcon: Container(
+        margin: const EdgeInsets.all(12),
+        padding: const EdgeInsets.all(8),
+        decoration: BoxDecoration(
+          color: AppColors.primary.withOpacity(0.1),
+          shape: BoxShape.circle,
+        ),
+        child: Icon(icon, size: 20, color: AppColors.primary),
+      ),
+      filled: true,
+      fillColor: AppColors.surface,
+      border: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(16),
+        borderSide: BorderSide.none,
+      ),
+      enabledBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(16),
+        borderSide: BorderSide(
+          color: AppColors.mintBgLight.withOpacity(0.3),
+          width: 1,
+        ),
+      ),
+      focusedBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(16),
+        borderSide: const BorderSide(
+          color: AppColors.primary,
+          width: 2,
+        ),
+      ),
+      errorBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(16),
+        borderSide: const BorderSide(
+          color: AppColors.error,
+          width: 1,
+        ),
+      ),
+    );
+  }
+}
+
+class _HeaderLogo extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 84,
+      height: 84,
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        gradient: const LinearGradient(colors: [AppColors.primary, AppColors.secondary]),
+        boxShadow: [
+          BoxShadow(
+            color: AppColors.primary.withOpacity(0.3),
+            blurRadius: 20,
+            spreadRadius: 2,
+          ),
+        ],
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Image.asset(
+          'image/pickme.png', // same asset used on Login/Registration
+          fit: BoxFit.contain,
+          color: AppColors.surface,
+        ),
+      ),
+    );
+  }
+}
+
+class _FrostedCard extends StatelessWidget {
+  const _FrostedCard({required this.child});
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(24),
+      child: BackdropFilter(
+        filter: ui.ImageFilter.blur(sigmaX: 20, sigmaY: 20),
+        child: Container(
+          padding: const EdgeInsets.all(32),
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              colors: [
+                AppColors.surface.withOpacity(0.9),
+                AppColors.mintBgLight.withOpacity(0.3),
+              ],
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+            ),
+            borderRadius: BorderRadius.circular(24),
+            border: Border.all(color: AppColors.mintBgLight.withOpacity(0.5)),
+            boxShadow: [
+              BoxShadow(
+                color: AppColors.deep.withOpacity(0.1),
+                blurRadius: 20,
+                offset: const Offset(0, 10),
+              ),
+            ],
+          ),
+          child: child,
+        ),
+      ),
+    );
+  }
+}
+
+class _FieldWrapper extends StatelessWidget {
+  const _FieldWrapper({required this.child});
+  final Widget child;
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(16),
+        boxShadow: [
+          BoxShadow(
+            color: AppColors.deep.withOpacity(0.05),
+            blurRadius: 10,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      child: child,
+    );
+  }
+}
+
+class _PrimaryGradientButton extends StatelessWidget {
+  const _PrimaryGradientButton({
+    required this.label,
+    required this.onPressed,
+    required this.busy,
+  });
+  final String label;
+  final VoidCallback? onPressed;
+  final bool busy;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      height: 52,
+      width: double.infinity,
+      decoration: BoxDecoration(
+        gradient: const LinearGradient(colors: [AppColors.primary, AppColors.secondary]),
+        borderRadius: BorderRadius.circular(30),
+        boxShadow: [
+          BoxShadow(
+            color: AppColors.primary.withOpacity(0.3),
+            blurRadius: 20,
+            offset: const Offset(0, 10),
+          ),
+        ],
+      ),
+      child: ElevatedButton(
+        onPressed: onPressed,
+        style: ElevatedButton.styleFrom(
+          backgroundColor: Colors.transparent,
+          shadowColor: Colors.transparent,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(30)),
+        ),
+        child: busy
+            ? const SizedBox(
+          height: 20,
+          width: 20,
+          child: CircularProgressIndicator(
+            strokeWidth: 2,
+            valueColor: AlwaysStoppedAnimation<Color>(AppColors.surface),
+          ),
+        )
+            : Text(
+          label,
+          style: const TextStyle(
+            color: AppColors.surface,
+            fontWeight: FontWeight.w700,
+            fontSize: 16,
+          ),
+        ),
+      ),
+    );
+  }
 }

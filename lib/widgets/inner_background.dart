@@ -4,21 +4,26 @@ import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import '../themes/app_theme.dart';
 
-/// HOLOGRAPHIC FLUX BACKGROUND
-/// - Unimaginable, layered, animated: swirling ribbons + prismatic strokes + bokeh glows
-/// - Uses ONLY colors from your AppTheme/AppColors
-/// - Lightweight: one controller, low-alpha paints, careful segment counts
+/// HOLOGRAPHIC FLUX BACKGROUND (with backward-compat 'showGrid')
+/// - Stunning layered background (flux/prism/vapor) using ONLY AppColors
+/// - Back-compat: `showGrid: true` maps to `HoloStyle.prism`
 class BackgroundWidget extends StatefulWidget {
   const BackgroundWidget({
     Key? key,
     this.animate = true,
-    this.intensity = 1.0,       // 0.5 subtle … 1.0 rich … 1.5 bold
-    this.style = HoloStyle.flux, // choose between flux / prism / vapor
+    this.intensity = 1.0,        // 0.5 subtle … 1.0 rich … 1.5 bold
+    this.style = HoloStyle.flux, // flux / prism / vapor
+    @Deprecated('Use `style: HoloStyle.prism` instead.')
+    this.showGrid,               // legacy param; when true => prism
   }) : super(key: key);
 
   final bool animate;
   final double intensity;
   final HoloStyle style;
+
+  /// Legacy flag kept so existing screens compile:
+  /// If true, overrides `style` with `HoloStyle.prism`.
+  final bool? showGrid;
 
   @override
   State<BackgroundWidget> createState() => _BackgroundWidgetState();
@@ -60,10 +65,14 @@ class _BackgroundWidgetState extends State<BackgroundWidget>
     final cs = Theme.of(context).colorScheme;
     final isDark = cs.brightness == Brightness.dark;
 
+    // Back-compat: showGrid=true forces prism style
+    final effectiveStyle =
+    (widget.showGrid ?? false) ? HoloStyle.prism : widget.style;
+
     return CustomPaint(
       painter: _HoloPainter(
         t: _ctrl.value,
-        style: widget.style,
+        style: effectiveStyle,
         intensity: widget.intensity,
         isDark: isDark,
         cs: cs,
@@ -73,7 +82,7 @@ class _BackgroundWidgetState extends State<BackgroundWidget>
   }
 }
 
-/// Core painter: different “unimaginable” modes that all feel premium.
+/// Core painter: different modes that all feel premium.
 class _HoloPainter extends CustomPainter {
   final double t;          // 0..1 time
   final HoloStyle style;
@@ -91,7 +100,6 @@ class _HoloPainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
-    // Base gradient wash (very soft, respects theme)
     _paintBaseGradient(canvas, size);
 
     switch (style) {
@@ -110,22 +118,19 @@ class _HoloPainter extends CustomPainter {
         break;
     }
 
-    _paintVignette(canvas, size); // focus content
+    _paintVignette(canvas, size);
   }
 
   // ───────────────────────────────── Base wash
   void _paintBaseGradient(Canvas canvas, Size size) {
     final rect = Offset.zero & size;
     final c1 = isDark ? AppColors.deep : AppColors.offWhite;
-    // keep subtle second stop to match brand feel
-    final c2 = isDark ? AppColors.darken(AppColors.deep, .08) : AppColors.mintBgLight.withOpacity(.65);
+    final c2 = isDark
+        ? AppColors.darken(AppColors.deep, .08)
+        : AppColors.mintBgLight.withOpacity(.65);
 
     final base = Paint()
-      ..shader = ui.Gradient.linear(
-        rect.topLeft,
-        rect.bottomRight,
-        [c1, c2],
-      );
+      ..shader = ui.Gradient.linear(rect.topLeft, rect.bottomRight, [c1, c2]);
 
     canvas.drawRect(rect, base);
   }
@@ -135,14 +140,12 @@ class _HoloPainter extends CustomPainter {
     final cx = size.width * .5;
     final cy = size.height * (.40 + .05 * math.sin(t * math.pi * 2));
     final baseR = size.shortestSide * (.28 + .02 * math.cos(t * math.pi * 2));
-    final segments = 160; // balanced perf/quality
+    const segments = 160;
 
-    // Palette from theme
     final a = AppColors.primary;
     final b = AppColors.secondary;
     final m = AppColors.mintBg;
 
-    // Three layered ribbons with phase offsets
     for (int i = 0; i < 3; i++) {
       final phase = t * math.pi * 2 + i * (math.pi / 3);
       final swell = 0.22 + 0.05 * math.sin(phase * 1.3 + i);
@@ -150,7 +153,6 @@ class _HoloPainter extends CustomPainter {
 
       for (int s = 0; s <= segments; s++) {
         final th = (s / segments) * math.pi * 2;
-        // Spiral radius with “breathing”
         final r = baseR *
             (1.0 +
                 0.06 * math.sin(2.0 * th + phase) +
@@ -158,16 +160,10 @@ class _HoloPainter extends CustomPainter {
 
         final x = cx + r * math.cos(th + i * .12);
         final y = cy + r * math.sin(th + i * .12);
-
-        if (s == 0) {
-          path.moveTo(x, y);
-        } else {
-          path.lineTo(x, y);
-        }
+        (s == 0) ? path.moveTo(x, y) : path.lineTo(x, y);
       }
       path.close();
 
-      // Ribbon gradient & blur
       final grad = ui.Gradient.radial(
         Offset(cx, cy),
         baseR * 1.2,
@@ -186,10 +182,10 @@ class _HoloPainter extends CustomPainter {
     }
   }
 
-  // ───────────────────────────────── Flux helpers: prismatic strokes
+  // ───────────────────────────────── Flux helper: prismatic strokes
   void _paintPrismaticStrokes(Canvas canvas, Size size) {
     final rnd = math.Random(7);
-    final count = 9;
+    const count = 9;
     for (int i = 0; i < count; i++) {
       final w = size.width * (.12 + rnd.nextDouble() * .10);
       final h = size.height * (.010 + rnd.nextDouble() * .018);
@@ -224,9 +220,9 @@ class _HoloPainter extends CustomPainter {
     }
   }
 
-  // ───────────────────────────────── Prism field (alt style)
+  // ───────────────────────────────── HoloStyle.prism — crystalline bands
   void _paintPrismaticField(Canvas canvas, Size size) {
-    final cols = 6, rows = 8;
+    const cols = 6, rows = 8;
     for (int i = 0; i < rows; i++) {
       for (int j = 0; j < cols; j++) {
         final cellW = size.width / cols;
@@ -234,7 +230,8 @@ class _HoloPainter extends CustomPainter {
         final cx = j * cellW + cellW / 2;
         final cy = i * cellH + cellH / 2;
 
-        final r = math.min(cellW, cellH) * (.42 + .08 * math.sin((t + i * .07 + j * .05) * math.pi * 2));
+        final r = math.min(cellW, cellH) *
+            (.42 + .08 * math.sin((t + i * .07 + j * .05) * math.pi * 2));
         final rot = (i + j) * .12 + math.cos((t + i * .03) * math.pi * 2) * .15;
 
         canvas.save();
@@ -257,22 +254,22 @@ class _HoloPainter extends CustomPainter {
           )
           ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 14);
 
-        canvas.drawRRect(rr, p);
+        canvas.drawRRect(rr, p); // <-- fixed method name
 
         final edge = Paint()
           ..style = PaintingStyle.stroke
           ..strokeWidth = 0.9
           ..color = AppColors.mintBgLight.withOpacity(.35 * intensity);
 
-        canvas.drawRRect(rr, edge);
+        canvas.drawRRect(rr, edge); // <-- fixed method name
         canvas.restore();
       }
     }
   }
 
-  // ───────────────────────────────── Vapor waves (alt style)
+  // ───────────────────────────────── HoloStyle.vapor — wave lines
   void _paintVaporWaves(Canvas canvas, Size size) {
-    final lines = 8;
+    const lines = 8;
     for (int i = 0; i < lines; i++) {
       final y0 = size.height * (.15 + i * .1);
       final path = Path();
@@ -340,7 +337,6 @@ class _HoloPainter extends CustomPainter {
     canvas.drawRect(Offset.zero & size, vignette);
   }
 
-  // small deterministic pseudo-random (no allocations)
   double _hash(int i, double seed) {
     final s = math.sin(i * 127.1 + seed * 311.7) * 43758.5453;
     return s - s.floorToDouble();

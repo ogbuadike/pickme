@@ -71,6 +71,11 @@ dependencies:
   flutter_polyline_points: ^2.0.0
   uuid: ^4.4.0
 
+  #google_maps_flutter: ^2.6.1
+  #geolocator: ^12.0.0
+  #geocoding: ^3.0.0
+  #uuid: ^4.4.0
+
   local_auth: ^2.1.0
 
   # IMPORTANT: removed google_place to avoid http ^0.13.x pin

@@ -5,6 +5,8 @@
     <key>NSFaceIDUsageDescription</key>
     <string>Pick Me uses Face ID to quickly and securely verify it’s you.</string>
 
+    <key>GMSApiKey</key>
+    <string>AIzaSyDDg8yoVH4mPYiEErNCpVzRDKxu-iP4UN8</string>
 
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>

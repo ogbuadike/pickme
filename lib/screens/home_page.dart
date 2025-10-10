@@ -1,272 +1,914 @@
+// lib/screens/home/home_page.dart
+// Pick Me — Modular Home (Map + Places + Multi-stop Routing)
+// Orchestrates state and composes reusable widgets.
+
+import 'dart:async';
 import 'dart:convert';
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
-import 'package:intl/intl.dart';
+import 'package:flutter/services.dart';
+import 'package:google_maps_flutter/google_maps_flutter.dart';
+import 'package:geolocator/geolocator.dart';
+import 'package:geocoding/geocoding.dart' as geo;
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:uuid/uuid.dart';
 
-import '../api/api_client.dart';
 import '../../api/url.dart';
-import '../themes/app_theme.dart';
-import '../utility/notification.dart';
-import '../widgets/inner_background.dart';
-import '../widgets/expandable_floating_action_button_widget.dart';
-import '../widgets/floating_action_button_widget.dart';
-import '../widgets/transactionList.dart';
-import '../widgets/balance.dart';
-import '../widgets/quick_pay.dart';
-import '../routes/routes.dart';
-import '../widgets/bottom_navigation_bar.dart';
+import '../../api/api_client.dart';
+import '../../themes/app_theme.dart';
+import '../../utility/notification.dart';
+import '../../routes/routes.dart';
+
+import '../../widgets/bottom_navigation_bar.dart';
+import '../../widgets/app_menu_drawer.dart';
+import '../../widgets/fund_account_sheet.dart';
+
+// ⬇️ Use the modular Home screen packages
+import 'state/home_models.dart';
+import '../services/autocomplete_service.dart';
+import '../widgets/header_bar.dart';
+import '../widgets/locate_fab.dart';
+import '../widgets/route_sheet.dart';
+import '../widgets/auto_overlay.dart';
 
 class HomePage extends StatefulWidget {
   const HomePage({Key? key}) : super(key: key);
   @override
-  _HomePageState createState() => _HomePageState();
+  State<HomePage> createState() => _HomePageState();
 }
 
-class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin {
-  late AnimationController _animationController;
-  late Animation<double> _fadeAnimation;
+class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
+  // ── Layout
+  static const double kBottomNavH = 74;
+  static const double kSheetMinH = 280;
+  static const double kSheetMaxH = 640;
 
+  final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
+
+  // ── Infra
   late SharedPreferences _prefs;
-  late ApiClient _apiClient;
-  bool _isLoading = false;
-  bool _hasError = false;
-  Map<String, dynamic>? _userData;
-
+  late ApiClient _api;
+  Map<String, dynamic>? _user;
+  bool _busyProfile = false;
   int _currentIndex = 0;
-  bool _isExpanded = false;
+
+  // ── Map / Location
+  GoogleMapController? _map;
+  final CameraPosition _initialCam = const CameraPosition(
+    target: LatLng(6.458985, 7.548266), // Onitsha fallback
+    zoom: 14,
+  );
+  Position? _curPos;
+  StreamSubscription<Position>? _gpsSub;
+  final Set<Marker> _markers = {};
+  final Set<Polyline> _lines = {};
+  final Set<Circle> _circles = {};
+
+  // ── Route points
+  final List<RoutePoint> _pts = [];
+  int _activeIdx = 0;
+
+  // ── Autocomplete
+  final _uuid = const Uuid();
+  String _placesSession = '';
+  Timer? _debounce;
+  late final AutocompleteService _auto;
+  List<Suggestion> _sugs = [];
+  List<Suggestion> _recents = [];
+  bool _isTyping = false;
+  int _lastQueryId = 0; // race-protection
+  String? _autoStatus;
+  String? _autoError;
+
+  // ── Trip
+  String? _distanceText;
+  String? _durationText;
+  double? _fare;
+
+  // ── Sheet
+  double _sheetH = kSheetMinH;
+  bool _expanded = false;
+  double _dragStartY = 0;
+  bool _dragging = false;
+
+  void _log(String msg, [Object? data]) {
+    final d = data == null ? '' : '  -> $data';
+    debugPrint('[Home] $msg$d');
+  }
 
   @override
   void initState() {
     super.initState();
-    _initializeData();
-    _animationController = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 300),
-    );
-    _fadeAnimation = Tween<double>(begin: 0.0, end: 1.0).animate(
-      CurvedAnimation(parent: _animationController, curve: Curves.easeInOut),
-    );
+    _api = ApiClient(http.Client(), context);
+    _auto = AutocompleteService(logger: _log);
+    _initPoints();
+    _bootstrap();
   }
 
   @override
   void dispose() {
-    _animationController.dispose();
+    _debounce?.cancel();
+    _gpsSub?.cancel();
+    for (final p in _pts) {
+      p.controller.dispose();
+      p.focus.dispose();
+    }
+    _map?.dispose();
     super.dispose();
   }
 
-  void _toggleExpanded() {
-    setState(() {
-      _isExpanded = !_isExpanded;
-      if (_isExpanded) {
-        _animationController.forward();
-      } else {
-        _animationController.reverse();
-      }
-    });
-  }
-
-  Future<void> _initializeData() async {
+  // ═══════════════════════════════════════════════════════════════════════════
+  // BOOTSTRAP
+  // ═══════════════════════════════════════════════════════════════════════════
+  Future<void> _bootstrap() async {
     _prefs = await SharedPreferences.getInstance();
-    _apiClient = ApiClient(http.Client(), context);
-    await _fetchUserProfile();
+    await Future.wait([
+      _fetchUser(),
+      _initLocation(),
+      _loadRecents(),
+    ]);
   }
 
-  Future<void> _fetchUserProfile() async {
-    setState(() { _isLoading = true; _hasError = false; });
-
+  Future<void> _fetchUser() async {
+    setState(() => _busyProfile = true);
     try {
-      final userId = _prefs.getString('user_id');
-      final data = {'user': userId ?? ''};
-
-      final response = await _apiClient.request(
+      final uid = _prefs.getString('user_id') ?? '';
+      if (uid.isEmpty) return;
+      final res = await _api.request(
         ApiConstants.userInfoEndpoint,
         method: 'POST',
-        data: data,
+        data: {'user': uid},
       );
-
-      if (response.statusCode == 200) {
-        final responseData = jsonDecode(response.body);
-        if (!(responseData['error'] as bool)) {
-          setState(() => _userData = responseData['user']);
-        } else {
-          throw Exception(responseData['error_msg']);
-        }
-      } else {
-        throw Exception('Failed to load user info');
+      if (res.statusCode == 200) {
+        final body = jsonDecode(res.body);
+        if (body['error'] == false) setState(() => _user = body['user']);
       }
-    } catch (_) {
-      setState(() => _hasError = true);
-      showToastNotification(
-        context: context,
-        title: 'Error',
-        message: 'Failed to load info. Please try again.',
-        isSuccess: false,
-      );
+    } catch (e) {
+      _log('User fetch error', e);
     } finally {
-      setState(() => _isLoading = false);
+      if (mounted) setState(() => _busyProfile = false);
     }
   }
 
+  // ═══════════════════════════════════════════════════════════════════════════
+  // LOCATION
+  // ═══════════════════════════════════════════════════════════════════════════
+  Future<void> _initLocation() async {
+    try {
+      var perm = await Geolocator.checkPermission();
+      if (perm == LocationPermission.denied) {
+        perm = await Geolocator.requestPermission();
+      }
+      if (perm == LocationPermission.denied ||
+          perm == LocationPermission.deniedForever) {
+        _toast('Location Required', 'Please enable location services');
+        _log('Location permission denied');
+        return;
+      }
+      _curPos = await Geolocator.getCurrentPosition(
+        desiredAccuracy: LocationAccuracy.high,
+      );
+      _log('GPS', {'lat': _curPos!.latitude, 'lng': _curPos!.longitude});
+      await _animate(LatLng(_curPos!.latitude, _curPos!.longitude), zoom: 16);
+      await _useCurrentAsPickup();
+      _gpsSub = Geolocator.getPositionStream(
+        locationSettings: const LocationSettings(
+          accuracy: LocationAccuracy.high,
+          distanceFilter: 10,
+        ),
+      ).listen(_onGps);
+    } catch (e) {
+      _log('Location error', e);
+      _toast('Location Error', 'Failed to acquire current location');
+    }
+  }
+
+  void _onGps(Position p) {
+    _curPos = p;
+    if (_pts.isNotEmpty && _pts.first.latLng != null && _pts.first.isCurrent) {
+      _updatePickupFromGps();
+    }
+  }
+
+  Future<void> _animate(LatLng t, {double zoom = 15}) async {
+    await _map?.animateCamera(
+      CameraUpdate.newCameraPosition(CameraPosition(target: t, zoom: zoom)),
+    );
+  }
+
+  Future<void> _useCurrentAsPickup() async {
+    if (_curPos == null || _pts.isEmpty) return;
+    try {
+      final marks = await geo.placemarkFromCoordinates(
+        _curPos!.latitude,
+        _curPos!.longitude,
+      );
+      final place = marks.isNotEmpty ? marks.first : null;
+      final addr = _fmtPlacemark(place);
+      final ll = LatLng(_curPos!.latitude, _curPos!.longitude);
+      setState(() {
+        _pts.first
+          ..latLng = ll
+          ..placeId = null
+          ..controller.text = addr
+          ..isCurrent = true;
+      });
+      _putMarker(0, ll, addr);
+      _putLocationCircle(ll);
+    } catch (e) {
+      _log('Reverse geocode error', e);
+      final ll = LatLng(_curPos!.latitude, _curPos!.longitude);
+      setState(() {
+        _pts.first
+          ..latLng = ll
+          ..controller.text = 'Current location'
+          ..isCurrent = true;
+      });
+      _putMarker(0, ll, 'Current location');
+    }
+  }
+
+  void _updatePickupFromGps() {
+    if (_curPos == null) return;
+    final ll = LatLng(_curPos!.latitude, _curPos!.longitude);
+    setState(() => _pts.first.latLng = ll);
+    _putMarker(0, ll, _pts.first.controller.text);
+    _putLocationCircle(ll);
+  }
+
+  void _putLocationCircle(LatLng c) {
+    setState(() {
+      _circles
+        ..clear()
+        ..add(Circle(
+          circleId: const CircleId('cur'),
+          center: c,
+          radius: 50,
+          fillColor: AppColors.primary.withOpacity(0.15),
+          strokeColor: AppColors.primary.withOpacity(0.4),
+          strokeWidth: 2,
+        ));
+    });
+  }
+
+  String _fmtPlacemark(geo.Placemark? p) {
+    if (p == null) return 'Current location';
+    final parts = <String>[];
+    if ((p.name ?? '').isNotEmpty) parts.add(p.name!);
+    if ((p.street ?? '').isNotEmpty && p.street != p.name) parts.add(p.street!);
+    if ((p.locality ?? '').isNotEmpty) parts.add(p.locality!);
+    return parts.isEmpty ? 'Current location' : parts.join(', ');
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // ROUTE POINTS (fixed listeners: reference FocusNode, not object)
+  // ═══════════════════════════════════════════════════════════════════════════
+  void _initPoints() {
+    // pickup
+    final pickupFocus = FocusNode();
+    final pickupCtl = TextEditingController();
+    pickupFocus.addListener(() {
+      if (pickupFocus.hasFocus) _onFocused(0);
+    });
+    final pickup = RoutePoint(
+      type: PointType.pickup,
+      controller: pickupCtl,
+      focus: pickupFocus,
+      hint: 'Pickup location',
+    );
+
+    // destination
+    final destFocus = FocusNode();
+    final destCtl = TextEditingController();
+    destFocus.addListener(() {
+      if (destFocus.hasFocus) _onFocused(1);
+    });
+    final dest = RoutePoint(
+      type: PointType.destination,
+      controller: destCtl,
+      focus: destFocus,
+      hint: 'Where to?',
+    );
+
+    _pts.addAll([pickup, dest]);
+  }
+
+  void _onFocused(int index) {
+    setState(() {
+      _activeIdx = index;
+      _sugs = _recents;
+      _autoStatus = null;
+      _autoError = null;
+    });
+    _expand();
+  }
+
+  void _addStop() {
+    HapticFeedback.mediumImpact();
+    if (_pts.length >= 6) {
+      _toast('Limit Reached', 'Maximum 4 stops allowed');
+      return;
+    }
+    final idx = _pts.length - 1;
+
+    // FIX: build FocusNode first, attach listener to it, then create point.
+    final stopFocus = FocusNode();
+    final stopCtl = TextEditingController();
+    stopFocus.addListener(() {
+      if (stopFocus.hasFocus) _onFocused(idx);
+    });
+
+    final s = RoutePoint(
+      type: PointType.stop,
+      controller: stopCtl,
+      focus: stopFocus,
+      hint: 'Add stop ${_pts.length - 1}',
+    );
+
+    setState(() => _pts.insert(idx, s));
+    Future.delayed(const Duration(milliseconds: 80), () {
+      s.focus.requestFocus();
+    });
+  }
+
+  void _removeStop(int idx) {
+    HapticFeedback.lightImpact();
+    if (idx <= 0 || idx >= _pts.length - 1) return;
+    setState(() {
+      final p = _pts.removeAt(idx);
+      p.controller.dispose();
+      p.focus.dispose();
+      _markers.removeWhere((m) => m.markerId.value == 'p_$idx');
+    });
+    if (_hasRoute()) _buildRoute();
+  }
+
+  void _swap() {
+    HapticFeedback.mediumImpact();
+    if (_pts.length < 2) return;
+    setState(() {
+      final a = _pts.first, b = _pts.last;
+      final ll = a.latLng, id = a.placeId, txt = a.controller.text, cur = a.isCurrent;
+      a
+        ..latLng = b.latLng
+        ..placeId = b.placeId
+        ..controller.text = b.controller.text
+        ..isCurrent = false;
+      b
+        ..latLng = ll
+        ..placeId = id
+        ..controller.text = txt
+        ..isCurrent = cur;
+      if (a.latLng != null) _putMarker(0, a.latLng!, a.controller.text);
+      if (b.latLng != null) _putMarker(_pts.length - 1, b.latLng!, b.controller.text);
+    });
+    if (_hasRoute()) _buildRoute();
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // AUTOCOMPLETE
+  // ═══════════════════════════════════════════════════════════════════════════
+  void _onTyping(String q) {
+    _debounce?.cancel();
+    if (q.trim().isEmpty) {
+      setState(() {
+        _sugs = _recents;
+        _isTyping = false;
+      });
+      return;
+    }
+    if (!_expanded) _expand();
+    setState(() => _isTyping = true);
+    _debounce = Timer(const Duration(milliseconds: 260), () => _fetchSugs(q.trim()));
+  }
+
+  void _ensureSession() {
+    if (_placesSession.isEmpty) {
+      _placesSession = _uuid.v4();
+      _log('New Places session', _placesSession);
+    }
+  }
+
+  Future<void> _fetchSugs(String input) async {
+    _ensureSession();
+    final origin = _curPos == null ? null : LatLng(_curPos!.latitude, _curPos!.longitude);
+    final int myQueryId = ++_lastQueryId;
+
+    try {
+      var result = await _auto.autocomplete(
+        input: input,
+        sessionToken: _placesSession,
+        apiKey: ApiConstants.kGoogleApiKey,
+        country: 'ng',
+        origin: origin,
+      );
+      if (!mounted || myQueryId != _lastQueryId) return;
+
+      _autoStatus = result.status;
+      _autoError = result.errorMessage;
+
+      var sugs = result.predictions;
+      if (sugs.isEmpty) {
+        _log('Autocomplete empty; trying relaxed params');
+        result = await _auto.autocomplete(
+          input: input,
+          sessionToken: _placesSession,
+          apiKey: ApiConstants.kGoogleApiKey,
+          country: 'ng',
+          origin: origin,
+          relaxedTypes: true,
+        );
+        _autoStatus = result.status;
+        _autoError = result.errorMessage;
+        sugs = result.predictions;
+
+        if (sugs.isEmpty) {
+          _log('Relaxed still empty; FindPlace fallback');
+          sugs = await _auto.findPlaceText(
+            input: input,
+            apiKey: ApiConstants.kGoogleApiKey,
+            origin: origin,
+          );
+          _autoStatus = _autoStatus ?? 'FALLBACK_FIND_PLACE';
+        }
+      }
+
+      setState(() {
+        _sugs = sugs;
+        _isTyping = false;
+      });
+
+      if ((_autoStatus != null && _autoStatus != 'OK') || sugs.isEmpty) {
+        if (_autoError != null && _autoError!.isNotEmpty) {
+          _toast('Places API', _autoError!);
+        }
+      }
+    } catch (e) {
+      if (!mounted || myQueryId != _lastQueryId) return;
+      _log('Autocomplete exception', e);
+      setState(() => _isTyping = false);
+      _toast('Autocomplete Error', 'Check internet and API key configuration.');
+    }
+  }
+
+  Future<void> _selectSug(Suggestion s) async {
+    HapticFeedback.mediumImpact();
+    try {
+      final det = await _auto.placeDetails(
+        placeId: s.placeId,
+        sessionToken: _placesSession,
+        apiKey: ApiConstants.kGoogleApiKey,
+      );
+      if (det.latLng == null) {
+        _log('Details latLng null', s.placeId);
+        return;
+      }
+      setState(() {
+        final p = _pts[_activeIdx];
+        p
+          ..latLng = det.latLng
+          ..placeId = s.placeId
+          ..controller.text = s.mainText.isNotEmpty ? s.mainText : s.description
+          ..isCurrent = false;
+      });
+      _putMarker(_activeIdx, det.latLng!, s.description);
+      _saveRecent(s);
+      _placesSession = ''; // close session
+      await _animate(det.latLng!, zoom: 16);
+      _focusNextUnfilled();
+      if (_hasRoute()) await _buildRoute();
+    } catch (e) {
+      _log('Place details error', e);
+    }
+  }
+
+  void _focusNextUnfilled() {
+    for (int i = 0; i < _pts.length; i++) {
+      if (_pts[i].latLng == null) {
+        Future.delayed(const Duration(milliseconds: 120),
+                () => _pts[i].focus.requestFocus());
+        return;
+      }
+    }
+    Future.delayed(const Duration(milliseconds: 120), () {
+      FocusScope.of(context).unfocus();
+      _collapse();
+    });
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // DIRECTIONS
+  // ═══════════════════════════════════════════════════════════════════════════
+  bool _hasRoute() =>
+      _pts.length >= 2 && _pts.first.latLng != null && _pts.last.latLng != null;
+
+  Future<void> _buildRoute() async {
+    if (!_hasRoute()) return;
+    setState(() {
+      _lines.clear();
+      _distanceText = null;
+      _durationText = null;
+      _fare = null;
+    });
+
+    final o = _pts.first.latLng!;
+    final d = _pts.last.latLng!;
+    final stops = <LatLng>[
+      for (int i = 1; i < _pts.length - 1; i++)
+        if (_pts[i].latLng != null) _pts[i].latLng!,
+    ];
+
+    final wp = stops.isNotEmpty
+        ? '&waypoints=optimize:true|${stops.map((w) => '${w.latitude},${w.longitude}').join('|')}'
+        : '';
+
+    final url =
+        '${ApiConstants.kDirectionsUrl}?origin=${o.latitude},${o.longitude}'
+        '&destination=${d.latitude},${d.longitude}$wp&key=${ApiConstants.kGoogleApiKey}';
+
+    _log('Directions URL', url);
+
+    try {
+      final r = await http.get(Uri.parse(url));
+      _log('Directions status', r.statusCode);
+      if (r.statusCode != 200) {
+        _toast('Route Error', 'HTTP ${r.statusCode}');
+        return;
+      }
+      final j = jsonDecode(r.body);
+      final routes = (j['routes'] as List?)?.cast<Map<String, dynamic>>() ?? const [];
+      if (routes.isEmpty) {
+        _toast('Route Error', 'No routes found');
+        return;
+      }
+      final route = routes.first;
+      final legs = (route['legs'] as List).cast<Map<String, dynamic>>();
+      int dMeters = 0, dSecs = 0;
+      for (final l in legs) {
+        dMeters += (l['distance']?['value'] ?? 0) as int;
+        dSecs += (l['duration']?['value'] ?? 0) as int;
+      }
+      final poly = (route['overview_polyline']?['points'] ?? '') as String;
+      final pts = _decodePolyline(poly);
+
+      setState(() {
+        _distanceText = _fmtDistance(dMeters);
+        _durationText = _fmtDuration(dSecs);
+        _fare = _calcFare(dMeters);
+        _lines.add(Polyline(
+          polylineId: const PolylineId('route'),
+          points: pts,
+          color: AppColors.primary,
+          width: 6,
+          startCap: Cap.roundCap,
+          endCap: Cap.roundCap,
+          jointType: JointType.round,
+          geodesic: true,
+        ));
+      });
+
+      _fitBounds(pts);
+    } catch (e) {
+      _log('Directions error', e);
+      _toast('Route Error', 'Failed to calculate route');
+    }
+  }
+
+  double _calcFare(int meters) {
+    const base = 500.0;
+    const perKm = 120.0;
+    return base + (meters / 1000.0) * perKm;
+  }
+
+  String _fmtDistance(int m) =>
+      (m < 1000) ? '$m m' : '${(m / 1000.0).toStringAsFixed(1)} km';
+
+  String _fmtDuration(int s) {
+    final mins = (s / 60).round();
+    if (mins < 60) return '$mins min';
+    final h = mins ~/ 60, mm = mins % 60;
+    return '${h}h ${mm}m';
+  }
+
+  void _fitBounds(List<LatLng> pts) async {
+    if (_map == null || pts.isEmpty) return;
+    double minLat = pts.first.latitude,
+        maxLat = pts.first.latitude,
+        minLng = pts.first.longitude,
+        maxLng = pts.first.longitude;
+    for (final p in pts) {
+      minLat = math.min(minLat, p.latitude);
+      maxLat = math.max(maxLat, p.latitude);
+      minLng = math.min(minLng, p.longitude);
+      maxLng = math.max(maxLng, p.longitude);
+    }
+    final b = LatLngBounds(
+      southwest: LatLng(minLat, minLng),
+      northeast: LatLng(maxLat, maxLng),
+    );
+    await _map!.animateCamera(CameraUpdate.newLatLngBounds(b, 80));
+  }
+
+  List<LatLng> _decodePolyline(String enc) {
+    final out = <LatLng>[];
+    int idx = 0, lat = 0, lng = 0;
+    while (idx < enc.length) {
+      int b, shift = 0, res = 0;
+      do {
+        b = enc.codeUnitAt(idx++) - 63;
+        res |= (b & 0x1f) << shift;
+        shift += 5;
+      } while (b >= 0x20);
+      final dlat = (res & 1) != 0 ? ~(res >> 1) : (res >> 1);
+      lat += dlat;
+
+      shift = 0;
+      res = 0;
+      do {
+        b = enc.codeUnitAt(idx++) - 63;
+        res |= (b & 0x1f) << shift;
+        shift += 5;
+      } while (b >= 0x20);
+      final dlng = (res & 1) != 0 ? ~(res >> 1) : (res >> 1);
+      lng += dlng;
+
+      out.add(LatLng(lat / 1e5, lng / 1e5));
+    }
+    return out;
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // MARKERS
+  // ═══════════════════════════════════════════════════════════════════════════
+  void _putMarker(int idx, LatLng pos, String title) {
+    final p = _pts[idx];
+    final id = MarkerId('p_$idx');
+    final icon = p.type == PointType.pickup
+        ? BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueAzure)
+        : p.type == PointType.destination
+        ? BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueRed)
+        : BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueOrange);
+    setState(() {
+      _markers.removeWhere((m) => m.markerId == id);
+      _markers.add(Marker(
+        markerId: id,
+        position: pos,
+        icon: icon,
+        infoWindow: InfoWindow(title: p.type.label, snippet: title),
+      ));
+    });
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // RECENTS
+  // ═══════════════════════════════════════════════════════════════════════════
+  static const _kRecentsKey = 'recent_places_v4';
+
+  Future<void> _loadRecents() async {
+    final raw = _prefs.getString(_kRecentsKey);
+    if (raw == null || raw.isEmpty) return;
+    try {
+      final list = (jsonDecode(raw) as List).cast<Map<String, dynamic>>();
+      setState(() {
+        _recents = list.map(Suggestion.fromJson).toList();
+        _sugs = _recents;
+      });
+    } catch (e) {
+      _log('Load recents error', e);
+    }
+  }
+
+  void _saveRecent(Suggestion s) {
+    final up = List<Suggestion>.from(_recents);
+    up.removeWhere((e) => e.placeId == s.placeId);
+    up.insert(0, s);
+    final cap = up.take(24).toList();
+    _prefs.setString(_kRecentsKey, jsonEncode(cap.map((e) => e.toJson()).toList()));
+    setState(() => _recents = cap);
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // SHEET STATE
+  // ═══════════════════════════════════════════════════════════════════════════
+  void _expand() {
+    setState(() {
+      _expanded = true;
+      _sheetH = kSheetMaxH;
+    });
+  }
+
+  void _collapse() {
+    FocusScope.of(context).unfocus();
+    setState(() {
+      _expanded = false;
+      _sheetH = kSheetMinH;
+    });
+  }
+
+  void _onDragStart(DragStartDetails d) {
+    _dragging = true;
+    _dragStartY = d.globalPosition.dy;
+  }
+
+  void _onDragUpdate(DragUpdateDetails d) {
+    if (!_dragging) return;
+    final delta = _dragStartY - d.globalPosition.dy;
+    final h = (_sheetH + delta).clamp(kSheetMinH, kSheetMaxH);
+    setState(() => _sheetH = h);
+    _dragStartY = d.globalPosition.dy;
+  }
+
+  void _onDragEnd(DragEndDetails d) {
+    _dragging = false;
+    if (_sheetH > (kSheetMinH + kSheetMaxH) / 2) {
+      _expand();
+    } else {
+      _collapse();
+    }
+  }
+
+  void _openWallet() {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: false,
+      backgroundColor: Theme.of(context).scaffoldBackgroundColor,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (_) => FundAccountSheet(account: _user?['virtual_account']),
+    );
+  }
+
+  void _goRideOptions() {
+    HapticFeedback.mediumImpact();
+    if (!_hasRoute()) {
+      _toast('Missing Information', 'Please select pickup and destination');
+      return;
+    }
+    Navigator.pushNamed(
+      context,
+      AppRoutes.rideOptions,
+      arguments: {
+        'pickup': _pts.first.latLng,
+        'destination': _pts.last.latLng,
+        'stops': _pts
+            .sublist(1, _pts.length - 1)
+            .where((p) => p.latLng != null)
+            .map((p) => p.latLng)
+            .toList(),
+        'pickupText': _pts.first.controller.text,
+        'destinationText': _pts.last.controller.text,
+        'distance': _distanceText,
+        'duration': _durationText,
+        'fare': _fare,
+      },
+    );
+  }
+
+  void _toast(String title, String msg) {
+    showToastNotification(
+      context: context,
+      title: title,
+      message: msg,
+      isSuccess: false,
+    );
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // BUILD
+  // ═══════════════════════════════════════════════════════════════════════════
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      // KEY: let body render UNDER the transparent bottom bar
-      extendBody: true,
+    final mq = MediaQuery.of(context);
+    final safeTop = mq.padding.top;
 
+    return Scaffold(
+      key: _scaffoldKey,
+      drawer: AppMenuDrawer(user: _user),
+      extendBody: true,
+      extendBodyBehindAppBar: true,
       body: Stack(
         children: [
-          // your full-page background/hero
-          BackgroundWidget(),
-
-          SafeArea(
-            child: CustomScrollView(
-              slivers: [
-                _buildAppBar(),
-                SliverToBoxAdapter(
-                  child: Padding(
-                    padding: const EdgeInsets.all(12.0),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: const [
-                        SizedBox(height: 16),
-                        BalanceCard(),
-                        SizedBox(height: 16),
-                      ],
-                    ),
-                  ),
-                ),
-                SliverToBoxAdapter(
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 12.0),
-                    child: _buildQuickSendSection(),
-                  ),
-                ),
-                _buildTransactionListSliver(),
-
-                // Add bottom spacer so the last list items aren’t hidden by the floating bar
-                const SliverToBoxAdapter(child: SizedBox(height: 120)),
-              ],
+          // Map
+          Positioned.fill(
+            child: GoogleMap(
+              initialCameraPosition: _initialCam,
+              myLocationEnabled: true,
+              myLocationButtonEnabled: false,
+              zoomControlsEnabled: false,
+              compassEnabled: false,
+              mapToolbarEnabled: false,
+              markers: _markers,
+              polylines: _lines,
+              circles: _circles,
+              onMapCreated: (c) => _map = c,
+              onTap: (_) => _collapse(),
             ),
           ),
 
-          // Your floating action menu remains above content
+          // Header glow
           Positioned(
-            right: 8,
-            bottom: 8,
-            child: ExpandableFloatingActionButton(
-              floatingActionButtons: [
-                CustomFloatingActionButton(
-                  icon: Icons.send,
-                  label: 'Transfer Funds',
-                  color: AppColors.secondary,
-                  onPressed: () {},
+            top: 0, left: 0, right: 0,
+            child: Container(
+              height: safeTop + 120,
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topCenter, end: Alignment.bottomCenter,
+                  colors: [Colors.black.withOpacity(0.6), Colors.transparent],
                 ),
-                const SizedBox(height: 8),
-                CustomFloatingActionButton(
-                  icon: Icons.shopping_cart,
-                  label: 'Buy Gift Card',
-                  color: AppColors.success,
-                  onPressed: () {},
-                ),
-                const SizedBox(height: 8),
-                CustomFloatingActionButton(
-                  icon: Icons.payment,
-                  label: 'Pay Bills',
-                  color: AppColors.darkerColor,
-                  onPressed: () {},
-                ),
-              ],
-              mainButtonColor: AppColors.primary,
-              collapsedIcon: Icons.add,
-              expandedIcon: Icons.close,
-              animation: _animationController,
-              onToggle: _toggleExpanded,
+              ),
             ),
           ),
+
+          // Header
+          Positioned(
+            top: safeTop, left: 0, right: 0,
+            child: HeaderBar(
+              user: _user,
+              busyProfile: _busyProfile,
+              onMenu: () => _scaffoldKey.currentState?.openDrawer(),
+              onWallet: _openWallet,
+              onNotifications: () => Navigator.pushNamed(context, AppRoutes.notifications),
+            ),
+          ),
+
+          // My location FAB
+          Positioned(
+            right: 16,
+            bottom: _sheetH + kBottomNavH + 20,
+            child: LocateFab(
+              onTap: () async {
+                HapticFeedback.selectionClick();
+                if (_curPos != null) {
+                  await _animate(LatLng(_curPos!.latitude, _curPos!.longitude), zoom: 17);
+                } else {
+                  await _initLocation();
+                }
+              },
+            ),
+          ),
+
+          // Route sheet
+          Positioned(
+            left: 0, right: 0, bottom: 0,
+            child: GestureDetector(
+              onVerticalDragStart: _onDragStart,
+              onVerticalDragUpdate: _onDragUpdate,
+              onVerticalDragEnd: _onDragEnd,
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 260),
+                curve: Curves.easeOutCubic,
+                height: _sheetH,
+                child: RouteSheet(
+                  points: _pts,
+                  bottomNavHeight: kBottomNavH,
+                  distanceText: _distanceText,
+                  durationText: _durationText,
+                  fare: _fare,
+                  onTyping: _onTyping,
+                  onFocused: _onFocused,
+                  onAddStop: _addStop,
+                  onRemoveStop: _removeStop,
+                  onSwap: _swap,
+                  onUseCurrentPickup: _useCurrentAsPickup,
+                  onSearchRides: _goRideOptions,
+                ),
+              ),
+            ),
+          ),
+
+          // Full-height autocomplete overlay
+          if (_expanded)
+            AutoOverlay(
+              safeTop: safeTop,
+              bottomPadding: kBottomNavH + 12,
+              autoStatus: _autoStatus,
+              autoError: _autoError,
+              isTyping: _isTyping,
+              activeIndex: _activeIdx,
+              points: _pts,
+              suggestions: _sugs,
+              recents: _recents,
+              hasGps: _curPos != null,
+              onUseCurrentPickup: _useCurrentAsPickup,
+              onTyping: _onTyping,
+              onFocused: _onFocused,
+              onSelectSuggestion: _selectSug,
+              onSearchRides: _goRideOptions,
+              fmtDistance: _fmtDistance,
+            ),
         ],
       ),
-
-      // Floating, fully transparent nav on top of the body
       bottomNavigationBar: CustomBottomNavBar(
         currentIndex: _currentIndex,
-        onTap: (index) => setState(() => _currentIndex = index),
+        onTap: (i) {
+          setState(() => _currentIndex = i);
+          if (i == 1) Navigator.pushNamed(context, AppRoutes.rideHistory);
+          if (i == 2) Navigator.pushNamed(context, AppRoutes.profile);
+        },
       ),
     );
   }
-
-  SliverAppBar _buildAppBar() {
-    return SliverAppBar(
-      floating: true,
-      backgroundColor: Colors.transparent,
-      elevation: 0,
-      title: GestureDetector(
-        onTap: () => Navigator.pushNamed(context, AppRoutes.profile),
-        child: Row(
-          children: [
-            CircleAvatar(
-              backgroundImage: NetworkImage(
-                _userData?['user_logo'] ??
-                    'https://icon-library.com/images/icon-avatar/icon-avatar-6.jpg',
-              ),
-              radius: 16,
-            ),
-            const SizedBox(width: 8),
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                AppTextStyles.subHeading.copyWith(
-                  fontSize: 14,
-                  color: AppColors.textOnLightPrimary,
-                ).let((s) => Text('Hello, ${_userData?['user_lname'] ?? 'N/A'}', style: s)),
-                AppTextStyles.caption.copyWith(
-                  fontSize: 12,
-                  color: AppColors.textOnLightSecondary,
-                ).let((s) => Text('Welcome back', style: s)),
-              ],
-            ),
-          ],
-        ),
-      ),
-      actions: [
-        IconButton(
-          icon: const Icon(Icons.notifications, size: 20),
-          color: AppColors.textOnLightPrimary,
-          onPressed: () {},
-        ),
-      ],
-    );
-  }
-
-  Widget _buildQuickSendSection() {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text('Quick Pay', style: AppTextStyles.subHeading.copyWith(fontSize: 14)),
-        const SizedBox(height: 8),
-        QuickPaySection(onQuickPayButtonPressed: (name, code) {}),
-      ],
-    );
-  }
-
-  SliverPadding _buildTransactionListSliver() {
-    return SliverPadding(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-      sliver: SliverList(
-        delegate: SliverChildListDelegate([
-          Text('Recent Transactions', style: AppTextStyles.subHeading.copyWith(fontSize: 14)),
-          const SizedBox(height: 8),
-          SizedBox(
-            height: MediaQuery.of(context).size.height * 0.50,
-            child: TransactionList(limit: 10, filter: '', startDate: null, endDate: null),
-          ),
-        ]),
-      ),
-    );
-  }
-}
-
-// tiny extension for cleaner inline text style use
-extension _Let<T> on T {
-  R let<R>(R Function(T) f) => f(this);
 }

@@ -1,56 +1,687 @@
 // lib/widgets/app_menu_drawer.dart
+//
+// Premium, highly responsive navigation drawer with:
+// - Balance card with fund action
+// - Profile header with avatar & edit button
+// - Categorized menu items
+// - Landscape/portrait adaptive layout
+// - Dark mode support
+// - Smooth animations & haptics
+// - Safe avatar loading (no SSL errors)
+
+import 'dart:math' as math;
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import '../routes/routes.dart';
 import '../themes/app_theme.dart';
+import 'fund_account_sheet.dart';
 
-class AppMenuDrawer extends StatelessWidget {
-  const AppMenuDrawer({super.key, required this.user});
+class AppMenuDrawer extends StatefulWidget {
   final Map<String, dynamic>? user;
+
+  const AppMenuDrawer({super.key, required this.user});
+
+  @override
+  State<AppMenuDrawer> createState() => _AppMenuDrawerState();
+}
+
+class _AppMenuDrawerState extends State<AppMenuDrawer>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _fadeCtrl;
+  late final Animation<double> _fadeAnim;
+
+  @override
+  void initState() {
+    super.initState();
+    _fadeCtrl = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 350),
+    );
+    _fadeAnim = CurvedAnimation(parent: _fadeCtrl, curve: Curves.easeOut);
+    _fadeCtrl.forward();
+  }
+
+  @override
+  void dispose() {
+    _fadeCtrl.dispose();
+    super.dispose();
+  }
+
+  /// Responsive scale factor based on shortest screen dimension
+  double _scale(BuildContext c) {
+    final mq = MediaQuery.of(c);
+    final shortest = math.min(mq.size.width, mq.size.height);
+    return (shortest / 390.0).clamp(0.75, 1.10);
+  }
+
+  /// Safe avatar URL (skip domains with SSL issues)
+  String? _safeAvatar(String? url) {
+    if (url == null || url.isEmpty) return null;
+    if (url.toLowerCase().contains('icon-library.com')) return null;
+    return url.startsWith('http') ? url : null;
+  }
+
+  /// Format balance with thousands separator
+  String _formatBalance(double balance) {
+    final str = balance.toStringAsFixed(2);
+    final parts = str.split('.');
+    final whole = parts[0].replaceAllMapped(
+      RegExp(r'(\d{1,3})(?=(\d{3})+(?!\d))'),
+          (m) => '${m[1]},',
+    );
+    return '$whole.${parts[1]}';
+  }
+
+  /// Navigate with haptic feedback
+  void _nav(String route) {
+    HapticFeedback.selectionClick();
+    Navigator.pop(context); // close drawer first
+    Navigator.pushNamed(context, route);
+  }
+
+  /// Show fund account sheet
+  void _showFundSheet() {
+    HapticFeedback.mediumImpact();
+    Navigator.pop(context); // close drawer
+    final balance = widget.user != null
+        ? double.tryParse(widget.user!['user_bal']?.toString() ?? '0.0') ?? 0.0
+        : null;
+    final currency = widget.user?['user_currency']?.toString() ?? 'NGN';
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: false,
+      backgroundColor: Theme.of(context).scaffoldBackgroundColor,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (_) => FundAccountSheet(
+        account: widget.user,
+        balance: balance,
+        currency: currency,
+      ),
+    );
+  }
+
+  /// Sign out with confirmation
+  void _signOut() {
+    HapticFeedback.heavyImpact();
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Sign Out'),
+        content: const Text('Are you sure you want to sign out?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () {
+              Navigator.pop(ctx);
+              Navigator.pushReplacementNamed(context, AppRoutes.login);
+            },
+            style: TextButton.styleFrom(foregroundColor: AppColors.error),
+            child: const Text('Sign Out'),
+          ),
+        ],
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
-    final avatar = (user?['user_logo'] as String?) ??
-        'https://icon-library.com/images/icon-avatar/icon-avatar-6.jpg';
-    final name = user?['user_lname'] ?? user?['user_name'] ?? 'User';
-    final email = (user?['user_email'] as String?) ?? '';
+    final mq = MediaQuery.of(context);
+    final s = _scale(context);
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+    final isLandscape = mq.orientation == Orientation.landscape;
+
+    // Extract user data
+    final avatarUrl = _safeAvatar(widget.user?['user_logo'] as String?);
+    final name = widget.user?['user_lname'] ?? widget.user?['user_name'] ?? 'User';
+    final email = (widget.user?['user_email'] as String?) ?? '';
+    final balance = widget.user != null
+        ? double.tryParse(widget.user!['user_bal']?.toString() ?? '0.0') ?? 0.0
+        : 0.0;
+    final currency = widget.user?['user_currency']?.toString() ?? 'NGN';
+
+    // Drawer width: narrower in landscape
+    final drawerWidth = isLandscape
+        ? math.min(mq.size.width * 0.65, 320.0)
+        : math.min(mq.size.width * 0.82, 360.0);
 
     return Drawer(
-      child: SafeArea(
-        child: Column(
-          children: [
-            const SizedBox(height: 8),
-            ListTile(
-              leading: CircleAvatar(radius: 28, backgroundImage: NetworkImage(avatar)),
-              title: Text(name, style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 18)),
-              subtitle: Text(email, maxLines: 1, overflow: TextOverflow.ellipsis),
-              trailing: TextButton(
-                onPressed: () => Navigator.pushNamed(context, AppRoutes.profile),
-                child: const Text('View'),
+      width: drawerWidth,
+      backgroundColor: isDark ? AppColors.darkColor : Colors.white,
+      child: FadeTransition(
+        opacity: _fadeAnim,
+        child: SafeArea(
+          child: Column(
+            children: [
+              // Profile header
+              _ProfileHeader(
+                avatarUrl: avatarUrl,
+                name: name,
+                email: email,
+                scale: s,
+                isDark: isDark,
+                onEditProfile: () => _nav(AppRoutes.profile),
+              ),
+
+              SizedBox(height: 12 * s),
+
+              // Balance card
+              Padding(
+                padding: EdgeInsets.symmetric(horizontal: 16 * s),
+                child: _BalanceCard(
+                  balance: balance,
+                  currency: currency,
+                  scale: s,
+                  isDark: isDark,
+                  onFund: _showFundSheet,
+                ),
+              ),
+
+              SizedBox(height: 16 * s),
+
+              // Menu items (scrollable)
+              Expanded(
+                child: ListView(
+                  padding: EdgeInsets.symmetric(horizontal: 8 * s),
+                  children: [
+                    _SectionLabel('Activity', s, isDark),
+                    _MenuItem(
+                      icon: Icons.local_taxi_rounded,
+                      label: 'My Rides',
+                      scale: s,
+                      isDark: isDark,
+                      onTap: () => _nav(AppRoutes.rideHistory),
+                    ),
+                    _MenuItem(
+                      icon: Icons.receipt_long_rounded,
+                      label: 'Transactions',
+                      scale: s,
+                      isDark: isDark,
+                      onTap: () => _nav(AppRoutes.transactions),
+                    ),
+                    _MenuItem(
+                      icon: Icons.payments_rounded,
+                      label: 'Payments',
+                      scale: s,
+                      isDark: isDark,
+                      onTap: () => _nav(AppRoutes.payments),
+                    ),
+
+                    SizedBox(height: 8 * s),
+                    _SectionLabel('Explore', s, isDark),
+                    _MenuItem(
+                      icon: Icons.card_giftcard_rounded,
+                      label: 'Offers & Rewards',
+                      scale: s,
+                      isDark: isDark,
+                      onTap: () => _nav(AppRoutes.offers),
+                    ),
+                    _MenuItem(
+                      icon: Icons.notifications_active_outlined,
+                      label: 'Notifications',
+                      scale: s,
+                      isDark: isDark,
+                      onTap: () => _nav(AppRoutes.notifications),
+                    ),
+
+                    SizedBox(height: 8 * s),
+                    _SectionLabel('Support', s, isDark),
+                    _MenuItem(
+                      icon: Icons.help_outline_rounded,
+                      label: 'Help & FAQ',
+                      scale: s,
+                      isDark: isDark,
+                      onTap: () => _nav(AppRoutes.help),
+                    ),
+                    _MenuItem(
+                      icon: Icons.settings_rounded,
+                      label: 'Settings',
+                      scale: s,
+                      isDark: isDark,
+                      onTap: () => _nav(AppRoutes.settings),
+                    ),
+                  ],
+                ),
+              ),
+
+              // Sign out button
+              Container(
+                padding: EdgeInsets.fromLTRB(12 * s, 8 * s, 12 * s, 12 * s),
+                decoration: BoxDecoration(
+                  border: Border(
+                    top: BorderSide(
+                      color: isDark
+                          ? Colors.white.withOpacity(0.08)
+                          : Colors.black.withOpacity(0.06),
+                    ),
+                  ),
+                ),
+                child: _SignOutButton(scale: s, isDark: isDark, onTap: _signOut),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// PROFILE HEADER
+// ═══════════════════════════════════════════════════════════════════════════
+
+class _ProfileHeader extends StatelessWidget {
+  final String? avatarUrl;
+  final String name;
+  final String email;
+  final double scale;
+  final bool isDark;
+  final VoidCallback onEditProfile;
+
+  const _ProfileHeader({
+    required this.avatarUrl,
+    required this.name,
+    required this.email,
+    required this.scale,
+    required this.isDark,
+    required this.onEditProfile,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: EdgeInsets.all(16 * scale),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: isDark
+              ? [AppColors.accentColor.withOpacity(0.25), AppColors.primary.withOpacity(0.15)]
+              : [AppColors.primary.withOpacity(0.08), AppColors.accentColor.withOpacity(0.05)],
+        ),
+        borderRadius: BorderRadius.only(
+          bottomLeft: Radius.circular(20 * scale),
+          bottomRight: Radius.circular(20 * scale),
+        ),
+      ),
+      child: Row(
+        children: [
+          // Avatar
+          Container(
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              border: Border.all(
+                color: isDark ? Colors.white.withOpacity(0.3) : AppColors.primary.withOpacity(0.5),
+                width: 2.5,
+              ),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withOpacity(0.15),
+                  blurRadius: 10 * scale,
+                  offset: Offset(0, 4 * scale),
+                ),
+              ],
+            ),
+            child: CircleAvatar(
+              radius: 32 * scale,
+              backgroundColor: AppColors.mintBgLight,
+              backgroundImage: avatarUrl != null ? NetworkImage(avatarUrl!) : null,
+              child: avatarUrl == null
+                  ? Icon(Icons.person, size: 32 * scale, color: AppColors.primary)
+                  : null,
+            ),
+          ),
+
+          SizedBox(width: 12 * scale),
+
+          // Name & email
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  name,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: (17 * scale).clamp(15.0, 20.0),
+                    fontWeight: FontWeight.w900,
+                    color: isDark ? Colors.white : AppColors.textPrimary,
+                    letterSpacing: -0.3,
+                  ),
+                ),
+                if (email.isNotEmpty) ...[
+                  SizedBox(height: 2 * scale),
+                  Text(
+                    email,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: (12 * scale).clamp(11.0, 14.0),
+                      color: isDark
+                          ? Colors.white.withOpacity(0.75)
+                          : AppColors.textSecondary,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+
+          // Edit button
+          IconButton(
+            icon: Icon(
+              Icons.edit_rounded,
+              size: 20 * scale,
+              color: isDark ? Colors.white : AppColors.primary,
+            ),
+            onPressed: onEditProfile,
+            tooltip: 'Edit profile',
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// BALANCE CARD
+// ═══════════════════════════════════════════════════════════════════════════
+
+class _BalanceCard extends StatelessWidget {
+  final double balance;
+  final String currency;
+  final double scale;
+  final bool isDark;
+  final VoidCallback onFund;
+
+  const _BalanceCard({
+    required this.balance,
+    required this.currency,
+    required this.scale,
+    required this.isDark,
+    required this.onFund,
+  });
+
+  String _fmt(double n) {
+    final s = n.toStringAsFixed(2);
+    final parts = s.split('.');
+    final whole = parts[0].replaceAllMapped(
+      RegExp(r'(\d{1,3})(?=(\d{3})+(?!\d))'),
+          (m) => '${m[1]},',
+    );
+    return '$whole.${parts[1]}';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: EdgeInsets.all(14 * scale),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: isDark
+              ? [AppColors.accentColor, AppColors.primary.withOpacity(0.85)]
+              : [AppColors.accentColor, AppColors.darkColor],
+        ),
+        borderRadius: BorderRadius.circular(16 * scale),
+        boxShadow: [
+          BoxShadow(
+            color: AppColors.primary.withOpacity(0.35),
+            blurRadius: 12 * scale,
+            offset: Offset(0, 4 * scale),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Label
+          Text(
+            'Wallet Balance',
+            style: TextStyle(
+              fontSize: (11 * scale).clamp(10.0, 13.0),
+              fontWeight: FontWeight.w700,
+              color: Colors.white.withOpacity(0.85),
+              letterSpacing: 0.3,
+            ),
+          ),
+
+          SizedBox(height: 6 * scale),
+
+          // Balance amount
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  '$currency ${_fmt(balance)}',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: (22 * scale).clamp(20.0, 28.0),
+                    fontWeight: FontWeight.w900,
+                    color: Colors.white,
+                    letterSpacing: -0.5,
+                  ),
+                ),
+              ),
+            ],
+          ),
+
+          SizedBox(height: 10 * scale),
+
+          // Fund button
+          SizedBox(
+            width: double.infinity,
+            child: ElevatedButton.icon(
+              onPressed: onFund,
+              icon: Icon(Icons.add_circle_outline, size: 16 * scale),
+              label: Text(
+                'Fund Account',
+                style: TextStyle(
+                  fontSize: (13 * scale).clamp(12.0, 15.0),
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.white,
+                foregroundColor: AppColors.accentColor,
+                padding: EdgeInsets.symmetric(vertical: 10 * scale),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(10 * scale),
+                ),
+                elevation: 0,
               ),
             ),
-            const Divider(),
-            _item(context, Icons.local_taxi_rounded, 'Rides', AppRoutes.rideHistory),
-            _item(context, Icons.payments_rounded, 'Payments', AppRoutes.payments),
-            _item(context, Icons.notifications_active_outlined, 'Notifications', AppRoutes.notifications),
-            _item(context, Icons.card_giftcard_rounded, 'Offers', AppRoutes.offers),
-            _item(context, Icons.receipt_long_rounded, 'Transactions', AppRoutes.transactions),
-            _item(context, Icons.settings_rounded, 'Settings', AppRoutes.settings),
-            _item(context, Icons.help_outline_rounded, 'Help & FAQ', AppRoutes.help),
-            const Spacer(),
-            ListTile(
-              leading: const Icon(Icons.logout_rounded, color: AppColors.error),
-              title: const Text('Sign out', style: TextStyle(color: AppColors.error, fontWeight: FontWeight.w700)),
-              onTap: () => Navigator.pushReplacementNamed(context, AppRoutes.login),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// SECTION LABEL
+// ═══════════════════════════════════════════════════════════════════════════
+
+class _SectionLabel extends StatelessWidget {
+  final String text;
+  final double scale;
+  final bool isDark;
+
+  const _SectionLabel(this.text, this.scale, this.isDark);
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: EdgeInsets.fromLTRB(12 * scale, 8 * scale, 12 * scale, 6 * scale),
+      child: Text(
+        text.toUpperCase(),
+        style: TextStyle(
+          fontSize: (10 * scale).clamp(9.0, 12.0),
+          fontWeight: FontWeight.w800,
+          color: isDark
+              ? Colors.white.withOpacity(0.5)
+              : AppColors.textSecondary.withOpacity(0.7),
+          letterSpacing: 1.2,
+        ),
+      ),
+    );
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// MENU ITEM
+// ═══════════════════════════════════════════════════════════════════════════
+
+class _MenuItem extends StatefulWidget {
+  final IconData icon;
+  final String label;
+  final double scale;
+  final bool isDark;
+  final VoidCallback onTap;
+
+  const _MenuItem({
+    required this.icon,
+    required this.label,
+    required this.scale,
+    required this.isDark,
+    required this.onTap,
+  });
+
+  @override
+  State<_MenuItem> createState() => _MenuItemState();
+}
+
+class _MenuItemState extends State<_MenuItem> {
+  bool _pressed = false;
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTapDown: (_) => setState(() => _pressed = true),
+      onTapUp: (_) {
+        setState(() => _pressed = false);
+        widget.onTap();
+      },
+      onTapCancel: () => setState(() => _pressed = false),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 140),
+        margin: EdgeInsets.symmetric(vertical: 2 * widget.scale, horizontal: 4 * widget.scale),
+        padding: EdgeInsets.symmetric(horizontal: 12 * widget.scale, vertical: 10 * widget.scale),
+        decoration: BoxDecoration(
+          color: _pressed
+              ? (widget.isDark
+              ? Colors.white.withOpacity(0.08)
+              : AppColors.primary.withOpacity(0.08))
+              : Colors.transparent,
+          borderRadius: BorderRadius.circular(10 * widget.scale),
+        ),
+        child: Row(
+          children: [
+            Icon(
+              widget.icon,
+              size: 22 * widget.scale,
+              color: widget.isDark ? Colors.white : AppColors.primary,
+            ),
+            SizedBox(width: 14 * widget.scale),
+            Expanded(
+              child: Text(
+                widget.label,
+                style: TextStyle(
+                  fontSize: (14 * widget.scale).clamp(13.0, 16.0),
+                  fontWeight: FontWeight.w700,
+                  color: widget.isDark ? Colors.white : AppColors.textPrimary,
+                ),
+              ),
+            ),
+            Icon(
+              Icons.chevron_right_rounded,
+              size: 20 * widget.scale,
+              color: widget.isDark
+                  ? Colors.white.withOpacity(0.4)
+                  : AppColors.textSecondary.withOpacity(0.5),
             ),
           ],
         ),
       ),
     );
   }
+}
 
-  Widget _item(BuildContext c, IconData ic, String label, String route) => ListTile(
-    leading: Icon(ic, color: AppColors.primary),
-    title: Text(label, style: const TextStyle(fontWeight: FontWeight.w700)),
-    onTap: () => Navigator.pushNamed(c, route),
-  );
+// ═══════════════════════════════════════════════════════════════════════════
+// SIGN OUT BUTTON
+// ═══════════════════════════════════════════════════════════════════════════
+
+class _SignOutButton extends StatefulWidget {
+  final double scale;
+  final bool isDark;
+  final VoidCallback onTap;
+
+  const _SignOutButton({
+    required this.scale,
+    required this.isDark,
+    required this.onTap,
+  });
+
+  @override
+  State<_SignOutButton> createState() => _SignOutButtonState();
+}
+
+class _SignOutButtonState extends State<_SignOutButton> {
+  bool _pressed = false;
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTapDown: (_) => setState(() => _pressed = true),
+      onTapUp: (_) {
+        setState(() => _pressed = false);
+        widget.onTap();
+      },
+      onTapCancel: () => setState(() => _pressed = false),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 140),
+        padding: EdgeInsets.symmetric(horizontal: 12 * widget.scale, vertical: 12 * widget.scale),
+        decoration: BoxDecoration(
+          color: _pressed
+              ? AppColors.error.withOpacity(0.12)
+              : (widget.isDark ? Colors.white.withOpacity(0.04) : Colors.transparent),
+          borderRadius: BorderRadius.circular(10 * widget.scale),
+          border: Border.all(
+            color: AppColors.error.withOpacity(_pressed ? 0.5 : 0.3),
+            width: 1,
+          ),
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(
+              Icons.logout_rounded,
+              size: 20 * widget.scale,
+              color: AppColors.error,
+            ),
+            SizedBox(width: 10 * widget.scale),
+            Text(
+              'Sign Out',
+              style: TextStyle(
+                fontSize: (14 * widget.scale).clamp(13.0, 16.0),
+                fontWeight: FontWeight.w800,
+                color: AppColors.error,
+                letterSpacing: 0.2,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 }

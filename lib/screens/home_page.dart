@@ -1,6 +1,9 @@
 // lib/screens/home/home_page.dart
-// Pick Me — Modular Home (Map + Places + Multi-stop Routing)
-// Orchestrates state and composes reusable widgets.
+// Pick Me — Premium Modular Home with Optimized Layout (map-first)
+// - Map stays visible/touchable via dynamic GoogleMap.padding
+// - Tiny & responsive via _s(context) scale factor
+// - Clean orchestration: HomePage <-> RouteSheet <-> AutoOverlay
+// - Heavily commented for future maintenance
 
 import 'dart:async';
 import 'dart:convert';
@@ -25,7 +28,6 @@ import '../../widgets/bottom_navigation_bar.dart';
 import '../../widgets/app_menu_drawer.dart';
 import '../../widgets/fund_account_sheet.dart';
 
-// ⬇️ Use the modular Home screen packages
 import 'state/home_models.dart';
 import '../services/autocomplete_service.dart';
 import '../widgets/header_bar.dart';
@@ -35,26 +37,37 @@ import '../widgets/auto_overlay.dart';
 
 class HomePage extends StatefulWidget {
   const HomePage({Key? key}) : super(key: key);
+
   @override
   State<HomePage> createState() => _HomePageState();
 }
 
-class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
-  // ── Layout
-  static const double kBottomNavH = 74;
-  static const double kSheetMinH = 280;
-  static const double kSheetMaxH = 640;
+class _HomePageState extends State<HomePage> {
+  // ────────────────────────────────────────────────────────────────────────────
+  // LAYOUT CONSTANTS — keep UI tiny; map should dominate
+  // ────────────────────────────────────────────────────────────────────────────
+  static const double kBottomNavH = 74;     // bottom nav height
+  static const double kHeaderVisualH = 88;  // visual header height (below safeTop)
 
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
+  final GlobalKey _sheetKey = GlobalKey(); // to measure RouteSheet height
 
-  // ── Infra
+  // Runtime-measured heights used for GoogleMap.padding
+  double _sheetHeight = 0;
+  EdgeInsets _mapPadding = EdgeInsets.zero;
+
+  // ────────────────────────────────────────────────────────────────────────────
+  // INFRASTRUCTURE
+  // ────────────────────────────────────────────────────────────────────────────
   late SharedPreferences _prefs;
   late ApiClient _api;
   Map<String, dynamic>? _user;
   bool _busyProfile = false;
   int _currentIndex = 0;
 
-  // ── Map / Location
+  // ────────────────────────────────────────────────────────────────────────────
+  // MAP STATE
+  // ────────────────────────────────────────────────────────────────────────────
   GoogleMapController? _map;
   final CameraPosition _initialCam = const CameraPosition(
     target: LatLng(6.458985, 7.548266), // Onitsha fallback
@@ -66,11 +79,15 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
   final Set<Polyline> _lines = {};
   final Set<Circle> _circles = {};
 
-  // ── Route points
+  // ────────────────────────────────────────────────────────────────────────────
+  // ROUTE POINTS
+  // ────────────────────────────────────────────────────────────────────────────
   final List<RoutePoint> _pts = [];
   int _activeIdx = 0;
 
-  // ── Autocomplete
+  // ────────────────────────────────────────────────────────────────────────────
+  // AUTOCOMPLETE (Google Places)
+  // ────────────────────────────────────────────────────────────────────────────
   final _uuid = const Uuid();
   String _placesSession = '';
   Timer? _debounce;
@@ -78,26 +95,41 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
   List<Suggestion> _sugs = [];
   List<Suggestion> _recents = [];
   bool _isTyping = false;
-  int _lastQueryId = 0; // race-protection
+  int _lastQueryId = 0;
   String? _autoStatus;
   String? _autoError;
 
-  // ── Trip
+  // ────────────────────────────────────────────────────────────────────────────
+  // TRIP STATE
+  // ────────────────────────────────────────────────────────────────────────────
   String? _distanceText;
   String? _durationText;
   double? _fare;
 
-  // ── Sheet
-  double _sheetH = kSheetMinH;
-  bool _expanded = false;
-  double _dragStartY = 0;
-  bool _dragging = false;
+  // ────────────────────────────────────────────────────────────────────────────
+  // UI STATE
+  // ────────────────────────────────────────────────────────────────────────────
+  bool _expanded = false; // AutoOverlay visible?
+
+  // ────────────────────────────────────────────────────────────────────────────
+  // UTILITIES
+  // ────────────────────────────────────────────────────────────────────────────
+
+  /// Pixel-aware scale factor: tiny on small phones (~0.75) → 1.0 on larger
+  double _s(BuildContext c) {
+    final size = MediaQuery.of(c).size;
+    final shortest = math.min(size.width, size.height);
+    return (shortest / 390.0).clamp(0.75, 1.00);
+  }
 
   void _log(String msg, [Object? data]) {
     final d = data == null ? '' : '  -> $data';
     debugPrint('[Home] $msg$d');
   }
 
+  // ────────────────────────────────────────────────────────────────────────────
+  // LIFECYCLE
+  // ────────────────────────────────────────────────────────────────────────────
   @override
   void initState() {
     super.initState();
@@ -119,16 +151,13 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
     super.dispose();
   }
 
-  // ═══════════════════════════════════════════════════════════════════════════
+  // ────────────────────────────────────────────────────────────────────────────
   // BOOTSTRAP
-  // ═══════════════════════════════════════════════════════════════════════════
+  // ────────────────────────────────────────────────────────────────────────────
   Future<void> _bootstrap() async {
     _prefs = await SharedPreferences.getInstance();
-    await Future.wait([
-      _fetchUser(),
-      _initLocation(),
-      _loadRecents(),
-    ]);
+    await Future.wait([_fetchUser(), _initLocation(), _loadRecents()]);
+    _scheduleMapPaddingUpdate(); // ensure map padding matches header/sheet
   }
 
   Future<void> _fetchUser() async {
@@ -152,9 +181,9 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
     }
   }
 
-  // ═══════════════════════════════════════════════════════════════════════════
+  // ────────────────────────────────────────────────────────────────────────────
   // LOCATION
-  // ═══════════════════════════════════════════════════════════════════════════
+  // ────────────────────────────────────────────────────────────────────────────
   Future<void> _initLocation() async {
     try {
       var perm = await Geolocator.checkPermission();
@@ -167,12 +196,18 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
         _log('Location permission denied');
         return;
       }
+
       _curPos = await Geolocator.getCurrentPosition(
         desiredAccuracy: LocationAccuracy.high,
       );
       _log('GPS', {'lat': _curPos!.latitude, 'lng': _curPos!.longitude});
-      await _animate(LatLng(_curPos!.latitude, _curPos!.longitude), zoom: 16);
+
+      await _animate(
+        LatLng(_curPos!.latitude, _curPos!.longitude),
+        zoom: 16,
+      );
       await _useCurrentAsPickup();
+
       _gpsSub = Geolocator.getPositionStream(
         locationSettings: const LocationSettings(
           accuracy: LocationAccuracy.high,
@@ -262,11 +297,10 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
     return parts.isEmpty ? 'Current location' : parts.join(', ');
   }
 
-  // ═══════════════════════════════════════════════════════════════════════════
-  // ROUTE POINTS (fixed listeners: reference FocusNode, not object)
-  // ═══════════════════════════════════════════════════════════════════════════
+  // ────────────────────────────────────────────────────────────────────────────
+  // ROUTE POINTS
+  // ────────────────────────────────────────────────────────────────────────────
   void _initPoints() {
-    // pickup
     final pickupFocus = FocusNode();
     final pickupCtl = TextEditingController();
     pickupFocus.addListener(() {
@@ -279,7 +313,6 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
       hint: 'Pickup location',
     );
 
-    // destination
     final destFocus = FocusNode();
     final destCtl = TextEditingController();
     destFocus.addListener(() {
@@ -312,21 +345,17 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
       return;
     }
     final idx = _pts.length - 1;
-
-    // FIX: build FocusNode first, attach listener to it, then create point.
     final stopFocus = FocusNode();
     final stopCtl = TextEditingController();
     stopFocus.addListener(() {
       if (stopFocus.hasFocus) _onFocused(idx);
     });
-
     final s = RoutePoint(
       type: PointType.stop,
       controller: stopCtl,
       focus: stopFocus,
       hint: 'Add stop ${_pts.length - 1}',
     );
-
     setState(() => _pts.insert(idx, s));
     Future.delayed(const Duration(milliseconds: 80), () {
       s.focus.requestFocus();
@@ -367,9 +396,9 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
     if (_hasRoute()) _buildRoute();
   }
 
-  // ═══════════════════════════════════════════════════════════════════════════
+  // ────────────────────────────────────────────────────────────────────────────
   // AUTOCOMPLETE
-  // ═══════════════════════════════════════════════════════════════════════════
+  // ────────────────────────────────────────────────────────────────────────────
   void _onTyping(String q) {
     _debounce?.cancel();
     if (q.trim().isEmpty) {
@@ -475,7 +504,7 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
       });
       _putMarker(_activeIdx, det.latLng!, s.description);
       _saveRecent(s);
-      _placesSession = ''; // close session
+      _placesSession = '';
       await _animate(det.latLng!, zoom: 16);
       _focusNextUnfilled();
       if (_hasRoute()) await _buildRoute();
@@ -498,9 +527,9 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
     });
   }
 
-  // ═══════════════════════════════════════════════════════════════════════════
+  // ────────────────────────────────────────────────────────────────────────────
   // DIRECTIONS
-  // ═══════════════════════════════════════════════════════════════════════════
+  // ────────────────────────────────────────────────────────────────────────────
   bool _hasRoute() =>
       _pts.length >= 2 && _pts.first.latLng != null && _pts.last.latLng != null;
 
@@ -639,9 +668,9 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
     return out;
   }
 
-  // ═══════════════════════════════════════════════════════════════════════════
+  // ────────────────────────────────────────────────────────────────────────────
   // MARKERS
-  // ═══════════════════════════════════════════════════════════════════════════
+  // ────────────────────────────────────────────────────────────────────────────
   void _putMarker(int idx, LatLng pos, String title) {
     final p = _pts[idx];
     final id = MarkerId('p_$idx');
@@ -661,9 +690,9 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
     });
   }
 
-  // ═══════════════════════════════════════════════════════════════════════════
-  // RECENTS
-  // ═══════════════════════════════════════════════════════════════════════════
+  // ────────────────────────────────────────────────────────────────────────────
+  // RECENTS (local storage)
+  // ────────────────────────────────────────────────────────────────────────────
   static const _kRecentsKey = 'recent_places_v4';
 
   Future<void> _loadRecents() async {
@@ -689,47 +718,58 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
     setState(() => _recents = cap);
   }
 
-  // ═══════════════════════════════════════════════════════════════════════════
-  // SHEET STATE
-  // ═══════════════════════════════════════════════════════════════════════════
+  // ────────────────────────────────────────────────────────────────────────────
+  // SHEET/OVERLAY VISIBILITY + MAP PADDING
+  // ────────────────────────────────────────────────────────────────────────────
   void _expand() {
-    setState(() {
-      _expanded = true;
-      _sheetH = kSheetMaxH;
-    });
+    setState(() => _expanded = true);
+    _scheduleMapPaddingUpdate();
   }
 
   void _collapse() {
     FocusScope.of(context).unfocus();
-    setState(() {
-      _expanded = false;
-      _sheetH = kSheetMinH;
+    setState(() => _expanded = false);
+    _scheduleMapPaddingUpdate();
+  }
+
+  /// Measure RouteSheet height after layout and update GoogleMap.padding.
+  void _scheduleMapPaddingUpdate() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final ctx = _sheetKey.currentContext;
+      double newHeight = 0;
+      if (ctx != null) {
+        final box = ctx.findRenderObject() as RenderBox?;
+        if (box != null && box.hasSize) newHeight = box.size.height;
+      }
+      _sheetHeight = newHeight;
+      _applyMapPadding();
     });
   }
 
-  void _onDragStart(DragStartDetails d) {
-    _dragging = true;
-    _dragStartY = d.globalPosition.dy;
+  /// Apply padding to GoogleMap (this prop exists on the widget, not controller).
+  void _applyMapPadding() {
+    if (!mounted) return;
+    final mq = MediaQuery.of(context);
+    final topPad = mq.padding.top + kHeaderVisualH;         // safeTop + header
+    final bottomPad = _sheetHeight + kBottomNavH + 12;      // sheet + nav + gap
+    setState(() {
+      _mapPadding = EdgeInsets.fromLTRB(0, topPad, 0, bottomPad);
+    });
   }
 
-  void _onDragUpdate(DragUpdateDetails d) {
-    if (!_dragging) return;
-    final delta = _dragStartY - d.globalPosition.dy;
-    final h = (_sheetH + delta).clamp(kSheetMinH, kSheetMaxH);
-    setState(() => _sheetH = h);
-    _dragStartY = d.globalPosition.dy;
-  }
-
-  void _onDragEnd(DragEndDetails d) {
-    _dragging = false;
-    if (_sheetH > (kSheetMinH + kSheetMaxH) / 2) {
-      _expand();
-    } else {
-      _collapse();
-    }
-  }
+  // ────────────────────────────────────────────────────────────────────────────
+  // UI HELPERS
+  // ────────────────────────────────────────────────────────────────────────────
+  // In your HomePage class (_HomePageState), replace the _openWallet method:
 
   void _openWallet() {
+    // Extract balance and currency from user data
+    final balance = _user != null
+        ? double.tryParse(_user!['user_bal']?.toString() ?? '0.0') ?? 0.0
+        : null;
+
+    final currency = _user?['user_currency']?.toString() ?? 'NGN';
+
     showModalBottomSheet(
       context: context,
       isScrollControlled: false,
@@ -737,7 +777,11 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
       ),
-      builder: (_) => FundAccountSheet(account: _user?['virtual_account']),
+      builder: (_) => FundAccountSheet(
+        account: _user, // Pass the entire user object; the sheet will extract what it needs
+        balance: balance,
+        currency: currency,
+      ),
     );
   }
 
@@ -776,13 +820,17 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
     );
   }
 
-  // ═══════════════════════════════════════════════════════════════════════════
+  // ────────────────────────────────────────────────────────────────────────────
   // BUILD
-  // ═══════════════════════════════════════════════════════════════════════════
+  // ────────────────────────────────────────────────────────────────────────────
   @override
   Widget build(BuildContext context) {
     final mq = MediaQuery.of(context);
+    final s = _s(context);
     final safeTop = mq.padding.top;
+
+    // FAB floats just above the measured sheet height
+    final double fabBottom = (_sheetHeight + kBottomNavH + 16).clamp(96.0, 520.0);
 
     return Scaffold(
       key: _scaffoldKey,
@@ -791,10 +839,11 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
       extendBodyBehindAppBar: true,
       body: Stack(
         children: [
-          // Map
+          // MAP — pass dynamic padding so nothing is hidden
           Positioned.fill(
             child: GoogleMap(
               initialCameraPosition: _initialCam,
+              padding: _mapPadding, // <<— key change: widget prop, not controller
               myLocationEnabled: true,
               myLocationButtonEnabled: false,
               zoomControlsEnabled: false,
@@ -803,20 +852,30 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
               markers: _markers,
               polylines: _lines,
               circles: _circles,
-              onMapCreated: (c) => _map = c,
+              onMapCreated: (c) {
+                _map = c;
+                _scheduleMapPaddingUpdate();
+              },
               onTap: (_) => _collapse(),
             ),
           ),
 
-          // Header glow
+          // Soft gradient under status bar/header for contrast
           Positioned(
             top: 0, left: 0, right: 0,
-            child: Container(
-              height: safeTop + 120,
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  begin: Alignment.topCenter, end: Alignment.bottomCenter,
-                  colors: [Colors.black.withOpacity(0.6), Colors.transparent],
+            child: IgnorePointer(
+              child: Container(
+                height: safeTop + (kHeaderVisualH * s),
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topCenter, end: Alignment.bottomCenter,
+                    colors: [
+                      Colors.black.withOpacity(0.55),
+                      Colors.black.withOpacity(0.20),
+                      Colors.transparent,
+                    ],
+                    stops: const [0.0, 0.6, 1.0],
+                  ),
                 ),
               ),
             ),
@@ -834,10 +893,10 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
             ),
           ),
 
-          // My location FAB
+          // Locate FAB — tiny & responsive; sits above the sheet
           Positioned(
-            right: 16,
-            bottom: _sheetH + kBottomNavH + 20,
+            right: 14 * s,
+            bottom: fabBottom,
             child: LocateFab(
               onTap: () async {
                 HapticFeedback.selectionClick();
@@ -850,36 +909,32 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
             ),
           ),
 
-          // Route sheet
+          // Fixed RouteSheet — we key it so we can measure height each frame
+          // Fixed RouteSheet — force rebuild with ValueKey when overlay dismisses
           Positioned(
             left: 0, right: 0, bottom: 0,
-            child: GestureDetector(
-              onVerticalDragStart: _onDragStart,
-              onVerticalDragUpdate: _onDragUpdate,
-              onVerticalDragEnd: _onDragEnd,
-              child: AnimatedContainer(
-                duration: const Duration(milliseconds: 260),
-                curve: Curves.easeOutCubic,
-                height: _sheetH,
-                child: RouteSheet(
-                  points: _pts,
-                  bottomNavHeight: kBottomNavH,
-                  distanceText: _distanceText,
-                  durationText: _durationText,
-                  fare: _fare,
-                  onTyping: _onTyping,
-                  onFocused: _onFocused,
-                  onAddStop: _addStop,
-                  onRemoveStop: _removeStop,
-                  onSwap: _swap,
-                  onUseCurrentPickup: _useCurrentAsPickup,
-                  onSearchRides: _goRideOptions,
-                ),
+            child: KeyedSubtree(
+              key: _sheetKey,
+              child: RouteSheet(
+                key: ValueKey('route_sheet_$_expanded'),
+                bottomNavHeight: kBottomNavH,
+                recentDestinations: _recents,
+                onSearchTap: () {
+                  setState(() {
+                    _activeIdx = _pts.length - 1;
+                    _expanded = true;
+                    _pts.last.focus.requestFocus();
+                  });
+                  _scheduleMapPaddingUpdate();
+                },
+                onRecentTap: (sug) async {
+                  await _selectSug(sug);
+                },
               ),
             ),
           ),
 
-          // Full-height autocomplete overlay
+          // Full-screen auto-complete overlay (API signature matches your current widget)
           if (_expanded)
             AutoOverlay(
               safeTop: safeTop,
@@ -898,9 +953,28 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
               onSelectSuggestion: _selectSug,
               onSearchRides: _goRideOptions,
               fmtDistance: _fmtDistance,
-            ),
+
+              // ✅ NEW: let RouteEditor add/remove stop fields inside the overlay
+              onAddStop: _addStop,
+              onRemoveStop: _removeStop,
+
+              // (optional but recommended) keep swap consistent everywhere
+              onSwap: _swap,
+
+              onClose: () {
+                // Ensure UI becomes tappable again after closing overlay
+                FocusManager.instance.primaryFocus?.unfocus();
+                _collapse();  // your existing collapse
+                // Nudge a rebuild after the fade-out finishes
+                Future.delayed(const Duration(milliseconds: 50), () {
+                  if (mounted) setState(() {});
+                });
+              },
+            )
+
         ],
       ),
+
       bottomNavigationBar: CustomBottomNavBar(
         currentIndex: _currentIndex,
         onTap: (i) {

@@ -1,7 +1,10 @@
 // lib/screens/home/widgets/route_editor.dart
 // Row that composes icons column + list of RouteField + side actions.
+// Uses extra breathing room between fields.
 
+import 'dart:math' as math;
 import 'package:flutter/material.dart';
+
 import '../screens/state/home_models.dart';
 import 'icons_column.dart';
 import 'route_field.dart';
@@ -27,31 +30,48 @@ class RouteEditor extends StatelessWidget {
     required this.onUseCurrentPickup,
   });
 
+  double _s(BuildContext c) {
+    final sz = MediaQuery.of(c).size;
+    final shortest = math.min(sz.width, sz.height);
+    return (shortest / 390.0).clamp(0.75, 1.0);
+  }
+
   @override
   Widget build(BuildContext context) {
+    final s = _s(context);
+
+    final children = <Widget>[];
+    for (int i = 0; i < points.length; i++) {
+      final p = points[i];
+      children.add(
+        Padding(
+          key: ValueKey('rf_${i}_${points.length}'),
+          padding: EdgeInsets.only(bottom: i == points.length - 1 ? 0 : 14 * s),
+          child: RouteField(
+            key: ValueKey('route_field_${i}_${points.length}'),
+            point: p,
+            index: i,
+            onTyping: onTyping,
+            onFocused: onFocused,
+            onUseCurrent: p.type == PointType.pickup ? onUseCurrentPickup : null,
+            onRemove:  p.type == PointType.stop   ? () => onRemoveStop(i) : null,
+          ),
+        ),
+      );
+    }
+
     return Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         IconsColumn(points: points),
-        const SizedBox(width: 12),
+        SizedBox(width: 12 * s),
         Expanded(
           child: Column(
-            children: List.generate(points.length, (i) {
-              final p = points[i];
-              return Padding(
-                padding: const EdgeInsets.only(bottom: 12),
-                child: RouteField(
-                  point: p,
-                  index: i,
-                  onTyping: onTyping,
-                  onFocused: onFocused,
-                  onUseCurrent: p.type == PointType.pickup ? onUseCurrentPickup : null,
-                  onRemove:  p.type == PointType.stop   ? () => onRemoveStop(i) : null,
-                ),
-              );
-            }),
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: children,
           ),
         ),
+        SizedBox(width: 8 * s),
         ActionButtons(
           canAddStop: points.length < 6,
           onAddStop: onAddStop,

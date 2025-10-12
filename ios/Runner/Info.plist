@@ -8,6 +8,16 @@
     <key>GMSApiKey</key>
     <string>AIzaSyDDg8yoVH4mPYiEErNCpVzRDKxu-iP4UN8</string>
 
+    <key>NSLocationWhenInUseUsageDescription</key>
+    <string>We use your location to show your live position and routes.</string>
+    <key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+    <string>We use your location to show your live position and routes.</string>
+    <key>UIBackgroundModes</key>
+    <array>
+      <string>location</string>
+    </array>
+
+
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>

@@ -91,15 +91,17 @@ class _AutoOverlayState extends State<AutoOverlay>
   @override
   void initState() {
     super.initState();
-    _mainCtl = AnimationController(vsync: this, duration: const Duration(milliseconds: 420));
-    _blurCtl  = AnimationController(vsync: this, duration: const Duration(milliseconds: 480));
+    _mainCtl =
+        AnimationController(vsync: this, duration: const Duration(milliseconds: 420));
+    _blurCtl =
+        AnimationController(vsync: this, duration: const Duration(milliseconds: 480));
 
-    _fade  = CurvedAnimation(parent: _mainCtl, curve: Curves.easeOutCubic);
+    _fade = CurvedAnimation(parent: _mainCtl, curve: Curves.easeOutCubic);
     _scale = Tween<double>(begin: 0.92, end: 1.0)
         .animate(CurvedAnimation(parent: _mainCtl, curve: Curves.easeOutBack));
     _slide = Tween<Offset>(begin: const Offset(0, -0.05), end: Offset.zero)
         .animate(CurvedAnimation(parent: _mainCtl, curve: Curves.easeOutCubic));
-    _blur  = Tween<double>(begin: 0, end: 16)
+    _blur = Tween<double>(begin: 0, end: 16)
         .animate(CurvedAnimation(parent: _blurCtl, curve: Curves.easeOut));
 
     _mainCtl.forward();
@@ -189,7 +191,8 @@ class _AutoOverlayState extends State<AutoOverlay>
             child: Container(
               decoration: BoxDecoration(
                 gradient: LinearGradient(
-                  begin: Alignment.topCenter, end: Alignment.bottomCenter,
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
                   colors: isDark
                       ? [bg.withOpacity(.98), bg.withOpacity(.96), bg.withOpacity(.94)]
                       : [bg.withOpacity(.99), bg.withOpacity(.98), bg.withOpacity(.97)],
@@ -217,7 +220,6 @@ class _AutoOverlayState extends State<AutoOverlay>
     );
   }
 
-  // ── Portrait: header + EXPANDED(scroll: editor+status+suggestions) + footer
   Widget _buildPortraitLayout() {
     final s = _s(context);
 
@@ -250,7 +252,6 @@ class _AutoOverlayState extends State<AutoOverlay>
     );
   }
 
-  // ── Landscape: keep split layout
   Widget _buildLandscapeLayout() {
     return Column(
       children: [
@@ -580,7 +581,8 @@ class _AutoOverlayState extends State<AutoOverlay>
       padding: EdgeInsets.fromLTRB(16 * s, 10 * s, 16 * s, widget.bottomPadding + 10),
       decoration: BoxDecoration(
         gradient: LinearGradient(
-          begin: Alignment.topCenter, end: Alignment.bottomCenter,
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
           colors: [
             Theme.of(context).scaffoldBackgroundColor.withOpacity(.0),
             Theme.of(context).scaffoldBackgroundColor.withOpacity(.98),

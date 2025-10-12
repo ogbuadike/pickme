@@ -9,6 +9,10 @@
     <uses-permission android:name="android.permission.USE_FINGERPRINT"/>
     <uses-feature android:name="android.hardware.fingerprint" android:required="false"/>
 
+    <!-- Optional but recommended if you want background tracking -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
+
+
 
     <application
         android:label="Pick Me"

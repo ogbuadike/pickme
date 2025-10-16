@@ -1,16 +1,12 @@
-// lib/screens/home/home_page.dart
+// lib/screens/home_page.dart
 //
 // ╔═══════════════════════════════════════════════════════════════════════════╗
-// ║ PICK ME — PRODUCTION HOME PAGE v2.4 (Live-Track Lock)                     ║
-// ║ ✅ Hard follow (steady focus on live location; gestures ignored)          ║
-// ║ ✅ 250ms high-rate GPS + bestForNavigation                                ║
-// ║ ✅ Heading fusion: GPS course > route > compass (jerk-limited)            ║
-// ║ ✅ Crisp puck rotation (no 0↔360 snap)                                     ║
-// ║ ✅ Full route rendering pickup→destination                                 ║
-/* ║ ✅ Turn-aware forward anchoring; zoom/tilt adapt near maneuvers          ║ */
-// ║ ✅ No idle pause (always live)                                             ║
-// ║ ✅ Offline-tolerant (24h route cache)                                      ║
-// ║ ✅ Resource hygiene (no leaks)                                             ║
+// ║ PICK ME — LIVE NAV (Follow/Overview, Ultra-Low-Latency Heading)          ║
+// ║ • Realtime follow: socket-smooth (compass + GPS heading fusion)           ║
+// ║ • Auto overview: fits pickup+destination w/ smart padding                 ║
+// ║ • Route snapping + re-route                                               ║
+// ║ • Traffic-colored polyline + ETA/min bubbles                              ║
+// ║ • Offline-tolerant cache, request retry, full resource hygiene            ║
 // ╚═══════════════════════════════════════════════════════════════════════════╝
 
 import 'dart:async';
@@ -30,17 +26,18 @@ import 'package:intl/intl.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
 
-import '../../api/api_client.dart';
-import '../../api/url.dart';
-import '../../routes/routes.dart';
-import '../../themes/app_theme.dart';
-import '../../utility/notification.dart';
+import '../api/api_client.dart';
+import '../api/url.dart';
+import '../routes/routes.dart';
+import '../themes/app_theme.dart';
+import '../utility/notification.dart';
 
-import '../../widgets/app_menu_drawer.dart';
-import '../../widgets/bottom_navigation_bar.dart';
-import '../../widgets/fund_account_sheet.dart';
+import '../widgets/app_menu_drawer.dart';
+import '../widgets/bottom_navigation_bar.dart';
+import '../widgets/fund_account_sheet.dart';
 
 import 'state/home_models.dart';
+
 import '../services/autocomplete_service.dart';
 import '../widgets/auto_overlay.dart';
 import '../widgets/header_bar.dart';
@@ -49,6 +46,7 @@ import '../widgets/route_sheet.dart';
 
 enum MovementMode { stationary, pedestrian, vehicle }
 enum BearingSource { route, gps, compass }
+enum _CamMode { follow, overview }
 
 class _SpeedInterval {
   final int start, end;
@@ -94,55 +92,60 @@ class HomePage extends StatefulWidget {
 }
 
 class _HomePageState extends State<HomePage> with WidgetsBindingObserver, TickerProviderStateMixin {
-  // ──────────────────────────────────────────────────────────────────────────
-  // CONSTANTS (Production tuned for live tracking)
-  // ──────────────────────────────────────────────────────────────────────────
+  // ===== Tuned constants =====
   static const double kBottomNavH = 74;
   static const double kHeaderVisualH = 88;
+
   static const int kMaxConcurrentRequests = 5;
-  static const Duration kGpsUpdateInterval = Duration(milliseconds: 250); // faster for live feel
-  static const Duration kDebounceDelay = Duration(milliseconds: 220);
   static const Duration kApiTimeout = Duration(seconds: 15);
   static const int kMaxRetries = 3;
+
+  // Location/heading
+  static const Duration kGpsUpdateInterval = Duration(milliseconds: 200); // fast (≈5 Hz)
+  static const Duration kHeadingTickMin = Duration(milliseconds: 33);     // ~30 FPS
   static const double kVehicleSpeedThreshold = 1.5; // m/s
   static const double kPedestrianSpeedThreshold = 0.5; // m/s
-  static const double kRouteDeviationThreshold = 50.0; // meters
-  static const int kSpatialGridSize = 50;
+  static const Duration kStationaryTimeout = Duration(minutes: 2);
 
-  // Camera behavior
-  static const double kFollowAnchorY = 0.78;      // push puck lower to see ahead
-  static const double kBearingDeadbandDeg = 2.0;  // ignore tiny jitter
-  static const double kMaxBearingVel = 120.0;     // deg/s
-  static const double kMaxBearingAccel = 240.0;   // deg/s^2
+  // Follow tuning
+  static const double kCenterSnapMeters = 6; // recentre only if movement > 6m
+  static const Duration kCamMoveMin = Duration(milliseconds: 60);
+
+  // Bearing smoothing (very snappy)
+  static const double kBearingDeadbandDeg = 0.5;
+  static const double kMaxBearingVel = 320.0;   // deg/s
+  static const double kMaxBearingAccel = 1200.0; // deg/s^2
+
+  // Route logic
+  static const double kRouteDeviationThreshold = 50.0; // meters
   static const double kTurnAngleThreshold = 35.0; // deg
   static const double kTurnPrepMeters = 120.0;
-
-  // HARD FOLLOW: camera always follows user; gestures won’t disengage
-  bool _hardFollow = true;
 
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
   final GlobalKey _sheetKey = GlobalKey();
 
+  // Layout
   double _sheetHeight = 0;
   EdgeInsets _mapPadding = EdgeInsets.zero;
 
-  // infra
+  // Infra
   late SharedPreferences _prefs;
   late ApiClient _api;
   Map<String, dynamic>? _user;
   bool _busyProfile = false;
   int _currentIndex = 0;
 
-  // map & gps
+  // Map & GPS
   GoogleMapController? _map;
-  final CameraPosition _initialCam = const CameraPosition(target: LatLng(6.458985, 7.548266), zoom: 16, tilt: 45);
+  final CameraPosition _initialCam = const CameraPosition(target: LatLng(6.458985, 7.548266), zoom: 15);
 
   Position? _curPos, _prevPos;
   StreamSubscription<Position>? _gpsSub;
-  Timer? _gpsThrottleTimer;
+  Timer? _gpsThrottleTimer, _stationaryTimer;
   MovementMode _movementMode = MovementMode.stationary;
+  bool _gpsActive = true;
 
-  // icons/overlays
+  // Icons
   BitmapDescriptor? _userPinIcon, _pickupIcon, _dropIcon, _etaBubbleIcon, _minsBubbleIcon;
   bool _iconsPreloaded = false;
 
@@ -154,19 +157,26 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
   static const MarkerId _etaMarkerId = MarkerId('eta_label');
   static const MarkerId _minsMarkerId = MarkerId('mins_label');
 
-  bool _isAnimatingCamera = false;
+  // Camera + heading
+  _CamMode _camMode = _CamMode.follow;
+  bool _rotateWithHeading = true; // map rotates with heading in follow mode
+  bool _useForwardAnchor = true;  // forward-biased target when moving
 
-  // heading
+  bool _isAnimatingCamera = false;
+  LatLng? _lastCamTarget;
+  DateTime _lastCamMove = DateTime.fromMillisecondsSinceEpoch(0);
+
+  // Compass
   StreamSubscription<CompassEvent>? _compassSub;
   double? _compassDeg, _lastBearingDeg;
   double _bearingEma = 0;
-  DateTime _lastCamUpdate = DateTime.fromMillisecondsSinceEpoch(0);
-  double _userMarkerRotation = 0;
   BearingSource _lastBearingSource = BearingSource.compass;
-  double _lastBearingVel = 0; // deg/s
+  double _userMarkerRotation = 0;
+  double _lastBearingVel = 0;
   DateTime _lastBearingTime = DateTime.now();
+  DateTime _lastHeadingTick = DateTime.fromMillisecondsSinceEpoch(0);
 
-  // route
+  // Route
   final List<RoutePoint> _pts = [];
   int _activeIdx = 0;
 
@@ -183,7 +193,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
   DateTime _lastRerouteCheck = DateTime.now();
   bool _isRerouting = false;
 
-  // autocomplete
+  // Autocomplete
   final _uuid = const Uuid();
   String _placesSession = '';
   Timer? _debounce;
@@ -195,15 +205,13 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
   int _activeRequests = 0;
   String? _autoStatus, _autoError;
 
-  // ui
+  // UI
   bool _expanded = false, _isConnected = true;
   Orientation? _lastOrientation;
   late final AnimationController _overlayAnimController;
   late final Animation<double> _overlayFadeAnim;
 
-  // ──────────────────────────────────────────────────────────────────────────
-  // UTIL
-  // ──────────────────────────────────────────────────────────────────────────
+  // ===== Utils & logging =====
   double _s(BuildContext c) {
     final mq = MediaQuery.of(c);
     final size = mq.size;
@@ -229,9 +237,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
     if (res != null) _log('$tag HTTP ${res.statusCode}');
   }
 
-  // ──────────────────────────────────────────────────────────────────────────
-  // LIFECYCLE
-  // ──────────────────────────────────────────────────────────────────────────
+  // ===== Lifecycle =====
   @override
   void initState() {
     super.initState();
@@ -256,6 +262,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
     _gpsThrottleTimer?.cancel();
     _routeRefreshTimer?.cancel();
     _compassSub?.cancel();
+    _stationaryTimer?.cancel();
     _overlayAnimController.dispose();
     for (final p in _pts) {
       p.controller.dispose();
@@ -271,14 +278,16 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed) {
+    if (state == AppLifecycleState.paused) {
+      _gpsSub?.pause();
+      _log('App paused - GPS paused');
+    } else if (state == AppLifecycleState.resumed) {
+      _gpsSub?.resume();
       _refreshUserPosition();
+      _log('App resumed - GPS resumed');
     }
   }
 
-  // ──────────────────────────────────────────────────────────────────────────
-  // BOOTSTRAP
-  // ──────────────────────────────────────────────────────────────────────────
   Future<void> _bootstrap() async {
     _prefs = await SharedPreferences.getInstance();
     await Future.wait([_fetchUser(), _loadRecents(), _preloadAllIcons()]);
@@ -313,6 +322,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
     }
   }
 
+  // ===== Network retry =====
   Future<http.Response> _executeWithRetry(String id, Future<http.Response> Function() executor) async {
     if (_requestQueue.containsKey(id)) return _requestQueue[id]!.completer.future;
     final request = _NetworkRequest(id, executor);
@@ -329,7 +339,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
             request.completer.completeError(e);
             rethrow;
           }
-          final delayMs = 500 * math.pow(2, request.retries - 1);
+          final delayMs = 400 * math.pow(2, request.retries - 1);
           _log('Retry $id (${request.retries}/$kMaxRetries) after ${delayMs}ms');
           await Future.delayed(Duration(milliseconds: delayMs.toInt()));
         }
@@ -340,9 +350,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
     }
   }
 
-  // ──────────────────────────────────────────────────────────────────────────
-  // ICONS
-  // ──────────────────────────────────────────────────────────────────────────
+  // ===== Icons =====
   Future<void> _preloadAllIcons() async {
     if (_iconsPreloaded) return;
     try {
@@ -392,14 +400,10 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
       ..close();
     canvas.drawPath(pinPath, Paint()..color = Colors.white.withOpacity(0.98));
 
-    canvas.drawCircle(
-      center,
-      avatarRadius + 4,
-      Paint()
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 3.5
-        ..color = Colors.white,
-    );
+    canvas.drawCircle(center, avatarRadius + 4, Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 3.5
+      ..color = Colors.white);
 
     canvas.save();
     canvas.clipPath(Path()..addOval(Rect.fromCircle(center: center, radius: avatarRadius)));
@@ -433,7 +437,10 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
     final grad = ui.Gradient.linear(c - Offset(r, r), c + Offset(r, r), [AppColors.primary, AppColors.accentColor]);
     canvas.drawCircle(c, r, Paint()..shader = grad);
     final tp = TextPainter(
-      text: TextSpan(text: String.fromCharCode(Icons.person.codePoint), style: TextStyle(fontSize: r * 1.6, fontFamily: Icons.person.fontFamily, color: Colors.white)),
+      text: TextSpan(
+        text: String.fromCharCode(Icons.person.codePoint),
+        style: TextStyle(fontSize: r * 1.6, fontFamily: Icons.person.fontFamily, color: Colors.white),
+      ),
       textDirection: ui.TextDirection.ltr,
     )..layout();
     tp.paint(canvas, c - Offset(tp.width / 2, tp.height / 2));
@@ -458,7 +465,11 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
     c.drawRRect(r, Paint()..color = Colors.white);
     c.drawRRect(r, Paint()..style = PaintingStyle.stroke..strokeWidth = 2.5..color = color.withOpacity(.4));
 
-    final p = Path()..moveTo(w / 2 - 9, h - 10)..lineTo(w / 2, h)..lineTo(w / 2 + 9, h - 10)..close();
+    final p = Path()
+      ..moveTo(w / 2 - 9, h - 10)
+      ..lineTo(w / 2, h)
+      ..lineTo(w / 2 + 9, h - 10)
+      ..close();
     c.drawPath(p, Paint()..color = Colors.white);
     c.drawPath(p, Paint()..style = PaintingStyle.stroke..strokeWidth = 2.5..color = color.withOpacity(.4));
 
@@ -476,6 +487,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
     return BitmapDescriptor.fromBytes(bytes);
   }
 
+  // ===== Markers =====
   void _updateUserMarker(LatLng pos, {double? rotation}) {
     if (_userPinIcon == null) return;
     if (rotation != null) _userMarkerRotation = rotation;
@@ -493,17 +505,55 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
     });
   }
 
-  // ──────────────────────────────────────────────────────────────────────────
-  // COMPASS & HEADING (fusion + jerk limit)
-  // ──────────────────────────────────────────────────────────────────────────
+  // ===== Compass & heading =====
   void _startCompass() {
     _compassSub?.cancel();
-    _compassSub = FlutterCompass.events?.listen((CompassEvent e) {
-      final h = e.heading;
+    _compassSub = FlutterCompass.events?.listen((CompassEvent event) {
+      final h = event.heading;
       if (h == null) return;
+
+      // normalize
       _compassDeg = _normalizeDeg(h);
-      _maybeUpdateCameraBearing();
+
+      // super-fast tick: limit to ~30fps to avoid jank
+      final now = DateTime.now();
+      if (now.difference(_lastHeadingTick) < kHeadingTickMin) return;
+      _lastHeadingTick = now;
+
+      // Apply heading live:
+      _applyHeadingTick();
     });
+  }
+
+  void _applyHeadingTick() {
+    // If GPS heading valid while moving, prefer it. Else use compass.
+    double? heading;
+    final sp = _curPos?.speed ?? 0.0;
+    if (sp >= kPedestrianSpeedThreshold && _curPos != null && _curPos!.heading.isFinite && _curPos!.heading >= 0) {
+      heading = _curPos!.heading;
+      _lastBearingSource = BearingSource.gps;
+    } else if (_compassDeg != null) {
+      heading = _compassDeg;
+      _lastBearingSource = BearingSource.compass;
+    }
+    if (heading == null) return;
+
+    final smooth = _smoothBearingWithJerkLimit(heading);
+    final pos = _curPos != null ? LatLng(_curPos!.latitude, _curPos!.longitude) : null;
+
+    // Always rotate the marker instantly
+    if (pos != null) _updateUserMarker(pos, rotation: smooth);
+
+    // In follow mode, also rotate the map & keep it live
+    if (_camMode == _CamMode.follow && _rotateWithHeading && _map != null && pos != null) {
+      _moveCameraRealtime(
+        target: _forwardBiasTarget(user: pos, bearingDeg: smooth),
+        bearing: smooth,
+        // dynamic zoom/tilt by mode
+        zoom: (sp >= kVehicleSpeedThreshold) ? 17.5 : (sp >= kPedestrianSpeedThreshold ? 17.0 : 16.5),
+        tilt: (sp >= kVehicleSpeedThreshold) ? 55.0 : 45.0,
+      );
+    }
   }
 
   double _normalizeDeg(double d) {
@@ -513,14 +563,6 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
   }
 
   double _shortestDiffDeg(double a, double b) => (a - b + 540) % 360 - 180;
-
-  MovementMode _detectMovementMode() {
-    if (_curPos == null) return MovementMode.stationary;
-    final speed = _curPos!.speed;
-    if (speed >= kVehicleSpeedThreshold) return MovementMode.vehicle;
-    if (speed >= kPedestrianSpeedThreshold) return MovementMode.pedestrian;
-    return MovementMode.stationary;
-  }
 
   double _smoothBearingWithJerkLimit(double targetDeg) {
     final now = DateTime.now();
@@ -537,7 +579,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
     final err = _shortestDiffDeg(targetDeg, _bearingEma);
     if (err.abs() < kBearingDeadbandDeg) return _bearingEma;
 
-    final desiredVel = (err * 2.0).clamp(-kMaxBearingVel, kMaxBearingVel);
+    final desiredVel = (err * 3.0).clamp(-kMaxBearingVel, kMaxBearingVel); // snappier
     final accel = ((desiredVel - _lastBearingVel) / dt).clamp(-kMaxBearingAccel, kMaxBearingAccel);
     _lastBearingVel = (_lastBearingVel + accel * dt).clamp(-kMaxBearingVel, kMaxBearingVel);
 
@@ -545,9 +587,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
     return _bearingEma;
   }
 
-  // ──────────────────────────────────────────────────────────────────────────
-  // GEO HELPERS
-  // ──────────────────────────────────────────────────────────────────────────
+  // ===== Geo utils =====
   static const double _earth = 6371000.0;
   double _deg2rad(double d) => d * (math.pi / 180.0);
   double _rad2deg(double r) => r * (180.0 / math.pi);
@@ -581,9 +621,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
     return LatLng(_rad2deg(lat2), _rad2deg(lon2));
   }
 
-  // ──────────────────────────────────────────────────────────────────────────
-  // ROUTE SNAP / INDEX
-  // ──────────────────────────────────────────────────────────────────────────
+  // ===== Spatial index for route snapping =====
   void _buildSpatialIndex() {
     _spatialIndex.clear();
     if (_routePts.isEmpty) return;
@@ -594,19 +632,27 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
 
   int _nearestRouteIndex(LatLng p) {
     if (_spatialIndex.isEmpty) return -1;
-    int bestIdx = -1; double bestDist = double.infinity;
+    int bestIdx = -1;
+    double bestDist = double.infinity;
     final step = math.max(1, _spatialIndex.length ~/ 100);
     for (int i = 0; i < _spatialIndex.length; i += step) {
       final node = _spatialIndex[i];
       final d = _haversine(p, node.point);
-      if (d < bestDist) { bestDist = d; bestIdx = node.index; }
+      if (d < bestDist) {
+        bestDist = d;
+        bestIdx = node.index;
+      }
     }
     if (bestIdx >= 0) {
-      final start = math.max(0, bestIdx - 20), end = math.min(_spatialIndex.length - 1, bestIdx + 20);
+      final start = math.max(0, bestIdx - 20);
+      final end = math.min(_spatialIndex.length - 1, bestIdx + 20);
       for (int i = start; i <= end; i++) {
         final node = _spatialIndex[i];
         final d = _haversine(p, node.point);
-        if (d < bestDist) { bestDist = d; bestIdx = node.index; }
+        if (d < bestDist) {
+          bestDist = d;
+          bestIdx = node.index;
+        }
       }
     }
     return bestIdx;
@@ -645,120 +691,88 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
     });
   }
 
-  // ──────────────────────────────────────────────────────────────────────────
-  // CAMERA (always follow user + turn-aware)
-  // ──────────────────────────────────────────────────────────────────────────
-  int _findNextTurnIndex(int fromIdx) {
-    if (_routePts.length < 12) return -1;
-    const window = 6;
-    for (int i = fromIdx.clamp(0, _routePts.length - 1); i < _routePts.length - 2 * window; i += 2) {
-      final a = _routePts[i], b = _routePts[i + window], c = _routePts[i + 2 * window];
-      final ab = _bearingBetween(a, b);
-      final bc = _bearingBetween(b, c);
-      final delta = _shortestDiffDeg(bc, ab).abs();
-      if (delta >= kTurnAngleThreshold) return i + window;
-    }
-    return -1;
+  // ===== Follow/Overview Camera =====
+  LatLng _forwardBiasTarget({required LatLng user, required double bearingDeg}) {
+    if (!_useForwardAnchor) return user;
+    // meters ahead based on speed
+    final sp = _curPos?.speed ?? 0.0;
+    final metersAhead = (_camMode == _CamMode.follow && sp > 0)
+        ? (sp * 3.5).clamp(30.0, 180.0)
+        : 0.0;
+    return _offsetLatLng(user, metersAhead, bearingDeg);
   }
 
-  Future<LatLng> _anchoredNavTarget({
-    required LatLng user,
-    required double bearingDeg,
-    required double metersAhead,
-    required double anchorY,
+  Future<void> _moveCameraRealtime({
+    required LatLng target,
+    required double bearing,
+    required double zoom,
+    required double tilt,
   }) async {
-    if (_map == null) return _offsetLatLng(user, metersAhead, bearingDeg);
-    final forward = _offsetLatLng(user, metersAhead, bearingDeg);
-    final region = await _map!.getVisibleRegion();
-    final tlSc = await _map!.getScreenCoordinate(LatLng(region.northeast.latitude, region.southwest.longitude));
-    final brSc = await _map!.getScreenCoordinate(LatLng(region.southwest.latitude, region.northeast.longitude));
-    final height = (brSc.y - tlSc.y).abs();
-    final userSc = await _map!.getScreenCoordinate(user);
-    final desiredY = (tlSc.y + height * anchorY).round();
-    final anchored = await _map!.getLatLng(ScreenCoordinate(x: userSc.x, y: desiredY));
-    return _offsetLatLng(anchored, metersAhead, bearingDeg);
-  }
-
-  Future<void> _maybeUpdateCameraBearing({LatLng? target}) async {
-    // Hard-follow enforced: always track; ignore user gestures
     if (_map == null) return;
-    if (_isAnimatingCamera) return;
-
     final now = DateTime.now();
-    if (now.difference(_lastCamUpdate) < const Duration(milliseconds: 120)) return;
-
-    final pos = _curPos;
-    LatLng? camTarget = target ?? (pos != null ? LatLng(pos.latitude, pos.longitude) : null);
-    if (camTarget == null) return;
-
-    _movementMode = _detectMovementMode();
-
-    // Choose source: GPS course (when valid) > route > compass
-    double? bearing;
-    BearingSource src = BearingSource.compass;
-
-    // GPS heading: only trust if moving and heading is valid & accurate
-    if (pos != null && pos.heading.isFinite && pos.heading >= 0 && (_curPos!.speed >= kPedestrianSpeedThreshold)) {
-      bearing = pos.heading;
-      src = BearingSource.gps;
-    }
-
-    // Route bearing if on-route (helps at low speed)
-    bearing ??= _routeAwareBearing(camTarget)?.let((_) => _routeAwareBearing(camTarget));
-    if (bearing != null && src != BearingSource.gps) src = BearingSource.route;
-
-    // Compass fallback
-    bearing ??= _compassDeg;
-
-    if (bearing == null) return;
-
-    // Smooth/limit jerk
-    final smoothed = _smoothBearingWithJerkLimit(bearing);
-    _lastBearingSource = src;
-
-    // Look-ahead distance & camera params
-    final speed = pos?.speed ?? 0.0;
-    double metersAhead = _movementMode == MovementMode.stationary ? 0.0 : (speed * 3.5).clamp(30.0, 180.0);
-    double zoom = _movementMode == MovementMode.vehicle ? 17.5 : (_movementMode == MovementMode.pedestrian ? 17.0 : 16.5);
-    double tilt = _movementMode == MovementMode.vehicle ? 55.0 : 45.0;
-
-    if (_routePts.isNotEmpty && _lastSnapIndex >= 0) {
-      final turnIdx = _findNextTurnIndex(_lastSnapIndex);
-      if (turnIdx > 0) {
-        final turnPoint = _routePts[turnIdx];
-        final distToTurn = _haversine(camTarget, turnPoint);
-        if (distToTurn < kTurnPrepMeters) {
-          metersAhead = math.max(20.0, distToTurn * 0.6);
-          tilt = 50.0;
-          zoom = 17.0;
-        }
-      }
-    }
-
-    final lookTarget = await _anchoredNavTarget(
-      user: camTarget,
-      bearingDeg: smoothed,
-      metersAhead: metersAhead,
-      anchorY: kFollowAnchorY,
-    );
+    if (now.difference(_lastCamMove) < kCamMoveMin) return;
+    _lastCamMove = now;
 
     _isAnimatingCamera = true;
     try {
-      _updateUserMarker(camTarget, rotation: smoothed);
-      await _map!.animateCamera(
+      await _map!.moveCamera(
         CameraUpdate.newCameraPosition(
-          CameraPosition(target: lookTarget, zoom: zoom, tilt: tilt, bearing: smoothed),
+          CameraPosition(target: target, zoom: zoom, tilt: tilt, bearing: bearing),
         ),
       );
+      _lastCamTarget = target;
     } finally {
       _isAnimatingCamera = false;
-      _lastCamUpdate = now;
     }
   }
 
-  // ──────────────────────────────────────────────────────────────────────────
-  // LOCATION (always-on live tracking)
-  // ──────────────────────────────────────────────────────────────────────────
+  Future<void> _enterOverview({bool fitWholeRoute = false}) async {
+    if (_map == null) return;
+    // If we have a computed route and want whole route, use all points; otherwise fit pickup+destination.
+    List<LatLng> pts;
+    if (fitWholeRoute && _routePts.isNotEmpty) {
+      pts = _routePts;
+    } else {
+      if (!(_pts.length >= 2 && _pts.first.latLng != null && _pts.last.latLng != null)) return;
+      pts = [_pts.first.latLng!, _pts.last.latLng!];
+    }
+    // Compute bounds
+    double minLat = pts.first.latitude, maxLat = pts.first.latitude, minLng = pts.first.longitude, maxLng = pts.first.longitude;
+    for (final p in pts) {
+      minLat = math.min(minLat, p.latitude);
+      maxLat = math.max(maxLat, p.latitude);
+      minLng = math.min(minLng, p.longitude);
+      maxLng = math.max(maxLng, p.longitude);
+    }
+    final bounds = LatLngBounds(
+      southwest: LatLng(minLat, minLng),
+      northeast: LatLng(maxLat, maxLng),
+    );
+
+    // Smart padding: top header + bottom sheet + a bit of air
+    final double pad = math.max(_mapPadding.top + _mapPadding.bottom + 40.0, 120.0);
+
+    _camMode = _CamMode.overview;
+    _rotateWithHeading = false; // keep map stable in overview
+
+    try {
+      // small delay helps right after map creation on iOS
+      await Future.delayed(const Duration(milliseconds: 16));
+      await _map!.animateCamera(CameraUpdate.newLatLngBounds(bounds, pad));
+    } catch (e) {
+      // Fallback: center midpoint if bounds throws
+      final mid = LatLng((minLat + maxLat) / 2.0, (minLng + maxLng) / 2.0);
+      await _map!.animateCamera(CameraUpdate.newCameraPosition(CameraPosition(target: mid, zoom: 13.5, tilt: 0, bearing: 0)));
+    }
+  }
+
+  void _enterFollowMode() {
+    _camMode = _CamMode.follow;
+    _rotateWithHeading = true;
+    _useForwardAnchor = true;
+  }
+
+  // ===== Location =====
   LocationSettings _platformLocationSettings() {
     if (Platform.isAndroid) {
       return AndroidSettings(
@@ -788,22 +802,22 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
     try {
       var perm = await Geolocator.checkPermission();
       if (perm == LocationPermission.denied) perm = await Geolocator.requestPermission();
-
       if (perm == LocationPermission.denied || perm == LocationPermission.deniedForever) {
-        _toast('Location Required', 'Please enable precise location services');
+        _toast('Location Required', 'Please enable location services');
         return;
       }
 
       _curPos = await Geolocator.getCurrentPosition(
         desiredAccuracy: LocationAccuracy.bestForNavigation,
-        timeLimit: const Duration(seconds: 6),
+        timeLimit: const Duration(seconds: 10),
       );
 
       if (_curPos != null) {
         final ll = LatLng(_curPos!.latitude, _curPos!.longitude);
-        await _animate(ll, zoom: 16, tilt: 45);
+        await _map?.animateCamera(CameraUpdate.newCameraPosition(CameraPosition(target: ll, zoom: 16, tilt: 45, bearing: 0)));
         await _useCurrentAsPickup();
-        _updateUserMarker(ll, rotation: _userMarkerRotation);
+        _updateUserMarker(ll, rotation: 0);
+        _lastCamTarget = ll;
       }
 
       _gpsSub?.cancel();
@@ -820,6 +834,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
 
   void _onGpsUpdate(Position pos) {
     if (_gpsThrottleTimer?.isActive ?? false) return;
+
     _gpsThrottleTimer = Timer(kGpsUpdateInterval, () {
       if (!mounted) return;
 
@@ -827,23 +842,71 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
       _curPos = pos;
       final ll = LatLng(pos.latitude, pos.longitude);
 
-      // update marker rotation (prefer GPS course when moving)
-      final hasValidHeading = pos.heading.isFinite && pos.heading >= 0;
-      final markerRot = hasValidHeading ? pos.heading : _userMarkerRotation;
-      _updateUserMarker(ll, rotation: markerRot);
+      // activity
+      if (pos.speed >= kPedestrianSpeedThreshold) {
+        if (!_gpsActive) {
+          _gpsActive = true;
+          _stationaryTimer?.cancel();
+        }
+      } else {
+        _checkStationaryTimeout();
+      }
 
-      // drive camera (hard-follow)
-      _maybeUpdateCameraBearing(target: ll);
+      // rotate marker immediately (gps heading if valid)
+      final rot = (pos.heading.isFinite && pos.heading >= 0) ? pos.heading : _userMarkerRotation;
+      _updateUserMarker(ll, rotation: rot);
 
-      // update pickup text if using "current location"
+      // Follow camera stays live & low-latency
+      if (_camMode == _CamMode.follow) {
+        // bearing priority: route > gps > compass
+        double? bearing = _routeAwareBearing(ll);
+        if (bearing == null && pos.heading.isFinite && pos.heading >= 0 && pos.speed >= kPedestrianSpeedThreshold) {
+          bearing = pos.heading;
+        }
+        bearing ??= _compassDeg;
+
+        if (bearing != null) {
+          final smoothed = _smoothBearingWithJerkLimit(bearing);
+          _moveCameraRealtime(
+            target: _forwardBiasTarget(user: ll, bearingDeg: smoothed),
+            bearing: _rotateWithHeading ? smoothed : 0,
+            zoom: (pos.speed >= kVehicleSpeedThreshold) ? 17.5 : (pos.speed >= kPedestrianSpeedThreshold ? 17.0 : 16.5),
+            tilt: (pos.speed >= kVehicleSpeedThreshold) ? 55.0 : 45.0,
+          );
+        } else {
+          // no bearing → just keep user centered gently
+          final now = DateTime.now();
+          if (now.difference(_lastCamMove) > kCamMoveMin) {
+            final moved = (_lastCamTarget == null) ? double.infinity : _haversine(_lastCamTarget!, ll);
+            if (moved > kCenterSnapMeters) {
+              _map?.moveCamera(CameraUpdate.newLatLng(ll));
+              _lastCamTarget = ll;
+              _lastCamMove = now;
+            }
+          }
+        }
+      }
+
       if (_pts.isNotEmpty && _pts.first.isCurrent) _updatePickupFromGps();
 
-      // accuracy ring
       _putLocationCircle(ll, accuracy: pos.accuracy);
     });
   }
 
+  void _checkStationaryTimeout() {
+    _stationaryTimer?.cancel();
+    _stationaryTimer = Timer(kStationaryTimeout, () {
+      if (_movementMode == MovementMode.stationary && _gpsActive) {
+        _gpsActive = false;
+      }
+    });
+  }
+
   Future<void> _refreshUserPosition() async {
+    if (_curPos == null) {
+      await _initLocation();
+      return;
+    }
     try {
       final pos = await Geolocator.getCurrentPosition(
         desiredAccuracy: LocationAccuracy.bestForNavigation,
@@ -855,16 +918,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
     }
   }
 
-  Future<void> _animate(LatLng t, {double zoom = 15, double tilt = 0, double bearing = 0}) async {
-    if (_map == null) return;
-    _isAnimatingCamera = true;
-    try {
-      await _map!.animateCamera(CameraUpdate.newCameraPosition(CameraPosition(target: t, zoom: zoom, tilt: tilt, bearing: bearing)));
-    } finally {
-      _isAnimatingCamera = false;
-    }
-  }
-
+  // ===== Circles =====
   void _putLocationCircle(LatLng c, {double accuracy = 50}) {
     setState(() {
       _circles
@@ -872,23 +926,23 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
         ..add(Circle(
           circleId: const CircleId('accuracy'),
           center: c,
-          radius: accuracy.clamp(5, 80),
-          fillColor: AppColors.primary.withOpacity(0.12),
-          strokeColor: AppColors.primary.withOpacity(0.35),
+          radius: accuracy.clamp(8, 100),
+          fillColor: AppColors.primary.withOpacity(0.10),
+          strokeColor: AppColors.primary.withOpacity(0.32),
           strokeWidth: 2,
         ));
     });
   }
 
-  // ──────────────────────────────────────────────────────────────────────────
-  // ROUTES (v2 + fallback + cache)
-  // ──────────────────────────────────────────────────────────────────────────
+  // ===== Routes + cache =====
   bool _hasRoute() => _pts.length >= 2 && _pts.first.latLng != null && _pts.last.latLng != null && _lines.isNotEmpty;
 
   String _computeRouteHash() {
     final parts = <String>[];
     for (final p in _pts) {
-      if (p.latLng != null) parts.add('${p.latLng!.latitude.toStringAsFixed(6)},${p.latLng!.longitude.toStringAsFixed(6)}');
+      if (p.latLng != null) {
+        parts.add('${p.latLng!.latitude.toStringAsFixed(6)},${p.latLng!.longitude.toStringAsFixed(6)}');
+      }
     }
     return parts.join('|');
   }
@@ -900,6 +954,8 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
 
     if (_cachedRoute != null && _lastRouteHash == routeHash && !_cachedRoute!.isStale) {
       _applyRouteFromCache(_cachedRoute!.route);
+      // overview after applying cache too
+      await _enterOverview(fitWholeRoute: false); // show both pins at a glance
       return;
     }
 
@@ -929,6 +985,9 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
         _cachedRoute = _RouteCache(v2, DateTime.now());
         _applyRouteFromCache(v2);
 
+        // immediately show both pickup + destination
+        await _enterOverview(fitWholeRoute: false);
+
         _routeRefreshTimer?.cancel();
         _routeRefreshTimer = Timer.periodic(const Duration(minutes: 3), (_) {
           if (_pts.first.latLng != null && _pts.last.latLng != null && !_expanded) {
@@ -940,8 +999,9 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
       }
 
       await _buildRouteLegacy(origin, destination, stops);
+      // overview even on legacy
+      await _enterOverview(fitWholeRoute: false);
     } catch (e) {
-      _log('Route error', e);
       _routeUiError = 'Route calculation failed';
       _toast('Route Error', 'Unable to calculate route');
       setState(() => _isConnected = false);
@@ -967,7 +1027,6 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
     _buildSpatialIndex();
     _buildSpeedColoredPolylines(points, route.speedIntervals);
     _updateRouteBubbles(origin: _pts.first.latLng!, destination: _pts.last.latLng!, secs: durationSeconds);
-    _fitBounds(points);
   }
 
   Future<_V2Route?> _computeRoutesV2(LatLng origin, LatLng destination, List<LatLng> stops) async {
@@ -1068,9 +1127,12 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
 
     Color colorFor(String speed) {
       switch (speed) {
-        case 'TRAFFIC_JAM': return const Color(0xFFE53935);
-        case 'SLOW': return const Color(0xFFFF8F00);
-        default: return const Color(0xFF2E7D32);
+        case 'TRAFFIC_JAM':
+          return const Color(0xFFE53935);
+        case 'SLOW':
+          return const Color(0xFFFF8F00);
+        default:
+          return const Color(0xFF2E7D32);
       }
     }
 
@@ -1095,9 +1157,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
 
   Future<void> _buildRouteLegacy(LatLng o, LatLng d, List<LatLng> stops) async {
     final wp = stops.isNotEmpty ? '&waypoints=optimize:true|${stops.map((w) => '${w.latitude},${w.longitude}').join('|')}' : '';
-    final url = Uri.parse(
-      'https://maps.googleapis.com/maps/api/directions/json?origin=${o.latitude},${o.longitude}&destination=${d.latitude},${d.longitude}$wp&key=${ApiConstants.kGoogleApiKey}',
-    );
+    final url = Uri.parse('https://maps.googleapis.com/maps/api/directions/json?origin=${o.latitude},${o.longitude}&destination=${d.latitude},${d.longitude}$wp&key=${ApiConstants.kGoogleApiKey}');
 
     http.Response r;
     try {
@@ -1121,7 +1181,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
     if (routes.isEmpty) return;
 
     final route = routes.first;
-    final legs = (route ['legs'] as List).cast<Map<String, dynamic>>();
+    final legs = (route['legs'] as List).cast<Map<String, dynamic>>();
 
     int dMeters = 0, dSecs = 0;
     for (final l in legs) {
@@ -1146,20 +1206,67 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
     _buildSpatialIndex();
     _buildSpeedColoredPolylines(pts, const []);
     await _updateRouteBubbles(origin: o, destination: d, secs: dSecs);
-    _fitBounds(pts);
   }
 
   Future<void> _updateRouteBubbles({required LatLng origin, required LatLng destination, required int secs}) async {
     final minsText = '${(secs / 60).round()} min';
     final etaText = 'Arrive by ${DateFormat('h:mm a').format(DateTime.now().add(Duration(seconds: secs)))}';
+
     _minsBubbleIcon = await _buildMinutesBubble(minsText);
     _etaBubbleIcon = await _buildEtaBubble(etaText);
+
     if (!mounted) return;
     setState(() {
       _markers.removeWhere((m) => m.markerId == _etaMarkerId || m.markerId == _minsMarkerId);
       _markers.add(Marker(markerId: _etaMarkerId, position: origin, icon: _etaBubbleIcon!, anchor: const Offset(0.5, 1.0), consumeTapEvents: false, zIndex: 998));
       _markers.add(Marker(markerId: _minsMarkerId, position: destination, icon: _minsBubbleIcon!, anchor: const Offset(0.5, 1.0), consumeTapEvents: false, zIndex: 998));
     });
+  }
+
+  Future<BitmapDescriptor> _buildMinutesBubble(String text) async {
+    const w = 140.0, h = 64.0;
+    final rec = ui.PictureRecorder();
+    final c = Canvas(rec);
+    final r = RRect.fromRectAndRadius(Rect.fromLTWH(0, 0, w, h - 10), const Radius.circular(24));
+    c.drawRRect(r, Paint()..color = const Color(0xFF00A651));
+    final p = Path()
+      ..moveTo(w / 2 - 10, h - 10)
+      ..lineTo(w / 2, h)
+      ..lineTo(w / 2 + 10, h - 10)
+      ..close();
+    c.drawPath(p, Paint()..color = const Color(0xFF00A651));
+    final tp = TextPainter(
+      text: TextSpan(text: text, style: const TextStyle(color: Colors.white, fontSize: 22, fontWeight: FontWeight.w800)),
+      textDirection: ui.TextDirection.ltr,
+    )..layout();
+    tp.paint(c, Offset((w - tp.width) / 2, (h - 10 - tp.height) / 2));
+    final picture = rec.endRecording();
+    final img = await picture.toImage(w.toInt(), h.toInt());
+    final bytes = (await img.toByteData(format: ui.ImageByteFormat.png))!.buffer.asUint8List();
+    return BitmapDescriptor.fromBytes(bytes);
+  }
+
+  Future<BitmapDescriptor> _buildEtaBubble(String text) async {
+    const w = 236.0, h = 64.0;
+    final rec = ui.PictureRecorder();
+    final c = Canvas(rec);
+    final r = RRect.fromRectAndRadius(Rect.fromLTWH(0, 0, w, h - 10), const Radius.circular(24));
+    c.drawRRect(r, Paint()..color = const Color(0xFF1A73E8));
+    final p = Path()
+      ..moveTo(w / 2 - 10, h - 10)
+      ..lineTo(w / 2, h)
+      ..lineTo(w / 2 + 10, h - 10)
+      ..close();
+    c.drawPath(p, Paint()..color = const Color(0xFF1A73E8));
+    final tp = TextPainter(
+      text: TextSpan(text: text, style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w800)),
+      textDirection: ui.TextDirection.ltr,
+    )..layout(maxWidth: w - 24);
+    tp.paint(c, Offset((w - tp.width) / 2, (h - 10 - tp.height) / 2));
+    final picture = rec.endRecording();
+    final img = await picture.toImage(w.toInt(), h.toInt());
+    final bytes = (await img.toByteData(format: ui.ImageByteFormat.png))!.buffer.asUint8List();
+    return BitmapDescriptor.fromBytes(bytes);
   }
 
   double _calcFare(int meters) => 500.0 + (meters / 1000.0) * 120.0;
@@ -1169,19 +1276,6 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
     if (mins < 60) return '$mins min';
     final h = mins ~/ 60, mm = mins % 60;
     return '${h}h ${mm}m';
-  }
-
-  void _fitBounds(List<LatLng> pts) async {
-    if (_map == null || pts.isEmpty) return;
-    double minLat = pts.first.latitude, maxLat = pts.first.latitude, minLng = pts.first.longitude, maxLng = pts.first.longitude;
-    for (final p in pts) {
-      minLat = math.min(minLat, p.latitude);
-      maxLat = math.max(maxLat, p.latitude);
-      minLng = math.min(minLng, p.longitude);
-      maxLng = math.max(maxLng, p.longitude);
-    }
-    final b = LatLngBounds(southwest: LatLng(minLat, minLng), northeast: LatLng(maxLat, maxLng));
-    await _map!.animateCamera(CameraUpdate.newLatLngBounds(b, 80));
   }
 
   List<LatLng> _decodePolyline(String enc) {
@@ -1197,7 +1291,8 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
       final dlat = (res & 1) != 0 ? ~(res >> 1) : (res >> 1);
       lat += dlat;
 
-      shift = 0; res = 0;
+      shift = 0;
+      res = 0;
       do {
         b = enc.codeUnitAt(idx++) - 63;
         res |= (b & 0x1f) << shift;
@@ -1211,9 +1306,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
     return out;
   }
 
-  // ──────────────────────────────────────────────────────────────────────────
-  // RECENTS
-  // ──────────────────────────────────────────────────────────────────────────
+  // ===== Recents =====
   static const _kRecentsKey = 'recent_places_v5';
   static const int _maxRecents = 30;
 
@@ -1241,9 +1334,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
     setState(() => _recents = cap);
   }
 
-  // ──────────────────────────────────────────────────────────────────────────
-  // WAYPOINTS
-  // ──────────────────────────────────────────────────────────────────────────
+  // ===== Points =====
   void _initPoints() {
     final pickupFocus = FocusNode();
     final pickupCtl = TextEditingController();
@@ -1311,8 +1402,16 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
     setState(() {
       final a = _pts.first, b = _pts.last;
       final ll = a.latLng, id = a.placeId, txt = a.controller.text, cur = a.isCurrent;
-      a..latLng = b.latLng..placeId = b.placeId..controller.text = b.controller.text..isCurrent = false;
-      b..latLng = ll..placeId = id..controller.text = txt..isCurrent = cur;
+      a
+        ..latLng = b.latLng
+        ..placeId = b.placeId
+        ..controller.text = b.controller.text
+        ..isCurrent = false;
+      b
+        ..latLng = ll
+        ..placeId = id
+        ..controller.text = txt
+        ..isCurrent = cur;
       if (a.latLng != null) _putMarker(0, a.latLng!, a.controller.text);
       if (b.latLng != null) _putMarker(_pts.length - 1, b.latLng!, b.controller.text);
     });
@@ -1322,18 +1421,19 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
     }
   }
 
-  // ──────────────────────────────────────────────────────────────────────────
-  // AUTOCOMPLETE
-  // ──────────────────────────────────────────────────────────────────────────
+  // ===== Autocomplete =====
   void _onTyping(String q) {
     _debounce?.cancel();
     if (q.trim().isEmpty) {
-      setState(() { _sugs = _recents; _isTyping = false; });
+      setState(() {
+        _sugs = _recents;
+        _isTyping = false;
+      });
       return;
     }
     if (!_expanded) _expand();
     setState(() => _isTyping = true);
-    _debounce = Timer(kDebounceDelay, () => _fetchSugs(q.trim()));
+    _debounce = Timer(const Duration(milliseconds: 220), () => _fetchSugs(q.trim()));
   }
 
   void _ensureSession() {
@@ -1341,6 +1441,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
       _placesSession = _uuid.v4();
       _log('New Places session', _placesSession);
     }
+    ;
   }
 
   Future<void> _fetchSugs(String input) async {
@@ -1354,9 +1455,15 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
     final int myQueryId = ++_lastQueryId;
 
     try {
-      var result = await _auto.autocomplete(
-        input: input, sessionToken: _placesSession, apiKey: ApiConstants.kGoogleApiKey, country: 'ng', origin: origin,
-      ).timeout(kApiTimeout);
+      var result = await _auto
+          .autocomplete(
+        input: input,
+        sessionToken: _placesSession,
+        apiKey: ApiConstants.kGoogleApiKey,
+        country: 'ng',
+        origin: origin,
+      )
+          .timeout(kApiTimeout);
 
       if (!mounted || myQueryId != _lastQueryId) return;
 
@@ -1365,9 +1472,16 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
       var sugs = result.predictions;
 
       if (sugs.isEmpty) {
-        result = await _auto.autocomplete(
-          input: input, sessionToken: _placesSession, apiKey: ApiConstants.kGoogleApiKey, country: 'ng', origin: origin, relaxedTypes: true,
-        ).timeout(kApiTimeout);
+        result = await _auto
+            .autocomplete(
+          input: input,
+          sessionToken: _placesSession,
+          apiKey: ApiConstants.kGoogleApiKey,
+          country: 'ng',
+          origin: origin,
+          relaxedTypes: true,
+        )
+            .timeout(kApiTimeout);
         _autoStatus = result.status;
         _autoError = result.errorMessage;
         sugs = result.predictions;
@@ -1386,7 +1500,10 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
     } catch (e) {
       if (!mounted || myQueryId != _lastQueryId) return;
       _log('Autocomplete exception', e);
-      setState(() { _isTyping = false; _isConnected = false; });
+      setState(() {
+        _isTyping = false;
+        _isConnected = false;
+      });
     } finally {
       _activeRequests = (_activeRequests - 1).clamp(0, 9999);
     }
@@ -1396,19 +1513,29 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
     HapticFeedback.mediumImpact();
     try {
       final det = await _auto.placeDetails(placeId: s.placeId, sessionToken: _placesSession, apiKey: ApiConstants.kGoogleApiKey).timeout(kApiTimeout);
-      if (det.latLng == null) return;
+      if (det.latLng == null) {
+        _log('Details latLng null', s.placeId);
+        return;
+      }
       setState(() {
         final p = _pts[_activeIdx];
-        p..latLng = det.latLng..placeId = s.placeId..controller.text = s.mainText.isNotEmpty ? s.mainText : s.description..isCurrent = false;
+        p
+          ..latLng = det.latLng
+          ..placeId = s.placeId
+          ..controller.text = s.mainText.isNotEmpty ? s.mainText : s.description
+          ..isCurrent = false;
       });
       _putMarker(_activeIdx, det.latLng!, s.description);
       _saveRecent(s);
       _placesSession = '';
-      await _animate(det.latLng!, zoom: 16, tilt: 45);
+      await _map?.animateCamera(CameraUpdate.newCameraPosition(CameraPosition(target: det.latLng!, zoom: 16, tilt: 45)));
       _focusNextUnfilled();
       if (_pts.first.latLng != null && _pts.last.latLng != null) {
         _cachedRoute = null;
-        await _buildRoute();
+        await _buildRoute(); // _enterOverview() runs inside
+      } else if (_pts.first.latLng != null) {
+        // if just pickup is set, go follow
+        _enterFollowMode();
       }
     } catch (e) {
       _log('Place details error', e);
@@ -1429,9 +1556,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
     });
   }
 
-  // ──────────────────────────────────────────────────────────────────────────
-  // MARKERS
-  // ──────────────────────────────────────────────────────────────────────────
+  // ===== Point markers =====
   void _putMarker(int idx, LatLng pos, String title) {
     final p = _pts[idx];
     final id = MarkerId('p_$idx');
@@ -1454,9 +1579,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
     });
   }
 
-  // ──────────────────────────────────────────────────────────────────────────
-  // SHEET / PADDING
-  // ──────────────────────────────────────────────────────────────────────────
+  // ===== Sheet & padding =====
   void _expand() {
     setState(() => _expanded = true);
     _overlayAnimController.forward();
@@ -1495,16 +1618,12 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
     });
   }
 
-  // ──────────────────────────────────────────────────────────────────────────
-  // UI HELPERS
-  // ──────────────────────────────────────────────────────────────────────────
+  // ===== UI helpers =====
   void _openWallet() {
     final balance = _user != null ? double.tryParse(_user!['user_bal']?.toString() ?? '0.0') ?? 0.0 : null;
     final currency = _user?['user_currency']?.toString() ?? 'NGN';
-
     showModalBottomSheet(
       context: context,
-      isScrollControlled: false,
       backgroundColor: Theme.of(context).scaffoldBackgroundColor,
       shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
       builder: (_) => FundAccountSheet(account: _user, balance: balance, currency: currency),
@@ -1534,9 +1653,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
     showToastNotification(context: context, title: title, message: msg, isSuccess: false);
   }
 
-  // ──────────────────────────────────────────────────────────────────────────
-  // BUILD
-  // ──────────────────────────────────────────────────────────────────────────
+  // ===== Build =====
   @override
   Widget build(BuildContext context) {
     final mq = MediaQuery.of(context);
@@ -1568,28 +1685,46 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
               zoomControlsEnabled: false,
               compassEnabled: false,
               mapToolbarEnabled: false,
-              rotateGesturesEnabled: true,
-              tiltGesturesEnabled: true,
+              rotateGesturesEnabled: false, // keep programmatic rotation only
+              tiltGesturesEnabled: false,
+
               markers: _markers,
               polylines: _lines,
               circles: _circles,
               onMapCreated: (c) {
                 _map = c;
                 _scheduleMapPaddingUpdate();
+                _lastCamTarget = _initialCam.target;
               },
-              // IMPORTANT: Do not disable follow on gestures (hard follow)
-              onCameraMove: (_) {
-                // ignore user pans while hard follow is active
-                if (_isAnimatingCamera) return;
-                if (!_hardFollow) {
-                  // (If you ever want to allow panning to break follow, flip _hardFollow=false and manage here.)
-                }
-              },
+              onCameraMove: (pos) => _lastCamTarget = pos.target,
               onTap: (_) => _collapse(),
             ),
           ),
 
-          // gradient top
+          if (!_isConnected)
+            Positioned(
+              top: safeTop + (kHeaderVisualH * s) + 8,
+              left: 12 * s,
+              right: 12 * s,
+              child: Material(
+                color: Colors.orange.shade700,
+                borderRadius: BorderRadius.circular(8 * s),
+                elevation: 6,
+                child: Padding(
+                  padding: EdgeInsets.symmetric(horizontal: 12 * s, vertical: 8 * s),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(Icons.wifi_off, size: 16 * s, color: Colors.white),
+                      SizedBox(width: 8 * s),
+                      Text('Connection issue. Retrying...', style: TextStyle(color: Colors.white, fontSize: (12 * s).clamp(11.0, 14.0), fontWeight: FontWeight.w700)),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+
+          // Top gradient
           Positioned(
             top: 0,
             left: 0,
@@ -1609,7 +1744,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
             ),
           ),
 
-          // header
+          // Header
           Positioned(
             top: safeTop,
             left: 0,
@@ -1623,7 +1758,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
             ),
           ),
 
-          // route HUD
+          // Compact trip summary
           if (hasSummary)
             Positioned(
               top: safeTop + (kHeaderVisualH * s) + 6,
@@ -1656,17 +1791,19 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
               ),
             ),
 
-          // locate / re-center (also keeps hard follow ON)
+          // Locate / Follow FAB
           Positioned(
             right: 14 * s,
             bottom: fabBottom,
             child: LocateFab(
               onTap: () async {
                 HapticFeedback.selectionClick();
-                _hardFollow = true; // enforce lock
+                _enterFollowMode();
                 if (_curPos != null) {
                   final ll = LatLng(_curPos!.latitude, _curPos!.longitude);
-                  await _maybeUpdateCameraBearing(target: ll);
+                  // Trigger instant tick so camera jumps back to follow immediately
+                  _applyHeadingTick();
+                  await _map?.animateCamera(CameraUpdate.newCameraPosition(CameraPosition(target: ll, zoom: 17, tilt: 45)));
                 } else {
                   await _initLocation();
                 }
@@ -1674,7 +1811,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
             ),
           ),
 
-          // sheet
+          // Bottom sheet (search & recents)
           Positioned(
             left: 0,
             right: 0,
@@ -1698,7 +1835,6 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
             ),
           ),
 
-          // autocomplete overlay
           if (_expanded)
             FadeTransition(
               opacity: _overlayFadeAnim,
@@ -1745,9 +1881,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
     );
   }
 
-  // ──────────────────────────────────────────────────────────────────────────
-  // PICKUP HELPERS
-  // ──────────────────────────────────────────────────────────────────────────
+  // ===== Pickup helpers =====
   Future<void> _useCurrentAsPickup() async {
     if (_curPos == null || _pts.isEmpty) return;
     try {
@@ -1756,14 +1890,21 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
       final addr = _fmtPlacemark(place);
       final ll = LatLng(_curPos!.latitude, _curPos!.longitude);
       setState(() {
-        _pts.first..latLng = ll..placeId = null..controller.text = addr..isCurrent = true;
+        _pts.first
+          ..latLng = ll
+          ..placeId = null
+          ..controller.text = addr
+          ..isCurrent = true;
       });
       _putMarker(0, ll, addr);
       _putLocationCircle(ll, accuracy: _curPos!.accuracy);
     } catch (_) {
       final ll = LatLng(_curPos!.latitude, _curPos!.longitude);
       setState(() {
-        _pts.first..latLng = ll..controller.text = 'Current location'..isCurrent = true;
+        _pts.first
+          ..latLng = ll
+          ..controller.text = 'Current location'
+          ..isCurrent = true;
       });
       _putMarker(0, ll, 'Current location');
     }
@@ -1784,18 +1925,4 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
     if ((p.locality ?? '').isNotEmpty) parts.add(p.locality!);
     return parts.isEmpty ? 'Current location' : parts.join(', ');
   }
-
-  // helpers
-  String _fmtDistance(int m) => (m < 1000) ? '$m m' : '${(m / 1000.0).toStringAsFixed(1)} km';
-  double _calcFare(int meters) => 500.0 + (meters / 1000.0) * 120.0;
-
-  int _parseDurationSeconds(String v) {
-    if (!v.endsWith('s')) return 0;
-    final n = v.substring(0, v.length - 1);
-    return double.tryParse(n)?.round() ?? 0;
-  }
-}
-
-extension<T> on T? {
-  R? let<R>(R Function(T it) block) => this == null ? null : block(this as T);
 }

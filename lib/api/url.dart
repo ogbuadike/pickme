@@ -27,6 +27,9 @@ class ApiConstants {
   static const String kGoogleApiKey = "AIzaSyDDg8yoVH4mPYiEErNCpVzRDKxu-iP4UN8"; // Restrict to Android apps + places/directions
   static const String kDirectionsUrl = "https://maps.googleapis.com/maps/api/directions/json";
 
+  static const String kHereApiKey = 'V7bxswfVHsva9-1rMXXmkmQ-ukRwxHJ3eLb6A0NC2vE';
+
+
 
 
 }

@@ -1,67 +1,86 @@
+import 'dart:io' show Platform;
 import 'package:firebase_messaging/firebase_messaging.dart';
+import 'package:flutter/foundation.dart';
 
 class PushNotificationService {
   final FirebaseMessaging _messaging = FirebaseMessaging.instance;
+  bool _initialized = false;
 
   Future<void> initialize() async {
-    // Request iOS permissions
-    await _requestIOSPermissions();
+    if (_initialized) return;
 
-    // Handle background messages
-    FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
+    // iOS notification permission (Android 13+ is handled by the system)
+    if (Platform.isIOS) {
+      await _requestIOSPermissions();
+    }
 
-    // Handle foreground messages
-    _handleForegroundMessages();
+    // Foreground messages
+    FirebaseMessaging.onMessage.listen(_handleForegroundMessages);
 
-    // Handle messages when the app is opened from a terminated state
+    // App opened from a notification
     FirebaseMessaging.onMessageOpenedApp.listen(_handleMessageOpenedApp);
 
-    // Get the device token
-    String? token = await _messaging.getToken();
-    //print("FCM Token: $token");
+    // Get token with recovery
+    final token = await _getFcmTokenWithRecovery();
+    if (kDebugMode) debugPrint('FCM token: $token');
 
-    // Get the APNS token
-    String? apnsToken = await _messaging.getAPNSToken();
-    //print("APNS Token: $apnsToken");
+    // Listen for token refreshes
+    FirebaseMessaging.instance.onTokenRefresh.listen((t) {
+      if (kDebugMode) debugPrint('FCM token refreshed: $t');
+      // TODO: send to backend here (or via your FCMService)
+    });
 
-    // You can save both tokens to your backend if needed
+    // APNs token only on iOS
+    if (Platform.isIOS) {
+      final apns = await _messaging.getAPNSToken();
+      if (kDebugMode) debugPrint('APNs token: $apns');
+    }
+
+    _initialized = true;
   }
 
-  Future<void> _requestIOSPermissions() async {
-    NotificationSettings settings = await _messaging.requestPermission(
-      alert: true,
-      badge: true,
-      sound: true,
-    );
-
-    if (settings.authorizationStatus == AuthorizationStatus.authorized) {
-      //print('User granted permission');
-    } else if (settings.authorizationStatus == AuthorizationStatus.provisional) {
-      //print('User granted provisional permission');
-    } else {
-      //print('User declined or has not accepted permission');
+  Future<String?> _getFcmTokenWithRecovery() async {
+    try {
+      return await _messaging.getToken();
+    } catch (e) {
+      final msg = e.toString();
+      final isFisAuthError = msg.contains('FIS_AUTH_ERROR') ||
+          msg.contains('Firebase Installations Service is unavailable');
+      if (isFisAuthError) {
+        // reset and backoff-retry
+        try { await _messaging.deleteToken(); } catch (_) {}
+        for (int i = 0; i < 3; i++) {
+          await Future<void>.delayed(Duration(milliseconds: 400 * (1 << i)));
+          try {
+            final t = await _messaging.getToken();
+            if (t != null) return t;
+          } catch (_) {}
+        }
+      }
+      rethrow;
     }
   }
 
-  void _handleForegroundMessages() {
-    FirebaseMessaging.onMessage.listen((RemoteMessage message) {
-      print('Received a message while in the foreground!');
-      print('Message data: ${message.data}');
-
-      if (message.notification != null) {
-        print('Message also contained a notification: ${message.notification!.title}, ${message.notification!.body}');
-      }
-      // Here you can display the notification in the UI if needed
-    });
+  Future<void> _requestIOSPermissions() async {
+    final settings = await _messaging.requestPermission(
+      alert: true, badge: true, sound: true,
+    );
+    if (kDebugMode) {
+      debugPrint('iOS notif status: ${settings.authorizationStatus}');
+    }
   }
 
-  static Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
-    print('Handling a background message: ${message.messageId}');
-    // Add your background handling logic here
+  void _handleForegroundMessages(RemoteMessage message) {
+    debugPrint('Foreground message → data: ${message.data}');
+    if (message.notification != null) {
+      debugPrint('Foreground notification: '
+          '${message.notification!.title} | ${message.notification!.body}');
+    }
+    // Optional: show in-app banner/local notification
   }
 
   void _handleMessageOpenedApp(RemoteMessage message) {
-    print('A new onMessageOpenedApp event was published!');
-    // Navigate to a specific screen or do something else based on the message
+    debugPrint('onMessageOpenedApp: ${message.messageId}');
+    // TODO: navigate based on message.data
   }
 }

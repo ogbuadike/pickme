@@ -11,6 +11,7 @@ import '../services/fcm_service.dart';
 import '../themes/app_theme.dart'; // AppTheme, AppColors
 import '../routes/routes.dart';
 import '../utility/notification.dart';
+import '../firebase_options.dart'; // <-- use generated options
 
 class SplashScreen extends StatefulWidget {
   const SplashScreen({super.key});
@@ -21,8 +22,8 @@ class SplashScreen extends StatefulWidget {
 
 /// Minimal, premium, dark splash (theme-driven).
 /// • Center logo (prefers images/pickme.png; falls back gracefully)
-/// • Outstanding indeterminate bottom progress bar (gradient sweep + glow)
-/// • Small white caption under the bar
+/// • Indeterminate bottom progress bar (gradient sweep + glow)
+/// • Small caption under the bar
 class _SplashScreenState extends State<SplashScreen>
     with SingleTickerProviderStateMixin {
   static const Duration _minSplash = Duration(milliseconds: 1200);
@@ -48,13 +49,28 @@ class _SplashScreenState extends State<SplashScreen>
 
   Future<void> _bootstrap() async {
     try {
-      WidgetsFlutterBinding.ensureInitialized();
+      // NOTE: WidgetsFlutterBinding.ensureInitialized() belongs in main().
+      // Only initialize Firebase here if it wasn't already.
+      if (Firebase.apps.isEmpty) {
+        await Firebase.initializeApp(
+          options: DefaultFirebaseOptions.currentPlatform,
+        );
+      }
 
-      await Firebase.initializeApp();
+      // Core app services that must succeed to proceed
       await FirebaseService.instance.initialize();
-      await PushNotificationService().initialize();
-      await FCMService(context).initializeFCM();
 
+      // Best-effort: push + FCM should NOT block navigation if they fail
+      await Future.wait<void>([
+        PushNotificationService().initialize().catchError((e, st) {
+          debugPrint('PushNotificationService init warning: $e');
+        }),
+        FCMService(context).initializeFCM().catchError((e, st) {
+          debugPrint('FCMService init warning: $e');
+        }),
+      ], eagerError: false);
+
+      // Respect minimum splash duration
       final elapsed = DateTime.now().difference(_start);
       if (elapsed < _minSplash) {
         await Future<void>.delayed(_minSplash - elapsed);
@@ -63,6 +79,7 @@ class _SplashScreenState extends State<SplashScreen>
       if (!mounted) return;
       await _navigateNext();
     } catch (e, st) {
+      // Only truly fatal things (e.g., Firebase core init) should land here
       debugPrint('Splash init error: $e\n$st');
       if (!mounted) return;
       showRetryNotification(
@@ -153,7 +170,7 @@ class _SplashScreenState extends State<SplashScreen>
                                   return ClipRRect(
                                     borderRadius: BorderRadius.circular(12),
                                     child: CustomPaint(
-                                      size: Size(double.infinity, 10),
+                                      size: const Size(double.infinity, 10),
                                       painter: _IndeterminateBarPainter(
                                         t: _barCtrl.value,
                                         track: AppColors.darken(cs.surfaceVariant, .10),

@@ -1,83 +1,81 @@
+import 'dart:convert';
+import 'dart:io' show Platform;
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:http/http.dart' as http;
+
 import '../api/api_client.dart';
 import '../api/url.dart';
-import '../utility/deviceInfoService.dart';  // Import the DeviceInfoService
-import 'dart:convert';
-
-
+import '../utility/deviceInfoService.dart';
 
 class FCMService {
-  final BuildContext context; // BuildContext to handle notifications or navigation if needed
-  final ApiClient _apiClient; // ApiClient instance to send token to the server
-  final FirebaseMessaging _firebaseMessaging = FirebaseMessaging.instance; // Firebase Messaging instance
-
-  // Constructor to receive context and initialize ApiClient
-  FCMService(this.context) : _apiClient = ApiClient(http.Client(), context);
-
-  // Initialize DeviceInfoService
+  final BuildContext context;
+  final ApiClient _apiClient;
+  final FirebaseMessaging _fm = FirebaseMessaging.instance;
   final DeviceInfoService _deviceInfoService = DeviceInfoService();
 
-  // Initializes FCM: Requests permissions and retrieves the FCM token
+  FCMService(this.context) : _apiClient = ApiClient(http.Client(), context);
+
   Future<void> initializeFCM() async {
     try {
-      // Request notification permissions from the user (if needed)
-      await _firebaseMessaging.requestPermission();
+      // Permission (iOS only)
+      if (Platform.isIOS) {
+        await _fm.requestPermission(alert: true, badge: true, sound: true);
+      }
 
-      // Get the FCM token for this device
-      String? token = await _firebaseMessaging.getToken();
-
-      // If token is successfully retrieved, send it to the server
+      // Initial token (let PushNotificationService also do it; dedupe is fine)
+      final token = await _safeGetToken();
       if (token != null) {
         await _sendTokenToServer(token);
       }
+
+      // Keep backend updated
+      _fm.onTokenRefresh.listen((newToken) async {
+        if (kDebugMode) debugPrint('FCMService: token refresh → $newToken');
+        await _sendTokenToServer(newToken);
+      });
     } catch (e) {
-      // Log any errors encountered during initialization
       debugPrint('Error initializing FCM: $e');
     }
   }
 
-  // Sends the FCM token to the server along with the user's ID
+  Future<String?> _safeGetToken() async {
+    try {
+      return await _fm.getToken();
+    } catch (e) {
+      // optional: copy the same recovery path from PushNotificationService
+      return null;
+    }
+  }
+
   Future<void> _sendTokenToServer(String token) async {
     try {
-      // Retrieve user ID from SharedPreferences
-      SharedPreferences prefs = await SharedPreferences.getInstance();
-      String userId = prefs.getString('user_id') ?? ''; // Default to empty string if not found
+      final prefs = await SharedPreferences.getInstance();
+      final userId = prefs.getString('user_id') ?? '';
 
-
-      // Fetch device information and handle empty email input
       final deviceInfo = await _deviceInfoService.getDeviceInfo();
-      final deviceInfoString = deviceInfo.entries.map((entry) {
-        return '${entry.key}: ${entry.value}';
-      }).join('\n');
-
-      // Convert the deviceInfo Map to a JSON string
       final deviceInfoJson = jsonEncode(deviceInfo);
 
-      // Prepare data to be sent to the server
-      Map<String, String> data = {
+      final data = {
         'token': token,
-        'uid': userId, // Include user ID if available
+        'uid': userId,
         'device': deviceInfoJson,
       };
 
-      // Send token and user ID to the server using the ApiClient
-      final response = await _apiClient.request(
-        ApiConstants.sendTokenEndpoint, // API endpoint
-        method: 'POST', // HTTP method
-        data: data, // Payload
+      final res = await _apiClient.request(
+        ApiConstants.sendTokenEndpoint,
+        method: 'POST',
+        data: data,
       );
 
-      // Log success or failure based on response status code
-      if (response.statusCode == 200) {
+      if (res.statusCode == 200) {
         debugPrint('FCM token sent successfully.');
       } else {
-        debugPrint('Failed to send FCM token: ${response.statusCode}');
+        debugPrint('Failed to send FCM token: ${res.statusCode}');
       }
     } catch (e) {
-      // Log any errors encountered when sending the token
       debugPrint('Error sending FCM token: $e');
     }
   }

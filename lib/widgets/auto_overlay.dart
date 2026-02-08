@@ -1,11 +1,13 @@
-// Full-screen autocomplete overlay (overflow-safe, tiny scale)
+// lib/widgets/auto_overlay.dart
+// Full-screen autocomplete overlay — tuned to avoid jank while typing.
 
 import 'dart:math' as math;
 import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
-import '../../../themes/app_theme.dart';
+import '../themes/app_theme.dart';
+import '../services/perf_profile.dart';
 import '../screens/state/home_models.dart';
 import 'route_editor.dart';
 import 'suggestion_list.dart';
@@ -29,7 +31,6 @@ class AutoOverlay extends StatefulWidget {
   final ValueChanged<String> onTyping;
   final ValueChanged<int> onFocused;
   final void Function(Suggestion s) onSelectSuggestion;
-  final VoidCallback onSearchRides;
 
   final VoidCallback onAddStop;
   final void Function(int idx) onRemoveStop;
@@ -55,7 +56,6 @@ class AutoOverlay extends StatefulWidget {
     required this.onTyping,
     required this.onFocused,
     required this.onSelectSuggestion,
-    required this.onSearchRides,
     required this.fmtDistance,
     required this.onAddStop,
     required this.onRemoveStop,
@@ -70,11 +70,9 @@ class AutoOverlay extends StatefulWidget {
 class _AutoOverlayState extends State<AutoOverlay>
     with TickerProviderStateMixin, WidgetsBindingObserver {
   late final AnimationController _mainCtl;
-  late final AnimationController _blurCtl;
   late final Animation<double> _fade;
   late final Animation<double> _scale;
   late final Animation<Offset> _slide;
-  late final Animation<double> _blur;
 
   bool _closing = false;
   bool _swapPressed = false;
@@ -91,29 +89,30 @@ class _AutoOverlayState extends State<AutoOverlay>
   @override
   void initState() {
     super.initState();
-    _mainCtl =
-        AnimationController(vsync: this, duration: const Duration(milliseconds: 420));
-    _blurCtl =
-        AnimationController(vsync: this, duration: const Duration(milliseconds: 480));
+    // Tighten budgets globally while overlay is in front (less battery, no jank)
+    Perf.I.setOverlayOpen(true);
+
+    _mainCtl = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 260),
+    );
 
     _fade = CurvedAnimation(parent: _mainCtl, curve: Curves.easeOutCubic);
-    _scale = Tween<double>(begin: 0.92, end: 1.0)
-        .animate(CurvedAnimation(parent: _mainCtl, curve: Curves.easeOutBack));
-    _slide = Tween<Offset>(begin: const Offset(0, -0.05), end: Offset.zero)
+    _scale = Tween<double>(begin: 0.985, end: 1.0)
+        .animate(CurvedAnimation(parent: _mainCtl, curve: Curves.easeOut));
+    _slide = Tween<Offset>(begin: const Offset(0, -0.01), end: Offset.zero)
         .animate(CurvedAnimation(parent: _mainCtl, curve: Curves.easeOutCubic));
-    _blur = Tween<double>(begin: 0, end: 16)
-        .animate(CurvedAnimation(parent: _blurCtl, curve: Curves.easeOut));
 
     _mainCtl.forward();
-    _blurCtl.forward();
     WidgetsBinding.instance.addObserver(this);
   }
 
   @override
   void dispose() {
     _mainCtl.dispose();
-    _blurCtl.dispose();
     WidgetsBinding.instance.removeObserver(this);
+    // Restore budgets
+    Perf.I.setOverlayOpen(false);
     super.dispose();
   }
 
@@ -128,11 +127,11 @@ class _AutoOverlayState extends State<AutoOverlay>
     setState(() => _closing = true);
     HapticFeedback.lightImpact();
 
-    await Future.wait([_mainCtl.reverse(), _blurCtl.reverse()]);
+    await _mainCtl.reverse();
     if (!mounted) return;
 
     FocusManager.instance.primaryFocus?.unfocus();
-    await Future.delayed(const Duration(milliseconds: 50));
+    await Future.delayed(const Duration(milliseconds: 20));
     widget.onClose?.call();
   }
 
@@ -146,8 +145,7 @@ class _AutoOverlayState extends State<AutoOverlay>
     } else {
       _performLocalSwap();
     }
-
-    await Future.delayed(const Duration(milliseconds: 150));
+    await Future.delayed(const Duration(milliseconds: 100));
     if (mounted) setState(() => _swapPressed = false);
   }
 
@@ -181,33 +179,31 @@ class _AutoOverlayState extends State<AutoOverlay>
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final bg = Theme.of(context).scaffoldBackgroundColor;
 
+    // NB: We intentionally avoid BackdropFilter blur here (it can be expensive
+    // on low-end GPUs). The gradient gives depth without cost.
+    final content = Container(
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: isDark
+              ? [bg.withOpacity(.99), bg.withOpacity(.98), bg.withOpacity(.97)]
+              : [bg.withOpacity(.995), bg.withOpacity(.985), bg.withOpacity(.975)],
+        ),
+      ),
+      child: ScaleTransition(
+        scale: _scale,
+        child: SlideTransition(
+          position: _slide,
+          child: _buildContent(context),
+        ),
+      ),
+    );
+
     return Positioned.fill(
       child: FadeTransition(
         opacity: _fade,
-        child: AnimatedBuilder(
-          animation: _blur,
-          builder: (context, _) => BackdropFilter(
-            filter: ImageFilter.blur(sigmaX: _blur.value, sigmaY: _blur.value),
-            child: Container(
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  begin: Alignment.topCenter,
-                  end: Alignment.bottomCenter,
-                  colors: isDark
-                      ? [bg.withOpacity(.98), bg.withOpacity(.96), bg.withOpacity(.94)]
-                      : [bg.withOpacity(.99), bg.withOpacity(.98), bg.withOpacity(.97)],
-                ),
-              ),
-              child: ScaleTransition(
-                scale: _scale,
-                child: SlideTransition(
-                  position: _slide,
-                  child: _buildContent(context),
-                ),
-              ),
-            ),
-          ),
-        ),
+        child: content,
       ),
     );
   }
@@ -228,31 +224,36 @@ class _AutoOverlayState extends State<AutoOverlay>
         _buildPremiumHeader(context),
         Expanded(
           child: RepaintBoundary(
-            child: SingleChildScrollView(
+            child: CustomScrollView(
               physics: const BouncingScrollPhysics(),
-              padding: EdgeInsets.fromLTRB(16 * s, 0, 16 * s, 8 * s),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  _buildRouteCard(context),
-                  if (widget.autoStatus != null && widget.autoStatus != 'OK')
-                    Padding(
-                      padding: EdgeInsets.only(top: 8 * s),
-                      child: _buildStatusBanner(),
-                    ),
-                  _buildDivider(),
-                  _buildSuggestions(),
-                ],
-              ),
+              slivers: [
+                SliverPadding(
+                  padding: EdgeInsets.fromLTRB(16 * s, 0, 16 * s, 8 * s),
+                  sliver: SliverToBoxAdapter(child: _buildRouteCard(context)),
+                ),
+                if (widget.autoStatus != null && widget.autoStatus != 'OK')
+                  SliverPadding(
+                    padding: EdgeInsets.only(left: 16 * s, right: 16 * s, top: 8 * s),
+                    sliver: SliverToBoxAdapter(child: _buildStatusBanner()),
+                  ),
+                SliverPadding(
+                  padding: EdgeInsets.symmetric(horizontal: 16 * s),
+                  sliver: SliverToBoxAdapter(child: _buildDivider()),
+                ),
+                SliverPadding(
+                  padding: EdgeInsets.fromLTRB(12 * s, 0, 12 * s, widget.bottomPadding + 10),
+                  sliver: SliverToBoxAdapter(child: _buildSuggestions()),
+                ),
+              ],
             ),
           ),
         ),
-        _buildFooter(context),
       ],
     );
   }
 
   Widget _buildLandscapeLayout() {
+    final s = _s(context);
     return Column(
       children: [
         _buildPremiumHeader(context),
@@ -263,17 +264,21 @@ class _AutoOverlayState extends State<AutoOverlay>
               Expanded(
                 flex: 45,
                 child: RepaintBoundary(
-                  child: SingleChildScrollView(
+                  child: CustomScrollView(
                     physics: const BouncingScrollPhysics(),
-                    padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        _buildRouteCard(context),
-                        if (widget.autoStatus != null && widget.autoStatus != 'OK')
-                          _buildStatusBanner(),
-                      ],
-                    ),
+                    slivers: [
+                      SliverPadding(
+                        padding: EdgeInsets.fromLTRB(16 * s, 8 * s, 16 * s, 12 * s),
+                        sliver: SliverToBoxAdapter(child: _buildRouteCard(context)),
+                      ),
+                      if (widget.autoStatus != null && widget.autoStatus != 'OK')
+                        const SliverToBoxAdapter(child: SizedBox(height: 6)),
+                      if (widget.autoStatus != null && widget.autoStatus != 'OK')
+                        SliverPadding(
+                          padding: EdgeInsets.symmetric(horizontal: 16 * s),
+                          sliver: SliverToBoxAdapter(child: _buildStatusBanner()),
+                        ),
+                    ],
                   ),
                 ),
               ),
@@ -281,9 +286,8 @@ class _AutoOverlayState extends State<AutoOverlay>
               Expanded(
                 flex: 55,
                 child: RepaintBoundary(
-                  child: SingleChildScrollView(
-                    physics: const BouncingScrollPhysics(),
-                    padding: const EdgeInsets.symmetric(horizontal: 12),
+                  child: Padding(
+                    padding: EdgeInsets.symmetric(horizontal: 12 * s),
                     child: _buildSuggestions(),
                   ),
                 ),
@@ -291,7 +295,6 @@ class _AutoOverlayState extends State<AutoOverlay>
             ],
           ),
         ),
-        _buildFooter(context),
       ],
     );
   }
@@ -321,7 +324,7 @@ class _AutoOverlayState extends State<AutoOverlay>
                     borderRadius: BorderRadius.circular(14 * s),
                     border: Border.all(
                       color: AppColors.primary.withOpacity(.2),
-                      width: 1.5,
+                      width: 1.2,
                     ),
                   ),
                   child: Icon(Icons.close_rounded, color: AppColors.primary, size: 22 * s),
@@ -340,12 +343,7 @@ class _AutoOverlayState extends State<AutoOverlay>
                     Container(
                       padding: EdgeInsets.all(5 * s),
                       decoration: BoxDecoration(
-                        gradient: LinearGradient(
-                          colors: [
-                            AppColors.primary.withOpacity(.15),
-                            AppColors.primary.withOpacity(.08),
-                          ],
-                        ),
+                        color: AppColors.primary.withOpacity(.10),
                         borderRadius: BorderRadius.circular(6 * s),
                       ),
                       child: Icon(Icons.explore_rounded,
@@ -383,47 +381,26 @@ class _AutoOverlayState extends State<AutoOverlay>
             label: 'Swap pickup and destination',
             child: AnimatedScale(
               scale: _swapPressed ? 0.92 : 1.0,
-              duration: const Duration(milliseconds: 150),
+              duration: const Duration(milliseconds: 120),
               curve: Curves.easeOutBack,
               child: Material(
                 color: Colors.transparent,
                 child: InkWell(
                   onTap: _handleSwap,
                   borderRadius: BorderRadius.circular(12 * s),
-                  child: Container(
-                    padding: EdgeInsets.symmetric(horizontal: 12 * s, vertical: 9 * s),
-                    decoration: BoxDecoration(
-                      gradient: LinearGradient(
-                        colors: [
-                          AppColors.mintBgLight.withOpacity(.18),
-                          AppColors.mintBgLight.withOpacity(.10),
-                        ],
-                      ),
-                      borderRadius: BorderRadius.circular(12 * s),
-                      border: Border.all(
-                        color: AppColors.mintBgLight.withOpacity(.4),
-                        width: 1.5,
-                      ),
-                      boxShadow: [
-                        BoxShadow(
-                          color: AppColors.mintBgLight.withOpacity(.1),
-                          blurRadius: 6,
-                          offset: const Offset(0, 3),
-                        ),
-                      ],
-                    ),
+                  child: Padding(
+                    padding: EdgeInsets.symmetric(horizontal: 10 * s, vertical: 8 * s),
                     child: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
                         Icon(Icons.swap_vert_rounded,
                             size: 18 * s, color: AppColors.textPrimary.withOpacity(.9)),
-                        SizedBox(width: 5 * s),
+                        SizedBox(width: 6 * s),
                         Text('Swap',
                             style: TextStyle(
                               fontSize: 13 * s,
                               fontWeight: FontWeight.w800,
                               color: AppColors.textPrimary.withOpacity(.9),
-                              letterSpacing: -0.1,
                             )),
                       ],
                     ),
@@ -439,24 +416,13 @@ class _AutoOverlayState extends State<AutoOverlay>
 
   Widget _buildRouteCard(BuildContext context) {
     final s = _s(context);
-
     return Container(
       decoration: BoxDecoration(
         color: Theme.of(context).cardColor,
         borderRadius: BorderRadius.circular(18 * s),
-        border: Border.all(color: AppColors.mintBgLight.withOpacity(.3), width: 1.2),
+        border: Border.all(color: AppColors.mintBgLight.withOpacity(.3), width: 1),
         boxShadow: [
-          BoxShadow(
-            color: AppColors.primary.withOpacity(.08),
-            blurRadius: 16,
-            offset: Offset(0, 6 * s),
-            spreadRadius: 0,
-          ),
-          BoxShadow(
-            color: Colors.black.withOpacity(.04),
-            blurRadius: 12,
-            offset: Offset(0, 2 * s),
-          ),
+          BoxShadow(color: Colors.black.withOpacity(.06), blurRadius: 10, offset: Offset(0, 4 * s)),
         ],
       ),
       child: Padding(
@@ -476,37 +442,19 @@ class _AutoOverlayState extends State<AutoOverlay>
   }
 
   Widget _buildStatusBanner() {
-    final s = _s(context);
-    final msg =
-        'Places: ${widget.autoStatus}${widget.autoError != null ? ' — ${widget.autoError}' : ''}';
-
+    final msg = 'Places: ${widget.autoStatus}${widget.autoError != null ? ' — ${widget.autoError}' : ''}';
     return Container(
-      margin: EdgeInsets.fromLTRB(0, 0, 0, 6 * s),
-      padding: EdgeInsets.symmetric(horizontal: 12 * s, vertical: 10 * s),
+      margin: const EdgeInsets.only(bottom: 6),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
       decoration: BoxDecoration(
-        gradient: const LinearGradient(colors: [Color(0xFFFFF3CD), Color(0xFFFFF8E1)]),
-        borderRadius: BorderRadius.circular(12 * s),
-        border: Border.all(color: const Color(0xFFFFE69C), width: 1.2),
-        boxShadow: [
-          BoxShadow(
-            color: const Color(0xFFFFE69C).withOpacity(.2),
-            blurRadius: 6,
-            offset: Offset(0, 3 * s),
-          ),
-        ],
+        color: const Color(0xFFFFF8E1),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFFFFE69C), width: 1),
       ),
       child: Row(
         children: [
-          Container(
-            padding: EdgeInsets.all(6 * s),
-            decoration: BoxDecoration(
-              color: const Color(0xFF856404).withOpacity(.15),
-              borderRadius: BorderRadius.circular(8 * s),
-            ),
-            child: const Icon(Icons.info_outline_rounded,
-                color: Color(0xFF856404), size: 16),
-          ),
-          SizedBox(width: 10 * s),
+          const Icon(Icons.info_outline_rounded, color: Color(0xFF856404), size: 16),
+          const SizedBox(width: 8),
           Expanded(
             child: Text(
               msg,
@@ -514,7 +462,6 @@ class _AutoOverlayState extends State<AutoOverlay>
                 color: Color(0xFF856404),
                 fontSize: 12,
                 fontWeight: FontWeight.w700,
-                letterSpacing: -0.1,
               ),
             ),
           ),
@@ -529,11 +476,7 @@ class _AutoOverlayState extends State<AutoOverlay>
       margin: const EdgeInsets.symmetric(vertical: 6),
       decoration: BoxDecoration(
         gradient: LinearGradient(
-          colors: [
-            Colors.transparent,
-            AppColors.mintBgLight.withOpacity(.3),
-            Colors.transparent,
-          ],
+          colors: [Colors.transparent, AppColors.mintBgLight.withOpacity(.3), Colors.transparent],
         ),
       ),
     );
@@ -548,8 +491,7 @@ class _AutoOverlayState extends State<AutoOverlay>
           children: [
             SizedBox(width: 44, height: 44, child: CircularProgressIndicator(strokeWidth: 3)),
             SizedBox(height: 14),
-            Text('Searching places...',
-                style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
+            Text('Searching places...', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
           ],
         ),
       );
@@ -557,104 +499,31 @@ class _AutoOverlayState extends State<AutoOverlay>
 
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 4),
-      child: SuggestionList(
-        suggestions: widget.suggestions,
-        recents: widget.recents,
-        showUseCurrent: widget.hasGps && widget.activeIndex == 0,
-        onUseCurrentTap: widget.hasGps ? widget.onUseCurrentPickup : null,
-        onTap: (s) {
-          HapticFeedback.selectionClick();
-          widget.onSelectSuggestion(s);
-        },
-        fmtDistance: widget.fmtDistance,
-      ),
+      child: _SuggestionsHost(fmtDistance: widget.fmtDistance),
     );
   }
+}
 
-  Widget _buildFooter(BuildContext context) {
-    final s = _s(context);
-    final canSearch = widget.points.length >= 2 &&
-        widget.points.first.latLng != null &&
-        widget.points.last.latLng != null;
+// Lightweight leaf so we don't rebuild heavy parent while typing.
+class _SuggestionsHost extends StatelessWidget {
+  final String Function(int meters) fmtDistance;
+  const _SuggestionsHost({required this.fmtDistance});
 
-    return Container(
-      padding: EdgeInsets.fromLTRB(16 * s, 10 * s, 16 * s, widget.bottomPadding + 10),
-      decoration: BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.topCenter,
-          end: Alignment.bottomCenter,
-          colors: [
-            Theme.of(context).scaffoldBackgroundColor.withOpacity(.0),
-            Theme.of(context).scaffoldBackgroundColor.withOpacity(.98),
-          ],
-        ),
-        border: Border(
-          top: BorderSide(color: AppColors.mintBgLight.withOpacity(.2), width: 1),
-        ),
-      ),
-      child: Material(
-        color: Colors.transparent,
-        child: InkWell(
-          onTap: canSearch
-              ? () {
-            HapticFeedback.mediumImpact();
-            widget.onSearchRides();
-          }
-              : null,
-          borderRadius: BorderRadius.circular(16 * s),
-          splashColor: Colors.white.withOpacity(.25),
-          child: Ink(
-            height: 52 * s,
-            decoration: BoxDecoration(
-              gradient: LinearGradient(
-                colors: canSearch
-                    ? [AppColors.primary, AppColors.primary.withOpacity(.85)]
-                    : [Colors.grey[350]!, Colors.grey[400]!],
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-              ),
-              borderRadius: BorderRadius.circular(16 * s),
-              boxShadow: canSearch
-                  ? [
-                BoxShadow(
-                  color: AppColors.primary.withOpacity(.4),
-                  blurRadius: 24,
-                  offset: Offset(0, 10 * s),
-                  spreadRadius: 0,
-                ),
-                BoxShadow(
-                  color: AppColors.primary.withOpacity(.2),
-                  blurRadius: 40,
-                  offset: Offset(0, 20 * s),
-                ),
-              ]
-                  : [],
-            ),
-            child: Center(
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  const Icon(Icons.search_rounded, color: Colors.white, size: 20),
-                  SizedBox(width: 10 * s),
-                  Text(
-                    'Search Rides',
-                    style: TextStyle(
-                      fontSize: 16 * s,
-                      fontWeight: FontWeight.w900,
-                      color: Colors.white,
-                      letterSpacing: -0.2,
-                    ),
-                  ),
-                  if (canSearch) ...[
-                    SizedBox(width: 6 * s),
-                    const Icon(Icons.arrow_forward_rounded, color: Colors.white, size: 18),
-                  ],
-                ],
-              ),
-            ),
-          ),
-        ),
-      ),
+  @override
+  Widget build(BuildContext context) {
+    final overlay = context.findAncestorStateOfType<_AutoOverlayState>()!;
+    return SuggestionList(
+      suggestions: overlay.widget.suggestions,
+      recents: overlay.widget.recents,
+      showUseCurrent: overlay.widget.hasGps && overlay.widget.activeIndex == 0,
+      onUseCurrentTap: overlay.widget.hasGps ? overlay.widget.onUseCurrentPickup : null,
+      onTap: (s) {
+        HapticFeedback.selectionClick();
+        // Selecting a suggestion closes overlay in HomePage and
+        // immediately computes route + opens ride market.
+        overlay.widget.onSelectSuggestion(s);
+      },
+      fmtDistance: fmtDistance,
     );
   }
 }

@@ -1,5 +1,5 @@
 class ApiConstants {
-  static const String baseUrl = 'https://phantomphones.store/safegloxuser/rest/';
+  static const String baseUrl = 'https://phantomphones.store/pick_me/';
 
   // User-related endpoints
   static const String sendTokenEndpoint = 'send_token.php';
@@ -15,6 +15,22 @@ class ApiConstants {
   static const String updateUserInfoEndpoint = 'user_info.php'; // Update profile info
   static const String updatePasswordEndpoint = 'user_info.php'; // Update password
   static const String updateTransactionCodeEndpoint = 'user_info.php'; // Update transaction code
+
+
+
+  // --- Pick Me: Rides (cars only) ---
+  static const String rideOffersEndpoint    = 'ride_offers.php';     // POST: origin,destination,radius_km,vehicle='car'
+
+  static const String driversNearbyEndpoint = 'drivers_nearby.php';  // POST: lat,lng,radius_km,vehicle='car'
+
+  static const String driversPollEndpoint   = 'drivers_poll.php';    // POST: cursor,vehicle='car' (delta upserts+deletes)
+
+  // NEW (booking/status)
+  static const String rideBookEndpoint      = 'ride_book.php';   // POST: rider_id, driver_id, price, category, pickup{lat,lng}, destination{lat,lng}
+  static const String driversUpdateLocationEndpoint = 'drivers_update_location.php'; // POST: ride_id -> returns driver_lat/lng/heading/phase
+
+  static const String rideStatusEndpoint    = 'ride_status.php'; // POST: ride_id
+
 
   // Other endpoints
   static const String upgradeKYCEndpoint = 'kyc_upgrade.php';

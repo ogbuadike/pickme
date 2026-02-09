@@ -1,480 +1,868 @@
 // lib/widgets/ride_market_sheet.dart
-import 'dart:ui';
-import 'package:flutter/material.dart';
-import '../themes/app_theme.dart';
-import '../services/ride_market_service.dart';
+//
+// Bottom-sheet (edge-to-edge, touches bottom) + driver selection + offer selection.
+// Auto-locks when drivers appear to stop shuffling so user can choose calmly.
+//
+// REQUIRED in HomePage call:
+//  - pass drivers + driversNearbyCount
+//  - implement onBook(driver, offer)
+//
+// NOTE: uses your theme + AppColors.primary (light theme friendly)
 
-/// RideMarketSheet
-/// - No drag-to-dismiss
-/// - Slide + fade entrance
-/// - Verbose prints for debugging
-/// - Responsive layout (1 / 2 / 3 columns)
-/// - Shows retry when no offers
+import 'dart:math' as math;
+import 'package:flutter/material.dart';
+import 'package:intl/intl.dart';
+
+import '../themes/app_theme.dart';
+import '../services/ride_market_service.dart'; // RideOffer, DriverCar (or compatible)
+
+class RideNearbyDriver {
+  final String id;
+  final String name;
+  final String category;
+  final double rating;
+  final String carPlate;
+  final double heading;
+  final double lat;
+  final double lng;
+  final double distanceKm;
+  final int etaMin;
+
+  const RideNearbyDriver({
+    required this.id,
+    required this.name,
+    required this.category,
+    required this.rating,
+    required this.carPlate,
+    required this.heading,
+    required this.lat,
+    required this.lng,
+    required this.distanceKm,
+    required this.etaMin,
+  });
+}
+
 class RideMarketSheet extends StatefulWidget {
   final double bottomNavHeight;
-  final String? originText;
-  final String? destinationText;
+
+  final String originText;
+  final String destinationText;
+
   final String? distanceText;
   final String? durationText;
+
+  final int driversNearbyCount;
+  final List<dynamic>? drivers;
+
   final List<RideOffer> offers;
   final bool loading;
+
   final VoidCallback onRefresh;
-  final void Function(RideOffer offer) onSelect;
-  final VoidCallback? onCancel;
+  final VoidCallback onCancel;
+
+  /// Booking action: after user selects a driver + offer and taps the green button.
+  final void Function(RideNearbyDriver driver, RideOffer offer) onBook;
 
   const RideMarketSheet({
-    Key? key,
+    super.key,
     required this.bottomNavHeight,
     required this.originText,
     required this.destinationText,
     required this.distanceText,
     required this.durationText,
+    required this.driversNearbyCount,
+    this.drivers,
     required this.offers,
     required this.loading,
     required this.onRefresh,
-    required this.onSelect,
-    this.onCancel,
-  }) : super(key: key);
+    required this.onCancel,
+    required this.onBook,
+  });
 
   @override
   State<RideMarketSheet> createState() => _RideMarketSheetState();
 }
 
-class _RideMarketSheetState extends State<RideMarketSheet>
-    with SingleTickerProviderStateMixin {
-  late final AnimationController _entrance;
-  late final Animation<double> _fade;
-  late final Animation<Offset> _slide;
+class _RideMarketSheetState extends State<RideMarketSheet> {
+  final _moneyFmt = NumberFormat.decimalPattern();
 
+  // Auto-lock when drivers appear (stops shuffling)
+  bool _locked = false;
+
+  // Snapshots used while locked
+  List<dynamic> _driversSnap = const [];
+  List<RideOffer> _offersSnap = const [];
+  int _driversCountSnap = 0;
+
+  // Selection
+  int _selectedDriverIdx = -1;
+  int _selectedOfferIdx = -1;
+
+  bool get _effectiveLoading => _locked ? false : widget.loading;
+
+  List<dynamic> get _driversRaw => _locked ? _driversSnap : (widget.drivers ?? const []);
+  List<RideOffer> get _offersRaw => _locked ? _offersSnap : widget.offers;
+
+  int get _driversCountEffective {
+    final count = _locked ? _driversCountSnap : widget.driversNearbyCount;
+    return math.max(count, _driversVM.length);
+  }
+
+  bool get _hasDrivers => _driversCountEffective > 0;
+  bool get _hasOffers => _offersRaw.isNotEmpty;
+
+  // ✅ Only show “No cars nearby” when truly nothing exists.
+  bool get _showNoCars => !_effectiveLoading && !_hasDrivers && !_hasOffers;
+
+  // -------------------------
+  // Robust adapters
+  // -------------------------
+  RideNearbyDriver _driverVM(dynamic raw) {
+    if (raw is DriverCar) {
+      final ll = (raw as dynamic).ll;
+      final lat = (ll != null) ? (ll.latitude as double) : 0.0;
+      final lng = (ll != null) ? (ll.longitude as double) : 0.0;
+
+      return RideNearbyDriver(
+        id: ((raw as dynamic).id ?? '').toString(),
+        name: ((raw as dynamic).name ?? 'Driver').toString(),
+        category: ((raw as dynamic).category ?? 'Economy').toString(),
+        rating: _num((raw as dynamic).rating, 0).toDouble(),
+        carPlate: ((raw as dynamic).carPlate ?? '').toString(),
+        heading: _num((raw as dynamic).heading, 0).toDouble(),
+        lat: lat,
+        lng: lng,
+        distanceKm: _num((raw as dynamic).distanceKm, 0).toDouble(),
+        etaMin: _num((raw as dynamic).etaMin, 0).toInt(),
+      );
+    }
+
+    if (raw is Map) {
+      final m = raw.cast<String, dynamic>();
+      return RideNearbyDriver(
+        id: (m['id'] ?? '').toString(),
+        name: (m['name'] ?? 'Driver').toString(),
+        category: (m['category'] ?? 'Economy').toString(),
+        rating: _num(m['rating'], 0).toDouble(),
+        carPlate: (m['car_plate'] ?? m['plate'] ?? '').toString(),
+        heading: _num(m['heading'], 0).toDouble(),
+        lat: _num(m['lat'], 0).toDouble(),
+        lng: _num(m['lng'], 0).toDouble(),
+        distanceKm: _num(m['distance_km'], 0).toDouble(),
+        etaMin: _num(m['eta_min'], 0).toInt(),
+      );
+    }
+
+    // Unknown object
+    try {
+      final d = raw as dynamic;
+      return RideNearbyDriver(
+        id: (d.id ?? '').toString(),
+        name: (d.name ?? 'Driver').toString(),
+        category: (d.category ?? 'Economy').toString(),
+        rating: _num(d.rating, 0).toDouble(),
+        carPlate: (d.carPlate ?? d.car_plate ?? d.plate ?? '').toString(),
+        heading: _num(d.heading, 0).toDouble(),
+        lat: _num(d.ll?.latitude ?? d.lat, 0).toDouble(),
+        lng: _num(d.ll?.longitude ?? d.lng, 0).toDouble(),
+        distanceKm: _num(d.distanceKm ?? d.distance_km, 0).toDouble(),
+        etaMin: _num(d.etaMin ?? d.eta_min, 0).toInt(),
+      );
+    } catch (_) {
+      return const RideNearbyDriver(
+        id: '',
+        name: 'Driver',
+        category: 'Economy',
+        rating: 0,
+        carPlate: '',
+        heading: 0,
+        lat: 0,
+        lng: 0,
+        distanceKm: 0,
+        etaMin: 0,
+      );
+    }
+  }
+
+  static num _num(dynamic v, num fallback) {
+    if (v == null) return fallback;
+    if (v is num) return v;
+    if (v is String) return num.tryParse(v) ?? fallback;
+    return fallback;
+  }
+
+  List<RideNearbyDriver> get _driversVM {
+    final out = <RideNearbyDriver>[];
+    for (final x in _driversRaw) {
+      final d = _driverVM(x);
+      if (d.id.isEmpty) continue;
+      out.add(d);
+    }
+    out.sort((a, b) => a.distanceKm.compareTo(b.distanceKm));
+    return out;
+  }
+
+  Map<String, dynamic> _offerToMap(RideOffer o) {
+    try {
+      final j = (o as dynamic).toJson?.call();
+      if (j is Map) return j.cast<String, dynamic>();
+    } catch (_) {}
+    final d = o as dynamic;
+    final m = <String, dynamic>{};
+    try { m['category'] = d.category; } catch (_) {}
+    try { m['name'] = d.name; } catch (_) {}
+    try { m['label'] = d.label; } catch (_) {}
+    try { m['eta_min'] = d.etaMin; } catch (_) {}
+    try { m['price'] = d.price; } catch (_) {}
+    try { m['currency'] = d.currency; } catch (_) {}
+    try { m['seats'] = d.seats; } catch (_) {}
+    try { m['rating'] = d.rating; } catch (_) {}
+    try { m['promo_applied'] = d.promoApplied; } catch (_) {}
+    try { m['original_price'] = d.originalPrice; } catch (_) {}
+    return m;
+  }
+
+  String _offerTitle(RideOffer o) {
+    final m = _offerToMap(o);
+    return (m['category'] ?? m['name'] ?? m['label'] ?? 'Ride').toString();
+  }
+
+  int _offerEta(RideOffer o) => _num(_offerToMap(o)['eta_min'], 0).toInt();
+  double _offerPrice(RideOffer o) => _num(_offerToMap(o)['price'], 0).toDouble();
+  double _offerOld(RideOffer o) => _num(_offerToMap(o)['original_price'], 0).toDouble();
+
+  String _currency(RideOffer o) {
+    final c = (_offerToMap(o)['currency'] ?? 'NGN').toString().toUpperCase();
+    if (c == 'NGN') return '₦';
+    if (c == 'USD') return '\$';
+    return c;
+  }
+
+  // -------------------------
+  // Auto-lock when drivers appear
+  // -------------------------
   @override
-  void initState() {
-    super.initState();
-    print('[RideMarketSheet] initState');
-    _entrance = AnimationController(vsync: this, duration: const Duration(milliseconds: 320));
-    _fade = CurvedAnimation(parent: _entrance, curve: Curves.easeOut);
-    _slide = Tween<Offset>(begin: const Offset(0, 0.06), end: Offset.zero)
-        .animate(CurvedAnimation(parent: _entrance, curve: Curves.easeOutCubic));
+  void didUpdateWidget(covariant RideMarketSheet oldWidget) {
+    super.didUpdateWidget(oldWidget);
 
-    // start entrance after first frame
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) {
-        print('[RideMarketSheet] starting entrance animation');
-        _entrance.forward();
-      }
+    // Default-select first offer when offers arrive (like Bolt “Select Bolt”).
+    if (_selectedOfferIdx < 0 && widget.offers.isNotEmpty) {
+      _selectedOfferIdx = 0;
+    }
+
+    // Auto-lock when drivers become available (stops shuffling)
+    final incomingDriversCount = math.max(widget.driversNearbyCount, (widget.drivers ?? const []).length);
+    if (!_locked && incomingDriversCount > 0) {
+      _lockNow();
+    }
+  }
+
+  void _lockNow() {
+    setState(() {
+      _locked = true;
+      _driversSnap = List<dynamic>.from(widget.drivers ?? const []);
+      _offersSnap = List<RideOffer>.from(widget.offers);
+      _driversCountSnap = widget.driversNearbyCount;
     });
   }
 
-  @override
-  void dispose() {
-    print('[RideMarketSheet] dispose');
-    _entrance.dispose();
-    super.dispose();
+  void _unlockAndRefresh() {
+    setState(() {
+      _locked = false;
+      _driversSnap = const [];
+      _offersSnap = const [];
+      _driversCountSnap = 0;
+      _selectedDriverIdx = -1;
+      // Keep offer default behavior
+    });
+    widget.onRefresh();
   }
 
-  double _calcMaxHeight(BuildContext context) {
-    final h = MediaQuery.of(context).size.height;
-    return MediaQuery.of(context).orientation == Orientation.portrait
-        ? (h * 0.65).clamp(360.0, h)
-        : (h * 0.72).clamp(380.0, h);
-  }
-
-  int _columnsForWidth(double w) {
-    if (w < 520) return 1;
-    if (w < 920) return 2;
-    return 3;
-  }
-
+  // -------------------------
+  // UI
+  // -------------------------
   @override
   Widget build(BuildContext context) {
-    print('[RideMarketSheet] build — loading=${widget.loading} offers=${widget.offers.length}');
     final mq = MediaQuery.of(context);
-    final maxH = _calcMaxHeight(context);
-    final safeBottom = mq.padding.bottom;
+    final cs = Theme.of(context).colorScheme;
 
-    return SafeArea(
-      top: false,
-      child: Align(
-        alignment: Alignment.bottomCenter,
-        child: ConstrainedBox(
-          constraints: BoxConstraints(maxWidth: 920, maxHeight: maxH),
-          child: SlideTransition(
-            position: _slide,
-            child: FadeTransition(
-              opacity: _fade,
-              child: ClipRRect(
-                borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
-                child: BackdropFilter(
-                  filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
-                  child: Material(
-                    color: Theme.of(context).scaffoldBackgroundColor,
-                    elevation: 18,
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        // Header (no drag handle)
-                        _HeaderRow(
-                          originText: widget.originText,
-                          destinationText: widget.destinationText,
-                          distanceText: widget.distanceText,
-                          durationText: widget.durationText,
-                          onRefresh: () {
-                            print('[RideMarketSheet] header onRefresh');
-                            widget.onRefresh();
-                          },
-                        ),
-
-                        // Content: loading / empty / list/grid
-                        Expanded(
-                          child: AnimatedSwitcher(
-                            duration: const Duration(milliseconds: 240),
-                            switchInCurve: Curves.easeOut,
-                            switchOutCurve: Curves.easeIn,
-                            child: _buildContent(mq.size.width),
-                          ),
-                        ),
-
-                        // Payment & CTA + Cancel
-                        _BottomActions(
-                          safeBottom: safeBottom,
-                          offers: widget.offers,
-                          loading: widget.loading,
-                          onSelect: widget.onSelect,
-                          onRefresh: widget.onRefresh,
-                          onCancel: () {
-                            print('[RideMarketSheet] Cancel tapped');
-                            widget.onCancel?.call();
-                          },
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
+    // True “bottom sheet” feel: full width, bottom-aligned, no outer margin.
+    return Align(
+      alignment: Alignment.bottomCenter,
+      child: Material(
+        color: Colors.transparent,
+        child: Container(
+          width: double.infinity,
+          constraints: BoxConstraints(
+            // Similar to screenshot: not too tall; scroll inside.
+            maxHeight: mq.size.height * 0.52,
+          ),
+          decoration: BoxDecoration(
+            color: Theme.of(context).cardColor,
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(18)),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(0.18),
+                blurRadius: 16,
+                offset: const Offset(0, -6),
               ),
-            ),
+            ],
+          ),
+          child: Column(
+            children: [
+              const SizedBox(height: 8),
+              _handle(cs),
+              const SizedBox(height: 6),
+              _topBar(context),
+              Expanded(child: _content(context)),
+              _bottomBar(context, mq),
+            ],
           ),
         ),
       ),
     );
   }
 
-  Widget _buildContent(double width) {
-    final cols = _columnsForWidth(width);
-    if (widget.loading) {
-      return _LoadingState(key: const ValueKey('loading'));
-    }
-
-    if (widget.offers.isEmpty) {
-      return _EmptyState(onRetry: () {
-        print('[RideMarketSheet] Empty state retry pressed -> onRefresh');
-        widget.onRefresh();
-      }, key: const ValueKey('empty'));
-    }
-
-    // offers present
-    return _OffersList(
-      offers: widget.offers,
-      columns: cols,
-      onSelect: widget.onSelect,
-      key: ValueKey('offers_${widget.offers.length}_cols_$cols'),
+  Widget _handle(ColorScheme cs) {
+    return Container(
+      width: 54,
+      height: 5,
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(999),
+        color: cs.onSurface.withOpacity(0.18),
+      ),
     );
   }
-}
 
-/// HEADER
-class _HeaderRow extends StatelessWidget {
-  final String? originText;
-  final String? destinationText;
-  final String? distanceText;
-  final String? durationText;
-  final VoidCallback onRefresh;
-
-  const _HeaderRow({
-    Key? key,
-    this.originText,
-    this.destinationText,
-    this.distanceText,
-    this.durationText,
-    required this.onRefresh,
-  }) : super(key: key);
-
-  @override
-  Widget build(BuildContext context) {
-    final surface = Theme.of(context).colorScheme.surface;
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.fromLTRB(16, 14, 12, 14),
-      decoration: BoxDecoration(
-        color: surface.withOpacity(.98),
-        border: Border(bottom: BorderSide(color: AppColors.mintBgLight.withOpacity(.18), width: 1)),
-      ),
+  Widget _topBar(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 10),
       child: Row(
         children: [
+          IconButton(
+            onPressed: widget.onCancel,
+            icon: const Icon(Icons.arrow_back_rounded),
+          ),
           Expanded(
-            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              if (originText != null && originText!.isNotEmpty)
-                Text(originText!, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w800)),
-              if (destinationText != null && destinationText!.isNotEmpty)
-                Padding(padding: const EdgeInsets.only(top: 6), child: Text(destinationText!, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w600))),
-            ]),
+            child: Text(
+              'Ride options',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                fontWeight: FontWeight.w900,
+                color: cs.onSurface.withOpacity(0.85),
+              ),
+            ),
           ),
           IconButton(
-            tooltip: 'Refresh offers',
-            onPressed: onRefresh,
-            icon: const Icon(Icons.refresh_rounded),
-            splashRadius: 20,
+            onPressed: _locked ? _unlockAndRefresh : widget.onRefresh,
+            icon: Icon(_locked ? Icons.lock_open_rounded : Icons.refresh_rounded),
+            tooltip: _locked ? 'Unlock & refresh' : 'Refresh',
           ),
-          const SizedBox(width: 6),
-          if (durationText != null) _Badge(text: durationText!, icon: Icons.timelapse_rounded),
-          const SizedBox(width: 8),
-          if (distanceText != null) _Badge(text: distanceText!, icon: Icons.route_rounded),
         ],
       ),
     );
   }
-}
 
-class _Badge extends StatelessWidget {
-  final String text;
-  final IconData icon;
-  const _Badge({Key? key, required this.text, required this.icon}) : super(key: key);
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-      decoration: BoxDecoration(
-        color: AppColors.mintBgLight.withOpacity(.28),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: AppColors.mintBgLight.withOpacity(.6)),
-      ),
-      child: Row(children: [Icon(icon, size: 14, color: AppColors.textPrimary), const SizedBox(width: 6), Text(text, style: const TextStyle(fontWeight: FontWeight.w800))]),
-    );
-  }
-}
+  Widget _content(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final drivers = _driversVM;
+    final offers = _offersRaw;
 
-/// LOADING STATE
-class _LoadingState extends StatelessWidget {
-  const _LoadingState({Key? key}) : super(key: key);
-  @override
-  Widget build(BuildContext context) {
-    return Center(
-      child: Column(mainAxisSize: MainAxisSize.min, children: [
-        const SizedBox(height: 12),
-        const CircularProgressIndicator(strokeWidth: 2.8),
-        const SizedBox(height: 12),
-        Text('Searching for nearby cars…', style: Theme.of(context).textTheme.bodyMedium),
-        const SizedBox(height: 8),
-        Text('This usually takes a few seconds.', style: Theme.of(context).textTheme.bodySmall?.copyWith(color: Colors.grey)),
-      ]),
-    );
-  }
-}
+    return ListView(
+      physics: const BouncingScrollPhysics(),
+      padding: const EdgeInsets.fromLTRB(12, 0, 12, 10),
+      children: [
+        _routeMini(context),
+        const SizedBox(height: 10),
 
-/// EMPTY STATE (no offers)
-class _EmptyState extends StatelessWidget {
-  final VoidCallback onRetry;
-  const _EmptyState({Key? key, required this.onRetry}) : super(key: key);
-
-  @override
-  Widget build(BuildContext context) {
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 30.0),
-        child: Column(mainAxisSize: MainAxisSize.min, children: [
-          Icon(Icons.car_rental_outlined, size: 56, color: Colors.grey.shade400),
-          const SizedBox(height: 12),
-          Text('No cars nearby right now', style: Theme.of(context).textTheme.titleMedium),
-          const SizedBox(height: 8),
-          Text('Try expanding your search radius or refresh to try again.', textAlign: TextAlign.center, style: Theme.of(context).textTheme.bodyMedium?.copyWith(color: Colors.grey[600])),
-          const SizedBox(height: 18),
-          SizedBox(
-            width: 160,
-            height: 44,
-            child: ElevatedButton(
-              onPressed: () {
-                print('[RideMarketSheet] EmptyState -> retry pressed');
-                onRetry();
-              },
-              style: ElevatedButton.styleFrom(shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
-              child: const Text('Try again', style: TextStyle(fontWeight: FontWeight.w800)),
+        if (_locked)
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            decoration: BoxDecoration(
+              color: AppColors.primary.withOpacity(0.10),
+              borderRadius: BorderRadius.circular(14),
+              border: Border.all(color: AppColors.primary.withOpacity(0.25)),
+            ),
+            child: Row(
+              children: [
+                Icon(Icons.lock_rounded, color: AppColors.primary),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    'Drivers found. List locked so user can select.',
+                    style: TextStyle(fontWeight: FontWeight.w900, color: cs.onSurface.withOpacity(0.78)),
+                  ),
+                ),
+              ],
             ),
           ),
-        ]),
+
+        if (_locked) const SizedBox(height: 10),
+
+        if (_showNoCars) ...[
+          _emptyState(context),
+        ] else ...[
+          if (drivers.isNotEmpty) ...[
+            _section('Nearby drivers'),
+            const SizedBox(height: 8),
+            ...List.generate(drivers.length, (i) {
+              final selected = i == _selectedDriverIdx;
+              return Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: _driverCard(context, drivers[i], selected: selected, onTap: () {
+                  setState(() => _selectedDriverIdx = i);
+                }),
+              );
+            }),
+            const SizedBox(height: 6),
+          ] else if (_hasDrivers) ...[
+            _section('Nearby drivers'),
+            const SizedBox(height: 8),
+            _hint(context, '${_driversCountEffective} drivers nearby', 'Pass drivers list to show full details.'),
+            const SizedBox(height: 10),
+          ],
+
+          _section('Ride options'),
+          const SizedBox(height: 8),
+
+          if (_effectiveLoading) _loadingRow(context),
+
+          ...List.generate(offers.length, (i) {
+            final selected = i == _selectedOfferIdx;
+            return Padding(
+              padding: const EdgeInsets.only(bottom: 10),
+              child: _offerCard(context, offers[i], selected: selected, onTap: () {
+                setState(() => _selectedOfferIdx = i);
+              }),
+            );
+          }),
+
+          if (!_effectiveLoading && _hasDrivers && offers.isEmpty)
+            _hint(context, 'Drivers found', 'Fetching prices… tap refresh if it takes too long.'),
+        ],
+      ],
+    );
+  }
+
+  Widget _routeMini(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final origin = widget.originText.trim().isEmpty ? 'Pickup' : widget.originText.trim();
+    final dest = widget.destinationText.trim().isEmpty ? 'Destination' : widget.destinationText.trim();
+    final dist = widget.distanceText ?? '--';
+    final dur = widget.durationText ?? '--';
+
+    return Container(
+      padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+      decoration: BoxDecoration(
+        color: cs.surface,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: cs.onSurface.withOpacity(0.08)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(origin, maxLines: 1, overflow: TextOverflow.ellipsis,
+              style: TextStyle(fontWeight: FontWeight.w900, color: cs.onSurface.withOpacity(0.85))),
+          const SizedBox(height: 4),
+          Text(dest, maxLines: 1, overflow: TextOverflow.ellipsis,
+              style: TextStyle(fontWeight: FontWeight.w800, color: cs.onSurface.withOpacity(0.60))),
+          const SizedBox(height: 10),
+          Row(
+            children: [
+              _pill(context, Icons.schedule_rounded, dur),
+              const SizedBox(width: 8),
+              _pill(context, Icons.straighten_rounded, dist),
+              const Spacer(),
+              _pill(context, Icons.gps_fixed_rounded, _hasDrivers ? '$_driversCountEffective drivers' : '0 drivers'),
+            ],
+          ),
+        ],
       ),
     );
   }
-}
 
-/// OFFERS LIST / GRID
-class _OffersList extends StatelessWidget {
-  final List<RideOffer> offers;
-  final int columns;
-  final void Function(RideOffer) onSelect;
-
-  const _OffersList({Key? key, required this.offers, required this.columns, required this.onSelect}) : super(key: key);
-
-  @override
-  Widget build(BuildContext context) {
-    if (columns == 1) {
-      return ListView.separated(
-        padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
-        physics: const BouncingScrollPhysics(),
-        itemBuilder: (c, i) => _OfferCard(offer: offers[i], onTap: () => onSelect(offers[i])),
-        separatorBuilder: (_, __) => const SizedBox(height: 12),
-        itemCount: offers.length,
-      );
-    }
-
-    return GridView.builder(
-      padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
-      physics: const BouncingScrollPhysics(),
-      itemCount: offers.length,
-      gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-        crossAxisCount: columns,
-        mainAxisSpacing: 12,
-        crossAxisSpacing: 12,
-        childAspectRatio: 3.2,
-      ),
-      itemBuilder: (c, i) => _OfferCard(offer: offers[i], onTap: () => onSelect(offers[i])),
+  Widget _section(String t) {
+    return Padding(
+      padding: const EdgeInsets.only(left: 2),
+      child: Text(t, style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 13)),
     );
   }
-}
 
-/// SINGLE OFFER CARD
-class _OfferCard extends StatelessWidget {
-  final RideOffer offer;
-  final VoidCallback onTap;
-  const _OfferCard({Key? key, required this.offer, required this.onTap}) : super(key: key);
+  Widget _pill(BuildContext context, IconData icon, String text) {
+    final cs = Theme.of(context).colorScheme;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+      decoration: BoxDecoration(
+        color: cs.surface,
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: cs.onSurface.withOpacity(0.10)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 15, color: cs.onSurface.withOpacity(0.65)),
+          const SizedBox(width: 6),
+          Text(text, style: TextStyle(fontWeight: FontWeight.w900, color: cs.onSurface.withOpacity(0.75), fontSize: 12)),
+        ],
+      ),
+    );
+  }
 
-  @override
-  Widget build(BuildContext context) {
-    final priceText = '₦${offer.price}';
+  Widget _driverCard(BuildContext context, RideNearbyDriver d, {required bool selected, required VoidCallback onTap}) {
+    final cs = Theme.of(context).colorScheme;
+
+    final distText = d.distanceKm <= 0
+        ? 'Nearby'
+        : d.distanceKm < 1
+        ? '${(d.distanceKm * 1000).round()} m'
+        : '${d.distanceKm.toStringAsFixed(1)} km';
+
+    final eta = d.etaMin <= 0 ? '1 min' : '${d.etaMin} min';
+
     return InkWell(
-      onTap: () {
-        print('[RideMarketSheet] offer tapped id=${offer.id} provider=${offer.provider}');
-        onTap();
-      },
+      onTap: onTap,
       borderRadius: BorderRadius.circular(14),
-      child: Ink(
+      child: Container(
+        padding: const EdgeInsets.fromLTRB(12, 12, 12, 12),
+        decoration: BoxDecoration(
+          color: selected ? AppColors.primary.withOpacity(0.10) : cs.surface,
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(
+            color: selected ? AppColors.primary.withOpacity(0.40) : cs.onSurface.withOpacity(0.08),
+            width: selected ? 1.4 : 1.0,
+          ),
+        ),
+        child: Row(
+          children: [
+            Container(
+              width: 44,
+              height: 44,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: cs.onSurface.withOpacity(0.06),
+                border: Border.all(color: cs.onSurface.withOpacity(0.10)),
+              ),
+              child: Center(
+                child: Text(
+                  _initials(d.name),
+                  style: TextStyle(fontWeight: FontWeight.w900, color: cs.onSurface.withOpacity(0.75)),
+                ),
+              ),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(d.name, maxLines: 1, overflow: TextOverflow.ellipsis,
+                      style: TextStyle(fontWeight: FontWeight.w900, color: cs.onSurface.withOpacity(0.85))),
+                  const SizedBox(height: 4),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 6,
+                    children: [
+                      _miniChip(context, Icons.local_taxi_rounded, d.category),
+                      if (d.carPlate.trim().isNotEmpty) _miniChip(context, Icons.confirmation_number_rounded, d.carPlate.trim()),
+                      _miniChip(context, Icons.timer_rounded, eta),
+                      _miniChip(context, Icons.near_me_rounded, distText),
+                      _stars(context, d.rating),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+            if (selected) Icon(Icons.check_circle_rounded, color: AppColors.primary),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _offerCard(BuildContext context, RideOffer offer, {required bool selected, required VoidCallback onTap}) {
+    final cs = Theme.of(context).colorScheme;
+    final title = _offerTitle(offer);
+    final eta = _offerEta(offer);
+    final price = _offerPrice(offer);
+    final old = _offerOld(offer);
+    final cur = _currency(offer);
+
+    final priceText = '$cur${_moneyFmt.format(price.round())}';
+    final oldText = (old > 0 && old > price) ? '$cur${_moneyFmt.format(old.round())}' : null;
+
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(14),
+      child: Container(
+        padding: const EdgeInsets.fromLTRB(12, 12, 12, 12),
+        decoration: BoxDecoration(
+          color: selected ? AppColors.primary.withOpacity(0.10) : cs.surface,
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(
+            color: selected ? AppColors.primary.withOpacity(0.40) : cs.onSurface.withOpacity(0.08),
+            width: selected ? 1.4 : 1.0,
+          ),
+        ),
+        child: Row(
+          children: [
+            Container(
+              width: 52,
+              height: 52,
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(14),
+                color: cs.onSurface.withOpacity(0.05),
+                border: Border.all(color: cs.onSurface.withOpacity(0.08)),
+              ),
+              child: Icon(Icons.directions_car_rounded, color: cs.onSurface.withOpacity(0.65), size: 28),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(title, maxLines: 1, overflow: TextOverflow.ellipsis,
+                      style: TextStyle(fontWeight: FontWeight.w900, color: cs.onSurface.withOpacity(0.85))),
+                  const SizedBox(height: 6),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 6,
+                    children: [
+                      _miniChip(context, Icons.timer_rounded, eta <= 0 ? '—' : '$eta min'),
+                      _stars(context, 4.9),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 10),
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                Text(priceText, style: TextStyle(fontWeight: FontWeight.w900, color: cs.onSurface.withOpacity(0.85))),
+                if (oldText != null) ...[
+                  const SizedBox(height: 2),
+                  Text(oldText,
+                      style: TextStyle(
+                        fontWeight: FontWeight.w800,
+                        color: cs.onSurface.withOpacity(0.45),
+                        decoration: TextDecoration.lineThrough,
+                      )),
+                ],
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _miniChip(BuildContext context, IconData icon, String text) {
+    final cs = Theme.of(context).colorScheme;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(999),
+        color: cs.onSurface.withOpacity(0.04),
+        border: Border.all(color: cs.onSurface.withOpacity(0.10)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 15, color: cs.onSurface.withOpacity(0.65)),
+          const SizedBox(width: 6),
+          Text(text, style: TextStyle(fontWeight: FontWeight.w900, color: cs.onSurface.withOpacity(0.70), fontSize: 12)),
+        ],
+      ),
+    );
+  }
+
+  Widget _stars(BuildContext context, double rating) {
+    final cs = Theme.of(context).colorScheme;
+    final r = rating.clamp(0, 5);
+    final full = r.floor();
+    final half = (r - full) >= 0.5 ? 1 : 0;
+    final empty = 5 - full - half;
+
+    final icons = <Widget>[];
+    for (int i = 0; i < full; i++) icons.add(const Icon(Icons.star_rounded, size: 16, color: Color(0xFFFFD54F)));
+    if (half == 1) icons.add(const Icon(Icons.star_half_rounded, size: 16, color: Color(0xFFFFD54F)));
+    for (int i = 0; i < empty; i++) icons.add(Icon(Icons.star_outline_rounded, size: 16, color: cs.onSurface.withOpacity(0.30)));
+
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        ...icons,
+        const SizedBox(width: 6),
+        Text(r.toStringAsFixed(2), style: TextStyle(fontWeight: FontWeight.w900, color: cs.onSurface.withOpacity(0.65), fontSize: 12)),
+      ],
+    );
+  }
+
+  Widget _loadingRow(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return Container(
+      margin: const EdgeInsets.only(bottom: 10),
+      padding: const EdgeInsets.fromLTRB(12, 12, 12, 12),
+      decoration: BoxDecoration(
+        color: cs.surface,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: cs.onSurface.withOpacity(0.08)),
+      ),
+      child: Row(
+        children: [
+          SizedBox(
+            width: 18,
+            height: 18,
+            child: CircularProgressIndicator(
+              strokeWidth: 2.4,
+              valueColor: AlwaysStoppedAnimation<Color>(AppColors.primary),
+            ),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text('Searching…', style: TextStyle(fontWeight: FontWeight.w900, color: cs.onSurface.withOpacity(0.75))),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _hint(BuildContext context, String title, String subtitle) {
+    final cs = Theme.of(context).colorScheme;
+    return Container(
+      padding: const EdgeInsets.fromLTRB(12, 12, 12, 12),
+      decoration: BoxDecoration(
+        color: cs.surface,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: cs.onSurface.withOpacity(0.08)),
+      ),
+      child: Row(
+        children: [
+          Icon(Icons.info_rounded, color: cs.onSurface.withOpacity(0.55)),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(title, style: TextStyle(fontWeight: FontWeight.w900, color: cs.onSurface.withOpacity(0.80))),
+                const SizedBox(height: 4),
+                Text(subtitle, style: TextStyle(fontWeight: FontWeight.w700, color: cs.onSurface.withOpacity(0.58), height: 1.2)),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _emptyState(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return Container(
+      padding: const EdgeInsets.fromLTRB(14, 16, 14, 16),
+      decoration: BoxDecoration(
+        color: cs.surface,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: cs.onSurface.withOpacity(0.08)),
+      ),
+      child: Column(
+        children: [
+          Icon(Icons.directions_car_filled_rounded, color: cs.onSurface.withOpacity(0.55), size: 36),
+          const SizedBox(height: 10),
+          Text('No cars nearby right now', style: TextStyle(fontWeight: FontWeight.w900, color: cs.onSurface.withOpacity(0.82))),
+          const SizedBox(height: 6),
+          Text('Try again in a moment.', style: TextStyle(fontWeight: FontWeight.w700, color: cs.onSurface.withOpacity(0.58))),
+          const SizedBox(height: 12),
+          SizedBox(
+            width: double.infinity,
+            height: 46,
+            child: ElevatedButton(
+              onPressed: widget.onRefresh,
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppColors.primary,
+                foregroundColor: Colors.white,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+              ),
+              child: const Text('Try again', style: TextStyle(fontWeight: FontWeight.w900)),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _bottomBar(BuildContext context, MediaQueryData mq) {
+    final cs = Theme.of(context).colorScheme;
+
+    final drivers = _driversVM;
+    final offers = _offersRaw;
+
+    final driverSelected = (_selectedDriverIdx >= 0 && _selectedDriverIdx < drivers.length);
+    final offerSelected = (_selectedOfferIdx >= 0 && _selectedOfferIdx < offers.length);
+
+    final canBook = driverSelected && offerSelected;
+
+    final offerTitle = offerSelected ? _offerTitle(offers[_selectedOfferIdx]) : 'Ride';
+
+    final btnText = canBook ? 'Select $offerTitle' : (driverSelected ? 'Select a ride option' : 'Select a driver');
+
+    return SafeArea(
+      top: false,
+      child: Container(
+        padding: EdgeInsets.fromLTRB(12, 10, 12, 10 + mq.padding.bottom + widget.bottomNavHeight),
         decoration: BoxDecoration(
           color: Theme.of(context).cardColor,
-          borderRadius: BorderRadius.circular(14),
-          border: Border.all(color: AppColors.mintBgLight.withOpacity(.36), width: 1.2),
-          boxShadow: [BoxShadow(color: Colors.black.withOpacity(.03), blurRadius: 6, offset: const Offset(0, 4))],
+          border: Border(top: BorderSide(color: cs.onSurface.withOpacity(0.08))),
         ),
-        child: Padding(
-          padding: const EdgeInsets.all(14),
-          child: Row(children: [
-            Container(width: 66, height: 46, decoration: BoxDecoration(color: AppColors.mintBg.withOpacity(.6), borderRadius: BorderRadius.circular(10)), child: Center(child: Icon(Icons.directions_car_rounded, color: AppColors.primary))),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Row(children: [
-                  Text(offer.provider, style: const TextStyle(fontWeight: FontWeight.w900)),
-                  const SizedBox(width: 8),
-                  if (offer.surge)
-                    Container(padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4), decoration: BoxDecoration(color: Colors.orange.shade600, borderRadius: BorderRadius.circular(8)), child: const Text('Surge', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 12))),
-                ]),
-                const SizedBox(height: 6),
-                Row(children: [
-                  Container(padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6), decoration: BoxDecoration(color: AppColors.mintBgLight.withOpacity(.3), borderRadius: BorderRadius.circular(12)), child: Text('${offer.etaToPickupMin} min', style: const TextStyle(fontWeight: FontWeight.w800))),
-                  const SizedBox(width: 10),
-                  Text('• ${offer.seats ?? 4} seats', style: Theme.of(context).textTheme.bodySmall),
-                  const Spacer(),
-                  if (offer.driverName != null) Text(offer.driverName!, style: Theme.of(context).textTheme.bodySmall),
-                ]),
-                const SizedBox(height: 6),
-                if (offer.driverName != null || offer.carPlate != null || offer.rating != null)
-                  Text('${offer.driverName ?? '—'}  •  ${offer.rating?.toStringAsFixed(1) ?? '—'} ★  •  ${offer.carPlate ?? ''}', maxLines: 1, overflow: TextOverflow.ellipsis, style: Theme.of(context).textTheme.bodySmall?.copyWith(color: Colors.grey[600])),
-              ]),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // Payment row (screenshot-like)
+            Row(
+              children: [
+                Icon(Icons.payments_rounded, color: cs.onSurface.withOpacity(0.60), size: 18),
+                const SizedBox(width: 8),
+                Text('Cash', style: TextStyle(fontWeight: FontWeight.w900, color: cs.onSurface.withOpacity(0.78))),
+                const SizedBox(width: 6),
+                Icon(Icons.keyboard_arrow_down_rounded, color: cs.onSurface.withOpacity(0.55)),
+                const Spacer(),
+                if (_locked) Text('Locked', style: TextStyle(fontWeight: FontWeight.w900, color: AppColors.primary)),
+              ],
             ),
-            const SizedBox(width: 12),
-            Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
-              Text(priceText, style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 16)),
-              const SizedBox(height: 8),
-              SizedBox(width: 92, height: 36, child: OutlinedButton(onPressed: onTap, style: OutlinedButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 8), side: BorderSide(color: AppColors.mintBgLight.withOpacity(.6)), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))), child: const Text('Select', style: TextStyle(fontWeight: FontWeight.w800)))),
-            ]),
-          ]),
+            const SizedBox(height: 10),
+            SizedBox(
+              width: double.infinity,
+              height: 52,
+              child: ElevatedButton(
+                onPressed: canBook
+                    ? () {
+                  final d = drivers[_selectedDriverIdx];
+                  final o = offers[_selectedOfferIdx];
+                  widget.onBook(d, o);
+                }
+                    : null,
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: AppColors.primary,
+                  foregroundColor: Colors.white,
+                  disabledBackgroundColor: AppColors.primary.withOpacity(0.35),
+                  disabledForegroundColor: Colors.white.withOpacity(0.75),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                  elevation: 0,
+                ),
+                child: Text(btnText, style: const TextStyle(fontWeight: FontWeight.w900)),
+              ),
+            ),
+          ],
         ),
       ),
     );
   }
-}
 
-/// BOTTOM ACTIONS: payment row + main CTA + cancel
-class _BottomActions extends StatelessWidget {
-  final double safeBottom;
-  final List<RideOffer> offers;
-  final bool loading;
-  final void Function(RideOffer) onSelect;
-  final VoidCallback onRefresh;
-  final VoidCallback? onCancel;
-
-  const _BottomActions({
-    Key? key,
-    required this.safeBottom,
-    required this.offers,
-    required this.loading,
-    required this.onSelect,
-    required this.onRefresh,
-    this.onCancel,
-  }) : super(key: key);
-
-  @override
-  Widget build(BuildContext context) {
-    final disabled = offers.isEmpty || loading;
-    final first = offers.isNotEmpty ? offers.first : null;
-
-    return Container(
-      padding: EdgeInsets.fromLTRB(16, 12, 16, 12 + safeBottom),
-      decoration: BoxDecoration(color: Theme.of(context).scaffoldBackgroundColor, border: Border(top: BorderSide(color: AppColors.mintBgLight.withOpacity(.12)))),
-      child: Column(mainAxisSize: MainAxisSize.min, children: [
-        Row(children: const [Icon(Icons.money_rounded, size: 18), SizedBox(width: 8), Text('Cash'), Spacer(), Icon(Icons.expand_more, size: 18)]),
-        const SizedBox(height: 10),
-
-        // Primary CTA
-        SizedBox(
-          width: double.infinity,
-          height: 56,
-          child: ElevatedButton(
-            onPressed: disabled ? null : () {
-              print('[RideMarketSheet] primary CTA pressed -> selecting ${first!.id}');
-              onSelect(first!);
-            },
-            style: ElevatedButton.styleFrom(backgroundColor: AppColors.primary, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(32))),
-            child: Text(disabled ? 'Searching cars…' : 'Select ${first!.provider}', style: const TextStyle(fontWeight: FontWeight.w800)),
-          ),
-        ),
-
-        const SizedBox(height: 10),
-
-        // Secondary controls: if no offers show try again, otherwise show cancel
-        if (offers.isEmpty)
-          SizedBox(
-            width: double.infinity,
-            height: 48,
-            child: OutlinedButton(
-              onPressed: () {
-                print('[RideMarketSheet] Try again pressed');
-                onRefresh();
-              },
-              style: OutlinedButton.styleFrom(shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)), side: BorderSide(color: AppColors.mintBgLight.withOpacity(.6))),
-              child: const Text('Try again', style: TextStyle(fontWeight: FontWeight.w800)),
-            ),
-          )
-        else
-          SizedBox(
-            width: double.infinity,
-            height: 48,
-            child: OutlinedButton(
-              onPressed: () {
-                print('[RideMarketSheet] Cancel pressed');
-                onCancel?.call();
-              },
-              style: OutlinedButton.styleFrom(shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)), side: BorderSide(color: AppColors.mintBgLight.withOpacity(.6))),
-              child: const Text('Cancel', style: TextStyle(fontWeight: FontWeight.w800)),
-            ),
-          ),
-      ]),
-    );
+  String _initials(String s) {
+    final parts = s.trim().split(RegExp(r'\s+')).where((e) => e.isNotEmpty).toList();
+    if (parts.isEmpty) return 'D';
+    String first(String x) => x.isEmpty ? '' : String.fromCharCode(x.runes.first);
+    final a = first(parts.first).toUpperCase();
+    final b = parts.length > 1 ? first(parts.last).toUpperCase() : '';
+    return (a + b).trim();
   }
 }

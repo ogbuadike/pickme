@@ -1,21 +1,12 @@
 // lib/screens/home_page.dart
 //
-// Home map + routes + marketplace + booking
-// - Full polyline overview (not just pins)
-// - Bottom sheets constrained to finite height (fixes RenderPhysicalShape crash)
-// - Heavy camera/heading work paused while search overlay is open
-// - Ride marketplace streams drivers + offers via ApiClient-backed service
-// - On offer select -> BookingController -> live status + driver→pickup polyline (purple)
-//
-// PERF + UX PATCH (requested):
-// - Route auto-fits to visible map viewport (header + bottom sheet padding respected)
-//   so user never needs to zoom out manually (like screenshot)
-// - Screenshot-style markers:
-//    * Pickup = blue ring + dot
-//    * Destination = green ring + dot
-//    * "11 min" = green circular badge + pin dot
-//    * "Arrive by ..." = blue pill badge
-// - Reduced release-mode overhead by guarding debug logs in asserts
+// Home map + routes + marketplace + booking (UPDATED)
+// PATCH IN THIS VERSION (your request):
+// 1) RideMarketSheet uses onBook(driver, offer) and edge-to-edge bottom sheet.
+// 2) Once booked, draw polyline driver -> pickup (refresh tick 2s).
+// 3) When driver reaches pickup (<=35m), Start Trip button enables.
+// 4) On Start Trip: polyline user -> destination (tick 2s) + navigation camera.
+// 5) While nav mode is active, normal follow/compass camera work is paused.
 
 import 'dart:async';
 import 'dart:convert';
@@ -61,6 +52,7 @@ import '../services/booking_controller.dart';
 enum MovementMode { stationary, pedestrian, vehicle }
 enum BearingSource { route, gps, compass }
 enum _CamMode { follow, overview }
+enum TripPhase { browsing, driverToPickup, waitingPickup, enRoute }
 
 class _SpeedInterval {
   final int start, end;
@@ -134,6 +126,19 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
   // Route logic
   static const double kRouteDeviationThreshold = 50.0; // meters
 
+  // Nearby driver polling (no sockets)
+  static const Duration kDriversPollInterval = Duration(seconds: 2);
+  static const int kMaxDriverMarkers = 80;
+
+  // Search circle (screenshot-style)
+  static const CircleId _accuracyCircleId = CircleId('accuracy');
+  static const CircleId _searchCircleId = CircleId('search_radius');
+  static const double _searchCircleMinM = 220;
+  static const double _searchCircleMaxM = 650;
+
+  // Arrival threshold (driver -> pickup)
+  static const double _arriveMeters = 35.0;
+
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
   final GlobalKey _sheetKey = GlobalKey();
 
@@ -159,13 +164,12 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
   bool _gpsActive = true;
 
   // Enhanced GPS lifecycle
-  bool _isInitializingLocation = false;
   int _gpsInitAttempt = 0;
   int _gpsStreamErrorCount = 0;
   Timer? _gpsWatchdog;
   DateTime? _lastStreamUpdate;
 
-  // NEW: single-flight guard + service status listener
+  // Single-flight guard + service status listener
   Completer<void>? _locInitCompleter;
   StreamSubscription<ServiceStatus>? _svcStatusSub;
 
@@ -173,7 +177,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
   BitmapDescriptor? _userPinIcon, _pickupIcon, _dropIcon, _etaBubbleIcon, _minsBubbleIcon;
   bool _iconsPreloaded = false;
 
-  // Drivers (market)
+  // Drivers
   BitmapDescriptor? _driverIcon;
   final Set<Marker> _driverMarkers = {};
 
@@ -190,8 +194,9 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
   final Set<Polyline> _driverLines = {};
   RideOffer? _selectedOffer;
 
-  // IMPORTANT: make tolerant to controller API differences
-  dynamic _booking; // BookingController? but dynamic for adapter
+  // Booking controller (dynamic adapter)
+  dynamic _booking;
+  StreamSubscription? _bookingSub;
 
   // Camera + heading
   _CamMode _camMode = _CamMode.follow;
@@ -201,8 +206,14 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
   LatLng? _lastCamTarget;
   DateTime _lastCamMove = DateTime.fromMillisecondsSinceEpoch(0);
 
-  // Throttle driver→pickup recompute (replaces shouldRecomputeRoute())
+  // Throttle driver/trip route compute
   DateTime _lastDriverLegRouteAt = DateTime.fromMillisecondsSinceEpoch(0);
+  DateTime _lastTripLegRouteAt = DateTime.fromMillisecondsSinceEpoch(0);
+  LatLng? _lastDriverLegFrom;
+  LatLng? _lastTripLegFrom;
+
+  bool _didFitDriverLeg = false;
+  bool _didFitTripLeg = false;
 
   // Compass
   StreamSubscription<CompassEvent>? _compassSub;
@@ -213,6 +224,12 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
   double _lastBearingVel = 0;
   DateTime _lastBearingTime = DateTime.now();
   DateTime _lastHeadingTick = DateTime.fromMillisecondsSinceEpoch(0);
+
+  // Diff-throttle user marker + circle updates
+  LatLng? _lastUserMarkerLL;
+  double _lastUserMarkerRot = 0;
+  LatLng? _lastAccuracyLL;
+  double _lastAccuracyRadius = 0;
 
   // Route
   final List<RoutePoint> _pts = [];
@@ -249,18 +266,33 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
   late final AnimationController _overlayAnimController;
   late final Animation<double> _overlayFadeAnim;
 
-  // Ride marketplace & live drivers
-  RideMarketService? _market;
+  // Ride marketplace & drivers
   StreamSubscription<RideMarketSnapshot>? _marketSub;
   bool _marketOpen = false;
   bool _offersLoading = false;
   List<RideOffer> _offers = const [];
   final Map<String, DriverCar> _drivers = {};
 
-  // NEW: debounce camera-fit when padding changes (prevents repeated fits during sheet animation)
+  // Nearby drivers polling
+  Timer? _nearbyDriversTimer;
+  bool _nearbyDriversBusy = false;
+  String? _nearbyDriversCursor;
+  DateTime _lastNearbyTickAt = DateTime.fromMillisecondsSinceEpoch(0);
+  final Map<String, DateTime> _driverLastSeen = {};
+
+  // Debounce camera-fit when padding changes
   Timer? _fitBoundsDebounce;
 
-  // ===== Debug (zero overhead in release) =====
+  // Trip / nav loop
+  TripPhase _tripPhase = TripPhase.browsing;
+  bool _navMode = false;
+  String? _engagedDriverId;
+  LatLng? _engagedDriverLL;
+  Timer? _tripTickTimer;
+
+  late final RideMarketService _rideMarketService;
+
+  // ===== Debug =====
   void _dbg(String msg, [Object? data]) {
     assert(() {
       final d = data == null ? '' : ' → $data';
@@ -270,27 +302,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
   }
 
   void _log(String msg, [Object? data]) => _dbg(msg, data);
-
-  void _apiLog({
-    required String tag,
-    required Uri url,
-    Map<String, String>? headers,
-    Object? body,
-    http.Response? res,
-  }) {
-    assert(() {
-      final h = Map.of(headers ?? {});
-      if (h.containsKey('X-Goog-Api-Key')) h['X-Goog-Api-Key'] = '***';
-      _dbg('$tag URL', url.toString());
-      if (body != null) _dbg('$tag Body', body);
-      if (res != null) _dbg('$tag HTTP ${res.statusCode}');
-      return true;
-    }());
-  }
-
   void _logLocationDiagnostic(String message) => _dbg('[GPS-DIAGNOSTICS] $message');
-
-  late final RideMarketService _rideMarketService;
 
   // ===== Utils =====
   double _s(BuildContext c) {
@@ -305,6 +317,12 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
     return scale;
   }
 
+  double _effectiveBottomNavH() {
+    if (_marketOpen) return 0;
+    if (_tripPhase != TripPhase.browsing) return 0;
+    return kBottomNavH;
+  }
+
   // ===== Lifecycle =====
   @override
   void initState() {
@@ -313,8 +331,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
     _api = ApiClient(http.Client(), context);
     _auto = AutocompleteService(logger: _log);
 
-    _dbg('[HomePage] Initializing RideMarketService...');
-    _rideMarketService = RideMarketService(api: _api, debug: true);
+    _rideMarketService = RideMarketService(api: _api, debug: false);
 
     _overlayAnimController = AnimationController(vsync: this, duration: const Duration(milliseconds: 220));
     _overlayFadeAnim = CurvedAnimation(parent: _overlayAnimController, curve: Curves.easeOutCubic);
@@ -323,7 +340,6 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
     _bootstrap();
     _startCompass();
 
-    // Monitor OS-level location service toggles and recover quickly
     _svcStatusSub?.cancel();
     _svcStatusSub = Geolocator.getServiceStatusStream().listen((status) {
       _logLocationDiagnostic('Service status: $status');
@@ -337,7 +353,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
 
-    _rideMarketService.dispose();
+    _stopNearbyDriversPolling();
 
     _debounce?.cancel();
     _gpsWatchdog?.cancel();
@@ -350,11 +366,15 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
     _overlayAnimController.dispose();
 
     _marketSub?.cancel();
-    _market?.dispose();
+    _rideMarketService.dispose();
 
-    _booking?.dispose();
+    _bookingSub?.cancel();
+    try {
+      _booking?.dispose();
+    } catch (_) {}
 
     _fitBoundsDebounce?.cancel();
+    _tripTickTimer?.cancel();
 
     for (final p in _pts) {
       p.controller.dispose();
@@ -374,13 +394,21 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.paused) {
       _gpsSub?.pause();
+      _stopNearbyDriversPolling();
+      _tripTickTimer?.cancel();
     } else if (state == AppLifecycleState.resumed) {
       _gpsSub?.resume();
-      // Refresh or re-init when coming back to foreground
       if (_curPos == null) {
         _initLocation();
       } else {
         _refreshUserPosition();
+        _startNearbyDriversPolling();
+      }
+
+      if (_tripPhase == TripPhase.driverToPickup || _tripPhase == TripPhase.waitingPickup) {
+        _startDriverToPickupTick();
+      } else if (_tripPhase == TripPhase.enRoute) {
+        _startTripNavTick();
       }
     }
   }
@@ -590,7 +618,6 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
     final c = Canvas(rec);
     final center = const Offset(size / 2, size / 2);
 
-    // subtle shadow
     c.drawCircle(
       center + const Offset(0, 2),
       18,
@@ -599,10 +626,8 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
         ..maskFilter = const ui.MaskFilter.blur(ui.BlurStyle.normal, 6),
     );
 
-    // white base
     c.drawCircle(center, 18, Paint()..color = Colors.white);
 
-    // colored ring
     c.drawCircle(
       center,
       18,
@@ -612,7 +637,6 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
         ..color = color,
     );
 
-    // center dot
     c.drawCircle(center, 5.5, Paint()..color = color);
 
     final img = await rec.endRecording().toImage(size.toInt(), size.toInt());
@@ -647,6 +671,17 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
   void _updateUserMarker(LatLng pos, {double? rotation}) {
     if (_userPinIcon == null) return;
     if (rotation != null) _userMarkerRotation = rotation;
+
+    final last = _lastUserMarkerLL;
+    final rotDiff = (_userMarkerRotation - _lastUserMarkerRot).abs();
+    if (last != null) {
+      final moved = _haversine(last, pos);
+      if (moved < 0.9 && rotDiff < 0.9) return;
+    }
+    _lastUserMarkerLL = pos;
+    _lastUserMarkerRot = _userMarkerRotation;
+
+    if (!mounted) return;
     setState(() {
       _markers.removeWhere((m) => m.markerId == _userMarkerId);
       _markers.add(
@@ -681,7 +716,8 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
   }
 
   void _applyHeadingTick() {
-    if (_expanded) return; // pause heading-driven rotations while overlay open
+    if (_expanded) return;
+    if (_navMode) return;
 
     double? heading;
     final sp = _curPos?.speed ?? 0.0;
@@ -706,9 +742,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
       _moveCameraRealtime(
         target: _forwardBiasTarget(user: pos, bearingDeg: smooth),
         bearing: smooth,
-        zoom: (sp >= kVehicleSpeedThreshold)
-            ? 17.5
-            : (sp >= kPedestrianSpeedThreshold ? 17.0 : 16.5),
+        zoom: (sp >= kVehicleSpeedThreshold) ? 17.5 : (sp >= kPedestrianSpeedThreshold ? 17.0 : 16.5),
         tilt: Perf.I.tiltFor(sp),
       );
     }
@@ -786,7 +820,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
     return LatLng(_rad2deg(lat2), _rad2deg(lon2));
   }
 
-  // ======= VIEWPORT FIT (like screenshot) =======
+  // ======= VIEWPORT FIT =======
   LatLngBounds _boundsFromPoints(List<LatLng> pts) {
     double minLat = pts.first.latitude, maxLat = pts.first.latitude;
     double minLng = pts.first.longitude, maxLng = pts.first.longitude;
@@ -852,13 +886,10 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
 
     if (pts.length < 2) return;
 
-    // ensure padding is updated first (header + bottom sheet)
     _scheduleMapPaddingUpdate();
     await Future.delayed(const Duration(milliseconds: 24));
 
     final bounds = _boundsFromPoints(pts);
-
-    // map already has padding; this is just a margin like the screenshot
     await _animateBoundsSafe(bounds, padding: 70);
   }
 
@@ -1018,9 +1049,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
     );
   }
 
-  // ============================================================================
-  // Robust acquisition helpers
-  // ============================================================================
+  // ===== Robust acquisition helpers =====
   bool _isGoodFix(Position p, double maxAccM) {
     if (!p.latitude.isFinite || !p.longitude.isFinite) return false;
     if (p.latitude == 0 && p.longitude == 0) return false;
@@ -1102,8 +1131,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
       _logLocationDiagnostic('Permission denied: $perm');
       await _showLocationPromptModal(
         title: 'Allow Location Access',
-        message:
-        'We use your location to match you with nearby drivers and calculate accurate ETAs. '
+        message: 'We use your location to match you with nearby drivers and calculate accurate ETAs. '
             'Please allow location access in your device settings.',
         isServiceIssue: false,
       );
@@ -1116,7 +1144,6 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
     const maxAcceptableAcc = 200.0;
     const tries = 3;
 
-    // Use fresh last-known to seed fast if available
     try {
       final last = await Geolocator.getLastKnownPosition();
       if (last != null &&
@@ -1182,7 +1209,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
 
     _lastStreamUpdate = DateTime.now();
     _curPos = seed;
-    _onGpsUpdate(seed); // seed UI immediately
+    _onGpsUpdate(seed);
 
     _gpsSub = Geolocator.getPositionStream(
       locationSettings: _platformLocationSettings(moving: true),
@@ -1222,9 +1249,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
     });
   }
 
-  // ============================================================================
-  // INIT LOCATION — single-flight robust version
-  // ============================================================================
+  // ===== INIT LOCATION — single-flight robust =====
   Future<void> _initLocation({bool userTriggered = false}) async {
     if (!mounted) return;
 
@@ -1291,18 +1316,19 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
       }
 
       await _startGpsStream(pos);
+      _startNearbyDriversPolling();
     });
   }
 
-  // ============================================================================
-  // Stream restart with exponential backoff + jitter
-  // ============================================================================
+  // ===== Stream restart with exponential backoff + jitter =====
   Future<void> _restartLocationStreamWithBackoff() async {
     if (!mounted) return;
 
     if (_locInitCompleter != null) {
       _logLocationDiagnostic('Restart join: init already in progress');
-      await _locInitCompleter!.future;
+      try {
+        await _locInitCompleter!.future;
+      } catch (_) {}
       return;
     }
 
@@ -1320,9 +1346,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
     await _initLocation(userTriggered: false);
   }
 
-  // ============================================================================
-  // PREMIUM LOCATION PROMPT MODAL (BOTTOM SHEET)
-  // ============================================================================
+  // ===== PREMIUM LOCATION PROMPT MODAL =====
   Future<void> _showLocationPromptModal({
     required String title,
     required String message,
@@ -1371,7 +1395,6 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
                     child: Column(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        // Grabber
                         Container(
                           width: 52,
                           height: 4,
@@ -1381,7 +1404,6 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
                             borderRadius: BorderRadius.circular(999),
                           ),
                         ),
-                        // Leading badge
                         Container(
                           width: 60,
                           height: 60,
@@ -1493,7 +1515,6 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
       _curPos = pos;
       final ll = LatLng(pos.latitude, pos.longitude);
 
-      // Movement state & mode
       final sp = pos.speed;
       if (sp >= kVehicleSpeedThreshold) {
         _movementMode = MovementMode.vehicle;
@@ -1512,45 +1533,47 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
         _checkStationaryTimeout();
       }
 
-      // Rotate cheap marker
       final rot = (pos.heading.isFinite && pos.heading >= 0) ? pos.heading : _userMarkerRotation;
       _updateUserMarker(ll, rotation: rot);
 
-      // Camera work: skip while overlay open to avoid jank
-      if (!_expanded && _camMode == _CamMode.follow) {
-        double? bearing = _routeAwareBearing(ll);
-        if (bearing == null &&
-            pos.heading.isFinite &&
-            pos.heading >= 0 &&
-            pos.speed >= kPedestrianSpeedThreshold) {
-          bearing = pos.heading;
-        }
-        bearing ??= _compassDeg;
+      if (!_navMode) {
+        if (!_expanded && _camMode == _CamMode.follow) {
+          double? bearing = _routeAwareBearing(ll);
+          if (bearing == null &&
+              pos.heading.isFinite &&
+              pos.heading >= 0 &&
+              pos.speed >= kPedestrianSpeedThreshold) {
+            bearing = pos.heading;
+          }
+          bearing ??= _compassDeg;
 
-        if (bearing != null) {
-          final smoothed = _smoothBearingWithJerkLimit(bearing);
-          _moveCameraRealtime(
-            target: _forwardBiasTarget(user: ll, bearingDeg: smoothed),
-            bearing: _rotateWithHeading ? smoothed : 0,
-            zoom: (pos.speed >= kVehicleSpeedThreshold)
-                ? 17.5
-                : (pos.speed >= kPedestrianSpeedThreshold ? 17.0 : 16.5),
-            tilt: Perf.I.tiltFor(pos.speed),
-          );
-        } else {
-          if (now.difference(_lastCamMove) > Perf.I.camMoveMin) {
-            final moved = (_lastCamTarget == null) ? double.infinity : _haversine(_lastCamTarget!, ll);
-            if (moved > kCenterSnapMeters) {
-              _map?.moveCamera(CameraUpdate.newLatLng(ll));
-              _lastCamTarget = ll;
-              _lastCamMove = now;
+          if (bearing != null) {
+            final smoothed = _smoothBearingWithJerkLimit(bearing);
+            _moveCameraRealtime(
+              target: _forwardBiasTarget(user: ll, bearingDeg: smoothed),
+              bearing: _rotateWithHeading ? smoothed : 0,
+              zoom: (pos.speed >= kVehicleSpeedThreshold)
+                  ? 17.5
+                  : (pos.speed >= kPedestrianSpeedThreshold ? 17.0 : 16.5),
+              tilt: Perf.I.tiltFor(pos.speed),
+            );
+          } else {
+            if (now.difference(_lastCamMove) > Perf.I.camMoveMin) {
+              final moved = (_lastCamTarget == null) ? double.infinity : _haversine(_lastCamTarget!, ll);
+              if (moved > kCenterSnapMeters) {
+                _map?.moveCamera(CameraUpdate.newLatLng(ll));
+                _lastCamTarget = ll;
+                _lastCamMove = now;
+              }
             }
           }
         }
       }
 
       if (_pts.isNotEmpty && _pts.first.isCurrent) _updatePickupFromGps();
+
       _putLocationCircle(ll, accuracy: pos.accuracy);
+      _syncSearchCircle();
     });
   }
 
@@ -1577,28 +1600,87 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
     } catch (_) {}
   }
 
-  // ===== Circles =====
+  // ===== Circles (accuracy + search radius) =====
   void _putLocationCircle(LatLng c, {double accuracy = 50}) {
+    final r = accuracy.clamp(8, 100).toDouble();
+
+    if (_lastAccuracyLL != null) {
+      final moved = _haversine(_lastAccuracyLL!, c);
+      final dr = (r - _lastAccuracyRadius).abs();
+      if (moved < 2.0 && dr < 2.0) return;
+    }
+    _lastAccuracyLL = c;
+    _lastAccuracyRadius = r;
+
+    if (!mounted) return;
     setState(() {
-      _circles
-        ..clear()
-        ..add(
-          Circle(
-            circleId: const CircleId('accuracy'),
-            center: c,
-            radius: accuracy.clamp(8, 100),
-            fillColor: AppColors.primary.withOpacity(0.10),
-            strokeColor: AppColors.primary.withOpacity(0.32),
-            strokeWidth: 2,
-          ),
-        );
+      _circles.removeWhere((x) => x.circleId == _accuracyCircleId);
+      _circles.add(
+        Circle(
+          circleId: _accuracyCircleId,
+          center: c,
+          radius: r,
+          fillColor: AppColors.primary.withOpacity(0.10),
+          strokeColor: AppColors.primary.withOpacity(0.32),
+          strokeWidth: 2,
+        ),
+      );
+    });
+  }
+
+  double _visualSearchRadiusMeters() {
+    final km = _homeRadiusKm();
+    final m = (km * 1000.0).clamp(_searchCircleMinM, _searchCircleMaxM);
+    return m.toDouble();
+  }
+
+  LatLng? _searchCircleCenter() {
+    final pick = _pts.isNotEmpty ? _pts.first.latLng : null;
+    if (pick != null) return pick;
+    if (_curPos != null) return LatLng(_curPos!.latitude, _curPos!.longitude);
+    return null;
+  }
+
+  bool _shouldShowSearchCircle() {
+    if (_tripPhase != TripPhase.browsing) return false;
+
+    if (_offersLoading) return true;
+    if (_marketOpen && _offers.isEmpty) return true;
+    if (_nearbyDriversBusy && !_marketOpen) return true;
+    return false;
+  }
+
+  void _syncSearchCircle() {
+    final show = _shouldShowSearchCircle();
+    final center = _searchCircleCenter();
+    if (!mounted) return;
+
+    if (!show || center == null) {
+      if (_circles.any((c) => c.circleId == _searchCircleId)) {
+        setState(() {
+          _circles.removeWhere((x) => x.circleId == _searchCircleId);
+        });
+      }
+      return;
+    }
+
+    final radius = _visualSearchRadiusMeters();
+    setState(() {
+      _circles.removeWhere((x) => x.circleId == _searchCircleId);
+      _circles.add(
+        Circle(
+          circleId: _searchCircleId,
+          center: center,
+          radius: radius,
+          fillColor: const Color(0xFF00A651).withOpacity(0.12),
+          strokeColor: const Color(0xFF00A651).withOpacity(0.30),
+          strokeWidth: 2,
+        ),
+      );
     });
   }
 
   // ===== Routes + cache =====
-  bool _hasRoute() =>
-      _pts.length >= 2 && _pts.first.latLng != null && _pts.last.latLng != null && _lines.isNotEmpty;
-
   bool get _hasPickupAndDropoff =>
       _pts.length >= 2 && _pts.first.latLng != null && _pts.last.latLng != null;
 
@@ -1619,7 +1701,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
 
     if (_cachedRoute != null && _lastRouteHash == routeHash && !_cachedRoute!.isStale) {
       _applyRouteFromCache(_cachedRoute!.route);
-      await _enterOverview(fitWholeRoute: true); // viewport fit
+      await _enterOverview(fitWholeRoute: true);
       return;
     }
 
@@ -1689,7 +1771,6 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
     _buildSpatialIndex();
     _buildSpeedColoredPolylines(points, route.speedIntervals);
 
-    // screenshot-style badges
     _updateRouteBubbles(
       origin: _pts.first.latLng!,
       destination: _pts.last.latLng!,
@@ -1810,7 +1891,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
           polylineId: const PolylineId('route_main'),
           points: decPts,
           color: AppColors.primary,
-          width: 7,
+          width: 3,
           startCap: Cap.roundCap,
           endCap: Cap.roundCap,
           jointType: JointType.round,
@@ -1905,8 +1986,8 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
 
   // ===== Screenshot-style route badges =====
   Future<void> _updateRouteBubbles({
-    required LatLng origin, // pickup
-    required LatLng destination, // destination
+    required LatLng origin,
+    required LatLng destination,
     required int secs,
   }) async {
     final minutes = math.max(1, (secs / 60).round());
@@ -1920,7 +2001,6 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
     setState(() {
       _markers.removeWhere((m) => m.markerId == _etaMarkerId || m.markerId == _minsMarkerId);
 
-      // destination badge (green)
       _markers.add(
         Marker(
           markerId: _minsMarkerId,
@@ -1932,7 +2012,6 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
         ),
       );
 
-      // pickup badge (blue pill)
       _markers.add(
         Marker(
           markerId: _etaMarkerId,
@@ -1947,7 +2026,6 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
   }
 
   Future<BitmapDescriptor> _buildMinutesCircleBadge(int minutes) async {
-    // green circle badge + bottom pinned dot (like screenshot)
     const w = 140.0, h = 160.0;
     final rec = ui.PictureRecorder();
     final c = Canvas(rec);
@@ -1955,7 +2033,6 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
     final center = const Offset(w / 2, 62);
     const badgeR = 44.0;
 
-    // shadow
     c.drawCircle(
       center + const Offset(0, 6),
       badgeR,
@@ -1964,10 +2041,8 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
         ..maskFilter = const ui.MaskFilter.blur(ui.BlurStyle.normal, 10),
     );
 
-    // badge
     c.drawCircle(center, badgeR, Paint()..color = const Color(0xFF00A651));
 
-    // "11" + "min"
     final numTp = TextPainter(
       text: TextSpan(
         text: '$minutes',
@@ -1981,6 +2056,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
       textDirection: ui.TextDirection.ltr,
     )..layout();
 
+    // ✅ FIXED: TextSpan uses `text:` (NOT `texttext:`)
     final minTp = TextPainter(
       text: const TextSpan(
         text: 'min',
@@ -1997,7 +2073,6 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
     numTp.paint(c, Offset(center.dx - numTp.width / 2, center.dy - 30));
     minTp.paint(c, Offset(center.dx - minTp.width / 2, center.dy + 6));
 
-    // connector
     final linePaint = Paint()
       ..color = const Color(0xFF00A651)
       ..strokeWidth = 6
@@ -2005,7 +2080,6 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
 
     c.drawLine(const Offset(w / 2, 110), const Offset(w / 2, 132), linePaint);
 
-    // pinned dot
     const dotCenter = Offset(w / 2, 144);
     c.drawCircle(dotCenter, 12, Paint()..color = Colors.white);
     c.drawCircle(
@@ -2047,7 +2121,6 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
       const Radius.circular(22),
     );
 
-    // shadow
     c.drawRRect(
       pill.shift(const Offset(0, 6)),
       Paint()
@@ -2055,10 +2128,8 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
         ..maskFilter = const ui.MaskFilter.blur(ui.BlurStyle.normal, 10),
     );
 
-    // fill
     c.drawRRect(pill, Paint()..color = const Color(0xFF1A73E8));
 
-    // pointer
     final p = Path()
       ..moveTo(w / 2 - 10, h - 10)
       ..lineTo(w / 2, h)
@@ -2074,7 +2145,6 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
   }
 
   double _calcFare(int meters) => 500.0 + (meters / 1000.0) * 120.0;
-
   String _fmtDistance(int m) => (m < 1000) ? '$m m' : '${(m / 1000.0).toStringAsFixed(1)} km';
 
   String _fmtDuration(int s) {
@@ -2179,237 +2249,6 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
     _expand();
   }
 
-  void _addStop() {
-    HapticFeedback.mediumImpact();
-    if (_pts.length >= 6) {
-      _toast('Limit Reached', 'Maximum 4 stops allowed.');
-      return;
-    }
-    final idx = _pts.length - 1;
-    final stopFocus = FocusNode();
-    final stopCtl = TextEditingController();
-    stopFocus.addListener(() {
-      if (stopFocus.hasFocus) _onFocused(idx);
-    });
-    final s = RoutePoint(
-      type: PointType.stop,
-      controller: stopCtl,
-      focus: stopFocus,
-      hint: 'Add stop ${_pts.length - 1}',
-    );
-    setState(() => _pts.insert(idx, s));
-    Future.delayed(const Duration(milliseconds: 80), () => s.focus.requestFocus());
-  }
-
-  void _removeStop(int idx) {
-    HapticFeedback.lightImpact();
-    if (idx <= 0 || idx >= _pts.length - 1) return;
-    setState(() {
-      final p = _pts.removeAt(idx);
-      p.controller.dispose();
-      p.focus.dispose();
-      _markers.removeWhere((m) => m.markerId.value == 'p_$idx');
-    });
-    if (_pts.first.latLng != null && _pts.last.latLng != null) {
-      _cachedRoute = null;
-      _buildRoute();
-    }
-  }
-
-  void _swap() {
-    HapticFeedback.mediumImpact();
-    if (_pts.length < 2) return;
-    setState(() {
-      final a = _pts.first, b = _pts.last;
-      final ll = a.latLng, id = a.placeId, txt = a.controller.text, cur = a.isCurrent;
-      a
-        ..latLng = b.latLng
-        ..placeId = b.placeId
-        ..controller.text = b.controller.text
-        ..isCurrent = false;
-      b
-        ..latLng = ll
-        ..placeId = id
-        ..controller.text = txt
-        ..isCurrent = cur;
-      if (a.latLng != null) _putMarker(0, a.latLng!, a.controller.text);
-      if (b.latLng != null) _putMarker(_pts.length - 1, b.latLng!, b.controller.text);
-    });
-    if (_pts.first.latLng != null && _pts.last.latLng != null) {
-      _cachedRoute = null;
-      _buildRoute();
-    }
-  }
-
-  // ===== Autocomplete =====
-  void _onTyping(String q) {
-    _debounce?.cancel();
-    if (q.trim().isEmpty) {
-      setState(() {
-        _sugs = _recents;
-        _isTyping = false;
-      });
-      return;
-    }
-    if (!_expanded) _expand();
-    setState(() => _isTyping = true);
-    _debounce = Timer(const Duration(milliseconds: 260), () => _fetchSugs(q.trim()));
-  }
-
-  void _ensureSession() {
-    if (_placesSession.isEmpty) {
-      _placesSession = _uuid.v4();
-    }
-  }
-
-  Future<void> _fetchSugs(String input) async {
-    if (_activeRequests >= kMaxConcurrentRequests) return;
-    _ensureSession();
-    _activeRequests++;
-    final origin = _curPos == null ? null : LatLng(_curPos!.latitude, _curPos!.longitude);
-    final int myQueryId = ++_lastQueryId;
-
-    try {
-      var result = await _auto
-          .autocomplete(
-        input: input,
-        sessionToken: _placesSession,
-        apiKey: ApiConstants.kGoogleApiKey,
-        country: 'ng',
-        origin: origin,
-      )
-          .timeout(kApiTimeout);
-
-      if (!mounted || myQueryId != _lastQueryId) return;
-
-      _autoStatus = result.status;
-      _autoError = result.errorMessage;
-      var sugs = result.predictions;
-
-      if (sugs.isEmpty) {
-        result = await _auto
-            .autocomplete(
-          input: input,
-          sessionToken: _placesSession,
-          apiKey: ApiConstants.kGoogleApiKey,
-          country: 'ng',
-          origin: origin,
-          relaxedTypes: true,
-        )
-            .timeout(kApiTimeout);
-        _autoStatus = result.status;
-        _autoError = result.errorMessage;
-        sugs = result.predictions;
-
-        if (sugs.isEmpty) {
-          sugs = await _auto
-              .findPlaceText(
-            input: input,
-            apiKey: ApiConstants.kGoogleApiKey,
-            origin: origin,
-          )
-              .timeout(kApiTimeout);
-          _autoStatus = _autoStatus ?? 'FALLBACK_FIND_PLACE';
-        }
-      }
-
-      setState(() {
-        _sugs = sugs;
-        _isTyping = false;
-        _isConnected = true;
-      });
-    } catch (_) {
-      if (!mounted || myQueryId != _lastQueryId) return;
-      setState(() {
-        _isTyping = false;
-        _isConnected = false;
-      });
-    } finally {
-      _activeRequests = (_activeRequests - 1).clamp(0, 9999);
-    }
-  }
-
-  Future<void> _selectSug(Suggestion s) async {
-    HapticFeedback.mediumImpact();
-    try {
-      final det = await _auto
-          .placeDetails(
-        placeId: s.placeId,
-        sessionToken: _placesSession,
-        apiKey: ApiConstants.kGoogleApiKey,
-      )
-          .timeout(kApiTimeout);
-      if (det.latLng == null) return;
-
-      setState(() {
-        final p = _pts[_activeIdx];
-        p
-          ..latLng = det.latLng
-          ..placeId = s.placeId
-          ..controller.text = s.mainText.isNotEmpty ? s.mainText : s.description
-          ..isCurrent = false;
-      });
-      _putMarker(_activeIdx, det.latLng!, s.description);
-      _saveRecent(s);
-      _placesSession = '';
-
-      await _map?.animateCamera(
-        CameraUpdate.newCameraPosition(CameraPosition(target: det.latLng!, zoom: 16, tilt: 45)),
-      );
-      _focusNextUnfilled();
-
-      if (_pts.first.latLng != null && _pts.last.latLng != null) {
-        _cachedRoute = null;
-        await _buildRoute();
-        await _enterOverview(); // now fits like screenshot
-        _collapse();
-        _startRideMarket();
-      } else if (_pts.first.latLng != null) {
-        _enterFollowMode();
-      }
-    } catch (_) {
-      _toast('Error', 'Failed to load place details.');
-    }
-  }
-
-  void _focusNextUnfilled() {
-    for (int i = 0; i < _pts.length; i++) {
-      if (_pts[i].latLng == null) {
-        Future.delayed(const Duration(milliseconds: 120), () => _pts[i].focus.requestFocus());
-        return;
-      }
-    }
-    Future.delayed(const Duration(milliseconds: 120), () {
-      FocusScope.of(context).unfocus();
-      _collapse();
-    });
-  }
-
-  // ===== Point markers =====
-  void _putMarker(int idx, LatLng pos, String title) {
-    final p = _pts[idx];
-    final id = MarkerId('p_$idx');
-    final icon = p.type == PointType.pickup
-        ? (_pickupIcon ?? BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueAzure))
-        : p.type == PointType.destination
-        ? (_dropIcon ?? BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueGreen))
-        : BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueOrange);
-
-    setState(() {
-      _markers.removeWhere((m) => m.markerId == id);
-      _markers.add(
-        Marker(
-          markerId: id,
-          position: pos,
-          icon: icon,
-          anchor: const Offset(0.5, 0.5),
-          infoWindow: InfoWindow(title: p.type.label, snippet: title),
-          consumeTapEvents: false,
-        ),
-      );
-    });
-  }
-
   // ===== Sheet & padding =====
   void _expand() {
     setState(() => _expanded = true);
@@ -2436,7 +2275,6 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
         _sheetHeight = newHeight;
         _applyMapPadding();
 
-        // debounce-fit route when padding changes (so polyline stays visible)
         if (_routePts.isNotEmpty && !_expanded) {
           _fitBoundsDebounce?.cancel();
           _fitBoundsDebounce = Timer(const Duration(milliseconds: 180), () {
@@ -2454,7 +2292,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
     if (!mounted) return;
     final mq = MediaQuery.of(context);
     final topPad = mq.padding.top + kHeaderVisualH;
-    final bottomPad = _sheetHeight + kBottomNavH + 12;
+    final bottomPad = _sheetHeight + _effectiveBottomNavH() + 12;
     setState(() {
       _mapPadding = EdgeInsets.fromLTRB(0, topPad, 0, bottomPad);
     });
@@ -2484,45 +2322,225 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
     );
   }
 
+  // =========================
+  // Nearby drivers (2s polling)
+  // =========================
+  double _homeRadiusKm() => 50.0;
+
+  bool _driversChangedEnough(DriverCar a, DriverCar b) {
+    final moved = _haversine(a.ll, b.ll);
+    final dh = (a.heading - b.heading).abs();
+    return moved >= 1.2 || dh >= 6.0;
+  }
+
+  void _startNearbyDriversPolling() {
+    if (!mounted) return;
+    if (_curPos == null) return;
+    if (_nearbyDriversTimer != null) return;
+    if (_marketOpen) return;
+
+    _nearbyDriversTimer = Timer.periodic(kDriversPollInterval, (_) => _tickNearbyDrivers());
+    _tickNearbyDrivers();
+  }
+
+  void _stopNearbyDriversPolling() {
+    _nearbyDriversTimer?.cancel();
+    _nearbyDriversTimer = null;
+    _nearbyDriversBusy = false;
+    _syncSearchCircle();
+  }
+
+  Future<void> _tickNearbyDrivers() async {
+    if (!mounted) return;
+    if (_curPos == null) return;
+    if (_map == null) return;
+    if (_expanded) return;
+    if (_marketOpen) return;
+    if (_nearbyDriversBusy) return;
+
+    final now = DateTime.now();
+    if (now.difference(_lastNearbyTickAt) < const Duration(milliseconds: 900)) return;
+    _lastNearbyTickAt = now;
+
+    _nearbyDriversBusy = true;
+    _syncSearchCircle();
+
+    try {
+      final origin = LatLng(_curPos!.latitude, _curPos!.longitude);
+
+      final res = await _api
+          .request(
+        ApiConstants.driversNearbyEndpoint,
+        method: 'POST',
+        data: {
+          'lat': origin.latitude.toString(),
+          'lng': origin.longitude.toString(),
+          'radius_km': _homeRadiusKm().toStringAsFixed(1),
+          'vehicle': 'car',
+          'cursor': _nearbyDriversCursor ?? '',
+        },
+      )
+          .timeout(const Duration(seconds: 6));
+
+      if (!mounted) return;
+
+      if (res.statusCode != 200) return;
+
+      dynamic decoded;
+      try {
+        decoded = jsonDecode(res.body);
+      } catch (_) {
+        return;
+      }
+
+      final Map<String, dynamic> m = decoded is Map<String, dynamic>
+          ? decoded
+          : (decoded is Map ? decoded.cast<String, dynamic>() : <String, dynamic>{});
+
+      final err = m['error'];
+      final errTrue = (err == true) || (err?.toString().toLowerCase() == 'true') || (err?.toString() == '1');
+      if (errTrue) return;
+
+      _nearbyDriversCursor = m['cursor']?.toString() ?? _nearbyDriversCursor;
+
+      List raw = const [];
+      final cand = m['drivers'] ?? m['delta'] ?? m['driversNearby'] ?? m['data'] ?? m['results'];
+      if (cand is List) raw = cand;
+
+      if (raw.isEmpty) {
+        _applyNearbyDrivers(const []);
+        return;
+      }
+
+      final nextList = <DriverCar>[];
+      for (final e in raw) {
+        if (e is Map) {
+          final d = DriverCar.fromJson(e.cast<String, dynamic>());
+          if (d.id.isEmpty) continue;
+          if (d.ll.latitude == 0.0 && d.ll.longitude == 0.0) continue;
+          nextList.add(d);
+        }
+      }
+
+      if (nextList.length > kMaxDriverMarkers) {
+        nextList.removeRange(kMaxDriverMarkers, nextList.length);
+      }
+
+      _applyNearbyDrivers(nextList);
+    } catch (_) {
+      // ignore
+    } finally {
+      _nearbyDriversBusy = false;
+      _syncSearchCircle();
+    }
+  }
+
+  void _applyNearbyDrivers(List<DriverCar> list) {
+    if (!mounted) return;
+
+    final now = DateTime.now();
+    bool changed = false;
+
+    for (final d in list) {
+      _driverLastSeen[d.id] = now;
+      final existing = _drivers[d.id];
+      if (existing == null) {
+        _drivers[d.id] = d;
+        changed = true;
+      } else {
+        if (_driversChangedEnough(existing, d)) {
+          _drivers[d.id] = d;
+          changed = true;
+        }
+      }
+    }
+
+    final staleIds = <String>[];
+    _driverLastSeen.forEach((id, lastSeen) {
+      if (now.difference(lastSeen).inSeconds > 10) staleIds.add(id);
+    });
+    for (final id in staleIds) {
+      _driverLastSeen.remove(id);
+      if (_drivers.remove(id) != null) changed = true;
+    }
+
+    if (changed) _refreshDriverMarkers();
+  }
+
   // ===== Ride marketplace control =====
   Future<void> _startRideMarket() async {
     if (!_hasPickupAndDropoff) return;
-    _marketSub?.cancel();
-    _market?.dispose();
 
-    _market = RideMarketService(api: _api, searchRadiusKm: 50);
+    _stopNearbyDriversPolling();
+
+    await _marketSub?.cancel();
+    _marketSub = null;
+
     setState(() {
       _offersLoading = true;
       _marketOpen = true;
     });
+    _syncSearchCircle();
 
-    _marketSub = _market!.stream(origin: _pts.first.latLng!, destination: _pts.last.latLng!).listen((snap) {
+    LatLng safePickup() {
+      final p = _pts.isNotEmpty ? _pts.first.latLng : null;
+      if (p != null) return p;
+      if (_curPos != null) return LatLng(_curPos!.latitude, _curPos!.longitude);
+      return _initialCam.target;
+    }
+
+    LatLng safeDrop() {
+      final d = _pts.isNotEmpty ? _pts.last.latLng : null;
+      if (d != null) return d;
+      return _initialCam.target;
+    }
+
+    _marketSub = _rideMarketService
+        .stream(
+      origin: safePickup(),
+      destination: safeDrop(),
+      originProvider: () => safePickup(),
+      destinationProvider: () => safeDrop(),
+      pollInterval: const Duration(seconds: 2),
+      simulateOnFailure: false,
+    )
+        .listen((snap) {
+      if (!mounted) return;
+
       _offers = snap.offers;
+
       _drivers
         ..clear()
         ..addEntries(snap.drivers.map((d) => MapEntry(d.id, d)));
+
       _refreshDriverMarkers();
-      if (mounted) setState(() => _offersLoading = false);
+
+      setState(() => _offersLoading = false);
+      _syncSearchCircle();
     }, onError: (_) {
-      if (mounted) setState(() => _offersLoading = false);
+      if (!mounted) return;
+      setState(() => _offersLoading = false);
+      _syncSearchCircle();
     });
   }
 
   void _stopRideMarket() {
     _marketSub?.cancel();
-    _market?.dispose();
     _marketSub = null;
-    _market = null;
+
     setState(() {
       _marketOpen = false;
+      _offersLoading = false;
       _offers = const [];
-      _drivers.clear();
     });
-    _refreshDriverMarkers();
+
+    _syncSearchCircle();
+    _startNearbyDriversPolling();
   }
 
   void _refreshDriverMarkers() {
     if (_driverIcon == null) return;
+
     final next = <Marker>{};
     for (final d in _drivers.values) {
       next.add(
@@ -2537,6 +2555,8 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
         ),
       );
     }
+
+    if (!mounted) return;
     setState(() {
       _driverMarkers
         ..clear()
@@ -2544,7 +2564,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
     });
   }
 
-  // ===== Booking adapter helpers (tolerant to different controller APIs) ====
+  // ===== Booking adapter helpers =====
   Future<String?> _startBooking({
     required String riderId,
     required RideOffer offer,
@@ -2554,7 +2574,6 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
     if (_booking == null) return null;
     String? id;
 
-    // Named param candidates
     try {
       id = await _booking.bookRide(
         riderId: riderId,
@@ -2585,7 +2604,6 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
     } catch (_) {}
     if (id != null) return id;
 
-    // Positional fallbacks
     try {
       id = await _booking.bookRide(riderId, offer, pickup, destination);
     } catch (_) {}
@@ -2601,7 +2619,6 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
     } catch (_) {}
     if (id != null) return id;
 
-    // Generic
     try {
       id = await _booking.start(
         riderId: riderId,
@@ -2692,35 +2709,60 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
     return false;
   }
 
-  bool _isAssignedOrEnroute(String p) => _phaseIs(p, [
-    'driver_assigned',
-    'assigned',
-    'confirmed',
-    'accepted',
-    'enroute_pickup',
-    'enroute',
-    'towards_pickup',
-    'to_pickup'
-  ]);
-
   bool _isArrived(String p) => _phaseIs(p, ['arrived_pickup', 'arrived', 'reach_pickup']);
   bool _isInRide(String p) => _phaseIs(p, ['in_ride', 'on_trip', 'in_progress', 'riding']);
   bool _isCompleted(String p) => _phaseIs(p, ['completed', 'done', 'finished', 'ended', 'settled']);
   bool _isCanceled(String p) => _phaseIs(p, ['canceled', 'cancelled', 'declined', 'aborted']);
 
-  // ===== Booking helpers =====
-  Future<void> _buildRouteFromDriverToPickup(LatLng driverLL) async {
-    if (_pts.isEmpty || _pts.first.latLng == null) return;
+  // ============================================================================
+  // Trip / Navigation (2s tick)
+  // ============================================================================
+  LatLng? _pickupAnchorLL() {
+    if (_pts.isNotEmpty && _pts.first.isCurrent && _curPos != null) {
+      return LatLng(_curPos!.latitude, _curPos!.longitude);
+    }
+    return _pts.isNotEmpty ? _pts.first.latLng : null;
+  }
+
+  LatLng? _destLL() => _pts.isNotEmpty ? _pts.last.latLng : null;
+
+  LatLng? _engagedDriverLLFromPools() {
+    final id = _engagedDriverId;
+    if (id != null && _drivers.containsKey(id)) return _drivers[id]!.ll;
+    return _engagedDriverLL;
+  }
+
+  void _setEngagedDriverMarker(LatLng ll, double heading) {
     if (!mounted) return;
+    setState(() {
+      _markers.removeWhere((m) => m.markerId == _driverSelectedId);
+      _markers.add(
+        Marker(
+          markerId: _driverSelectedId,
+          position: ll,
+          icon: _driverIcon ?? BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueViolet),
+          flat: true,
+          rotation: heading,
+          anchor: const Offset(0.5, 0.6),
+          zIndex: 50,
+        ),
+      );
+    });
+  }
 
+  Future<void> _updateDriverToPickupPolyline({required LatLng driverLL, required LatLng pickupLL}) async {
     final now = DateTime.now();
-    if (now.difference(_lastDriverLegRouteAt) < const Duration(seconds: 5)) return;
+    final movedEnough = _lastDriverLegFrom == null ? true : _haversine(_lastDriverLegFrom!, driverLL) >= 10.0;
+    final timeEnough = now.difference(_lastDriverLegRouteAt) >= const Duration(seconds: 4);
+    if (!movedEnough && !timeEnough) return;
+
     _lastDriverLegRouteAt = now;
+    _lastDriverLegFrom = driverLL;
 
-    final pickup = _pts.first.latLng!;
-    final v2 = await _computeRoutesV2(driverLL, pickup, const []);
-    if (v2 == null) return;
+    final v2 = await _computeRoutesV2(driverLL, pickupLL, const []);
+    if (v2 == null || v2.points.isEmpty) return;
 
+    if (!mounted) return;
     setState(() {
       _driverLines
         ..clear()
@@ -2750,19 +2792,553 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
         );
     });
 
-    if (_camMode != _CamMode.follow && !_expanded) {
-      await _enterOverview(fitWholeRoute: false);
+    if (!_didFitDriverLeg && !_expanded) {
+      _didFitDriverLeg = true;
+      final bounds = _boundsFromPoints([driverLL, pickupLL]);
+      await _animateBoundsSafe(bounds, padding: 90);
     }
   }
 
-  void _clearBookingVisuals() {
-    _booking?.dispose();
-    _booking = null;
-    _selectedOffer = null;
+  Future<void> _updateTripPolyline({required LatLng from, required LatLng to}) async {
+    final now = DateTime.now();
+    final movedEnough = _lastTripLegFrom == null ? true : _haversine(_lastTripLegFrom!, from) >= 12.0;
+    final timeEnough = now.difference(_lastTripLegRouteAt) >= const Duration(seconds: 6);
+    if (!movedEnough && !timeEnough) return;
+
+    _lastTripLegRouteAt = now;
+    _lastTripLegFrom = from;
+
+    final v2 = await _computeRoutesV2(from, to, const []);
+    if (v2 == null || v2.points.isEmpty) return;
+
+    if (!mounted) return;
+    setState(() {
+      _driverLines
+        ..clear()
+        ..add(
+          Polyline(
+            polylineId: const PolylineId('trip_halo'),
+            points: v2.points,
+            color: Colors.white.withOpacity(0.92),
+            width: 10,
+            startCap: Cap.roundCap,
+            endCap: Cap.roundCap,
+            jointType: JointType.round,
+            geodesic: true,
+          ),
+        )
+        ..add(
+          Polyline(
+            polylineId: const PolylineId('trip_path'),
+            points: v2.points,
+            color: const Color(0xFF1A73E8),
+            width: 6,
+            startCap: Cap.roundCap,
+            endCap: Cap.roundCap,
+            jointType: JointType.round,
+            geodesic: true,
+          ),
+        );
+    });
+
+    if (!_didFitTripLeg && !_expanded) {
+      _didFitTripLeg = true;
+      final bounds = _boundsFromPoints([from, to]);
+      await _animateBoundsSafe(bounds, padding: 110);
+    }
+  }
+
+  void _startDriverToPickupTick() {
+    _tripTickTimer?.cancel();
+    _tripTickTimer = Timer.periodic(const Duration(seconds: 2), (_) async {
+      if (!mounted) return;
+      if (_tripPhase != TripPhase.driverToPickup && _tripPhase != TripPhase.waitingPickup) return;
+
+      final pickup = _pickupAnchorLL();
+      if (pickup == null) return;
+
+      final driverLL = _engagedDriverLLFromPools();
+      if (driverLL == null) return;
+
+      final head = (_engagedDriverId != null && _drivers.containsKey(_engagedDriverId))
+          ? _drivers[_engagedDriverId]!.heading
+          : 0.0;
+      _engagedDriverLL = driverLL;
+      _setEngagedDriverMarker(driverLL, head);
+
+      if (_tripPhase == TripPhase.driverToPickup) {
+        await _updateDriverToPickupPolyline(driverLL: driverLL, pickupLL: pickup);
+
+        final meters = _haversine(driverLL, pickup);
+        if (meters <= _arriveMeters) {
+          setState(() => _tripPhase = TripPhase.waitingPickup);
+          _toast('Driver arrived', 'You can now start the trip.');
+        }
+      }
+    });
+  }
+
+  void _startTripNavTick() {
+    _tripTickTimer?.cancel();
+    _tripTickTimer = Timer.periodic(const Duration(seconds: 2), (_) async {
+      if (!mounted) return;
+      if (_tripPhase != TripPhase.enRoute) return;
+
+      final user = (_curPos == null) ? null : LatLng(_curPos!.latitude, _curPos!.longitude);
+      final dest = _destLL();
+      if (user == null || dest == null) return;
+
+      await _updateTripPolyline(from: user, to: dest);
+
+      final bearing = _bearingBetween(user, dest);
+
+      _navMode = true;
+      _camMode = _CamMode.follow;
+      _rotateWithHeading = false;
+      _useForwardAnchor = false;
+
+      try {
+        await _map?.animateCamera(
+          CameraUpdate.newCameraPosition(
+            CameraPosition(
+              target: user,
+              zoom: 17.3,
+              tilt: 65,
+              bearing: bearing,
+            ),
+          ),
+        );
+      } catch (_) {}
+    });
+  }
+
+  void _resetTripState({bool keepRoute = true}) {
+    _tripTickTimer?.cancel();
+    _navMode = false;
+    _tripPhase = TripPhase.browsing;
+    _engagedDriverId = null;
+    _engagedDriverLL = null;
+    _didFitDriverLeg = false;
+    _didFitTripLeg = false;
+
+    _lastDriverLegFrom = null;
+    _lastTripLegFrom = null;
+    _lastDriverLegRouteAt = DateTime.fromMillisecondsSinceEpoch(0);
+    _lastTripLegRouteAt = DateTime.fromMillisecondsSinceEpoch(0);
+
+    _bookingSub?.cancel();
+    _bookingSub = null;
+
+    if (!mounted) return;
     setState(() {
       _driverLines.clear();
       _markers.removeWhere((m) => m.markerId == _driverSelectedId);
     });
+
+    _enterFollowMode();
+    _syncSearchCircle();
+  }
+
+  Future<void> _onBookDriverAndOffer(RideNearbyDriver driver, RideOffer offer) async {
+    _stopRideMarket();
+
+    _selectedOffer = offer;
+    _didFitDriverLeg = false;
+    _didFitTripLeg = false;
+
+    _engagedDriverId = driver.id;
+    _engagedDriverLL = LatLng(driver.lat, driver.lng);
+
+    setState(() {
+      _tripPhase = TripPhase.driverToPickup;
+    });
+
+    final riderId = _prefs.getString('user_id') ?? 'guest';
+    _bookingSub?.cancel();
+    try {
+      _booking?.dispose();
+    } catch (_) {}
+    _booking = BookingController(_api);
+
+    final pickup = _pickupAnchorLL() ?? _pts.first.latLng!;
+    final dest = _destLL() ?? _pts.last.latLng!;
+
+    final rideId = await _startBooking(
+      riderId: riderId,
+      offer: offer,
+      pickup: pickup,
+      destination: dest,
+    );
+
+    if (rideId == null) {
+      _toast('Booking failed', 'Could not book this driver.');
+      _resetTripState();
+      _startRideMarket();
+      return;
+    }
+
+    _startDriverToPickupTick();
+
+    final stream = _bookingUpdatesStream();
+    if (stream != null) {
+      _bookingSub = stream.listen((u) async {
+        if (!mounted) return;
+
+        final drvLL = _coerceDriverLL(u);
+        final head = _coerceHeading(u);
+
+        if (drvLL != null) {
+          _engagedDriverLL = drvLL;
+          _setEngagedDriverMarker(drvLL, head);
+        }
+
+        final ph = _coercePhase(u);
+
+        if (_isArrived(ph) && _tripPhase == TripPhase.driverToPickup) {
+          setState(() => _tripPhase = TripPhase.waitingPickup);
+        }
+
+        if (_isInRide(ph) && _tripPhase != TripPhase.enRoute) {
+          await _startTrip();
+        }
+
+        if (_isCompleted(ph) || _isCanceled(ph)) {
+          _resetTripState();
+        }
+      }, onError: (_) {});
+    }
+  }
+
+  Future<void> _startTrip() async {
+    if (_tripPhase != TripPhase.waitingPickup && _tripPhase != TripPhase.driverToPickup) return;
+
+    setState(() => _tripPhase = TripPhase.enRoute);
+
+    setState(() {
+      _driverLines.clear();
+    });
+
+    _startTripNavTick();
+  }
+
+  // ============================================================================
+  // ✅ AUTOCOMPLETE + STOPS + SWAP (WAS MISSING IN YOUR FILE → FIXED)
+  // ============================================================================
+  void _ensurePlacesSession() {
+    if (_placesSession.isEmpty) _placesSession = _uuid.v4();
+  }
+
+  void _onTyping(String q) {
+    _debounce?.cancel();
+    final query = q.trim();
+
+    if (query.isEmpty) {
+      if (!mounted) return;
+      setState(() {
+        _sugs = _recents;
+        _isTyping = false;
+        _autoStatus = null;
+        _autoError = null;
+      });
+      return;
+    }
+
+    if (!_expanded) _expand();
+    if (!mounted) return;
+    setState(() => _isTyping = true);
+
+    _debounce = Timer(const Duration(milliseconds: 260), () => _fetchSugs(query));
+  }
+
+  Future<void> _fetchSugs(String input) async {
+    if (_activeRequests >= kMaxConcurrentRequests) return;
+    _ensurePlacesSession();
+
+    final int myQueryId = ++_lastQueryId;
+    _activeRequests++;
+
+    final origin = _curPos == null ? null : LatLng(_curPos!.latitude, _curPos!.longitude);
+
+    try {
+      dynamic result = await _auto
+          .autocomplete(
+        input: input,
+        sessionToken: _placesSession,
+        apiKey: ApiConstants.kGoogleApiKey,
+        country: 'ng',
+        origin: origin,
+      )
+          .timeout(kApiTimeout);
+
+      if (!mounted || myQueryId != _lastQueryId) return;
+
+      try {
+        _autoStatus = result.status?.toString();
+        _autoError = result.errorMessage?.toString();
+      } catch (_) {}
+
+      List<Suggestion> sugs = const [];
+      try {
+        final preds = result.predictions;
+        if (preds is List<Suggestion>) {
+          sugs = preds;
+        } else if (preds is List) {
+          sugs = preds.whereType<Suggestion>().toList();
+        }
+      } catch (_) {}
+
+      // Fallbacks if empty
+      if (sugs.isEmpty) {
+        try {
+          result = await _auto
+              .autocomplete(
+            input: input,
+            sessionToken: _placesSession,
+            apiKey: ApiConstants.kGoogleApiKey,
+            country: 'ng',
+            origin: origin,
+            relaxedTypes: true,
+          )
+              .timeout(kApiTimeout);
+
+          if (!mounted || myQueryId != _lastQueryId) return;
+
+          try {
+            _autoStatus = result.status?.toString();
+            _autoError = result.errorMessage?.toString();
+          } catch (_) {}
+
+          final preds = result.predictions;
+          if (preds is List<Suggestion>) {
+            sugs = preds;
+          } else if (preds is List) {
+            sugs = preds.whereType<Suggestion>().toList();
+          }
+        } catch (_) {}
+      }
+
+      if (sugs.isEmpty) {
+        try {
+          final alt = await _auto
+              .findPlaceText(
+            input: input,
+            apiKey: ApiConstants.kGoogleApiKey,
+            origin: origin,
+          )
+              .timeout(kApiTimeout);
+
+          if (!mounted || myQueryId != _lastQueryId) return;
+
+          if (alt is List<Suggestion>) {
+            sugs = alt;
+          } else if (alt is List) {
+            sugs = alt.whereType<Suggestion>().toList();
+          }
+          _autoStatus = _autoStatus ?? 'FALLBACK_FIND_PLACE';
+        } catch (_) {}
+      }
+
+      if (!mounted || myQueryId != _lastQueryId) return;
+      setState(() {
+        _sugs = sugs.isNotEmpty ? sugs : _recents;
+        _isTyping = false;
+        _isConnected = true;
+      });
+    } catch (_) {
+      if (!mounted || myQueryId != _lastQueryId) return;
+      setState(() {
+        _isTyping = false;
+        _isConnected = false;
+        _sugs = _recents;
+      });
+    } finally {
+      _activeRequests = (_activeRequests - 1).clamp(0, 9999);
+    }
+  }
+
+  LatLng? _coerceLatLngFromDetails(dynamic det) {
+    if (det == null) return null;
+    try {
+      final ll = det.latLng;
+      if (ll is LatLng) return ll;
+    } catch (_) {}
+    try {
+      final g = det.geometry ?? det.result?.geometry ?? det['geometry'];
+      final loc = g?.location ?? g?['location'] ?? det.location ?? det['location'];
+      final lat = (loc?.lat ?? loc?['lat'] ?? loc?.latitude ?? loc?['latitude']);
+      final lng = (loc?.lng ?? loc?['lng'] ?? loc?.longitude ?? loc?['longitude']);
+      if (lat is num && lng is num) return LatLng(lat.toDouble(), lng.toDouble());
+      if (lat is String && lng is String) {
+        final la = double.tryParse(lat);
+        final lo = double.tryParse(lng);
+        if (la != null && lo != null) return LatLng(la, lo);
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  void _focusNextUnfilled() {
+    // Prefer next empty text field after current selection.
+    for (int i = 0; i < _pts.length; i++) {
+      if (_pts[i].controller.text.trim().isEmpty) {
+        _activeIdx = i;
+        _pts[i].focus.requestFocus();
+        return;
+      }
+    }
+    // If all filled, close overlay.
+    _collapse();
+  }
+
+  Future<void> _selectSug(Suggestion s) async {
+    HapticFeedback.selectionClick();
+    _ensurePlacesSession();
+
+    try {
+      final dynamic det = await _auto
+          .placeDetails(
+        placeId: s.placeId,
+        sessionToken: _placesSession,
+        apiKey: ApiConstants.kGoogleApiKey,
+      )
+          .timeout(kApiTimeout);
+
+      final ll = _coerceLatLngFromDetails(det);
+      if (ll == null) {
+        _toast('Place Error', 'Could not read location details.');
+        return;
+      }
+
+      if (!mounted) return;
+
+      setState(() {
+        final p = _pts[_activeIdx];
+        p
+          ..latLng = ll
+          ..placeId = s.placeId
+          ..controller.text = (s.mainText.isNotEmpty ? s.mainText : s.description)
+          ..isCurrent = false;
+      });
+
+      _putMarker(_activeIdx, ll, s.description);
+      _saveRecent(s);
+      _placesSession = ''; // end session after a selection
+
+      // If route is complete, build + fit + open market automatically.
+      if (_hasPickupAndDropoff) {
+        _cachedRoute = null;
+        await _buildRoute();
+        await _enterOverview(fitWholeRoute: true);
+        await _startRideMarket();
+        _collapse();
+      } else {
+        _focusNextUnfilled();
+      }
+    } catch (_) {
+      _toast('Network Error', 'Failed to load place details.');
+    }
+  }
+
+  void _addStop() {
+    HapticFeedback.selectionClick();
+    // Insert before destination.
+    if (_pts.length >= 6) {
+      _toast('Limit', 'Maximum stops reached.');
+      return;
+    }
+
+    final insertAt = (_pts.length - 1).clamp(1, _pts.length);
+    final stopFocus = FocusNode();
+    final stopCtl = TextEditingController();
+
+    final idxForListener = insertAt;
+    stopFocus.addListener(() {
+      if (stopFocus.hasFocus) _onFocused(idxForListener);
+    });
+
+    final stop = RoutePoint(
+      type: PointType.stop,
+      controller: stopCtl,
+      focus: stopFocus,
+      hint: 'Add stop',
+    );
+
+    if (!mounted) return;
+    setState(() {
+      _pts.insert(insertAt, stop);
+      _activeIdx = insertAt;
+    });
+
+    _expand();
+    Future.delayed(const Duration(milliseconds: 40), () {
+      if (!mounted) return;
+      stopFocus.requestFocus();
+    });
+  }
+
+  void _removeStop(int index) {
+    if (index <= 0) return;
+    if (index >= _pts.length - 1) return;
+
+    HapticFeedback.selectionClick();
+
+    final removed = _pts[index];
+    if (!mounted) return;
+
+    setState(() {
+      _pts.removeAt(index);
+      _markers.removeWhere((m) => m.markerId.value == 'p_$index');
+    });
+
+    removed.controller.dispose();
+    removed.focus.dispose();
+
+    // Repaint markers for remaining points (ids depend on index)
+    for (int i = 0; i < _pts.length; i++) {
+      final ll = _pts[i].latLng;
+      if (ll != null) _putMarker(i, ll, _pts[i].controller.text);
+    }
+
+    if (_hasPickupAndDropoff) {
+      _cachedRoute = null;
+      _buildRoute();
+    }
+  }
+
+  void _swap() {
+    if (_pts.length < 2) return;
+    HapticFeedback.selectionClick();
+
+    final a = _pts.first;
+    final b = _pts.last;
+
+    if (!mounted) return;
+    setState(() {
+      final ll = a.latLng;
+      final pid = a.placeId;
+      final txt = a.controller.text;
+      final isCur = a.isCurrent;
+
+      a
+        ..latLng = b.latLng
+        ..placeId = b.placeId
+        ..controller.text = b.controller.text
+        ..isCurrent = false;
+
+      b
+        ..latLng = ll
+        ..placeId = pid
+        ..controller.text = txt
+        ..isCurrent = isCur;
+    });
+
+    if (a.latLng != null) _putMarker(0, a.latLng!, a.controller.text);
+    if (b.latLng != null) _putMarker(_pts.length - 1, b.latLng!, b.controller.text);
+
+    if (_hasPickupAndDropoff) {
+      _cachedRoute = null;
+      _buildRoute();
+    }
   }
 
   // ===== Build =====
@@ -2778,9 +3354,12 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
       WidgetsBinding.instance.addPostFrameCallback((_) => _scheduleMapPaddingUpdate());
     }
 
-    final double fabBottom = (_sheetHeight + kBottomNavH + 16).clamp(96.0, 520.0);
+    final bottomNavH = _effectiveBottomNavH();
+    final double fabBottom = (_sheetHeight + bottomNavH + 16).clamp(96.0, 520.0);
     final hasSummary = _distanceText != null && _durationText != null;
-    final bottomSheetMaxH = mq.size.height * 0.60; // finite -> fixes crash
+    final bottomSheetMaxH = mq.size.height * 0.60;
+
+    final bool tripActive = _tripPhase != TripPhase.browsing;
 
     return Scaffold(
       key: _scaffoldKey,
@@ -2808,7 +3387,6 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
                 _scheduleMapPaddingUpdate();
                 _lastCamTarget = _initialCam.target;
 
-                // if route already exists, refit once map is ready
                 if (_routePts.isNotEmpty) {
                   Future.delayed(const Duration(milliseconds: 60), () => _fitCurrentRouteToViewport());
                 }
@@ -2848,7 +3426,6 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
               ),
             ),
 
-          // Top gradient
           Positioned(
             top: 0,
             left: 0,
@@ -2860,11 +3437,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
                   gradient: LinearGradient(
                     begin: Alignment.topCenter,
                     end: Alignment.bottomCenter,
-                    colors: [
-                      Colors.black.withOpacity(.60),
-                      Colors.black.withOpacity(.25),
-                      Colors.transparent
-                    ],
+                    colors: [Colors.black.withOpacity(.60), Colors.black.withOpacity(.25), Colors.transparent],
                     stops: const [0.0, 0.65, 1.0],
                   ),
                 ),
@@ -2872,7 +3445,6 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
             ),
           ),
 
-          // Header
           Positioned(
             top: safeTop,
             left: 0,
@@ -2886,7 +3458,6 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
             ),
           ),
 
-          // Compact trip summary
           if (hasSummary)
             Positioned(
               top: safeTop + (kHeaderVisualH * s) + 6,
@@ -2952,7 +3523,6 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
               ),
             ),
 
-          // Locate / Follow FAB
           Positioned(
             right: 14 * s,
             bottom: fabBottom,
@@ -2973,7 +3543,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
             ),
           ),
 
-          // Bottom sheet area — RouteSheet OR RideMarketSheet (finite height)
+          // BOTTOM SHEET AREA
           Positioned(
             left: 0,
             right: 0,
@@ -2985,10 +3555,9 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
                 child: !_hasPickupAndDropoff
                     ? RouteSheet(
                   key: ValueKey('route_sheet_${_expanded}_$_marketOpen'),
-                  bottomNavHeight: kBottomNavH,
+                  bottomNavHeight: bottomNavH,
                   recentDestinations: _recents,
                   onSearchTap: () {
-                    _dbg("[RouteSheet] onSearchTap triggered");
                     setState(() {
                       _activeIdx = _pts.length - 1;
                       _expanded = true;
@@ -2997,137 +3566,47 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
                     _scheduleMapPaddingUpdate();
                   },
                   onRecentTap: (sug) async {
-                    _dbg("[RouteSheet] onRecentTap", sug);
                     await _selectSug(sug);
                   },
                 )
-                    : StreamBuilder<RideMarketSnapshot>(
-                  stream: _rideMarketService.stream(
-                    origin: _pts.first.latLng!,
-                    destination: _pts.last.latLng!,
-                    simulateOnFailure: false,
-                  ),
-                  builder: (context, snapshot) {
-                    _dbg("[RideMarketSheet] StreamBuilder rebuild, hasData=${snapshot.hasData}");
-                    List<RideOffer> offers = [];
-                    List<DriverCar> drivers = [];
-
-                    if (snapshot.hasError) {
-                      _dbg("[RideMarketSheet] Stream error", snapshot.error ?? '');
-                    }
-
-                    if (snapshot.hasData) {
-                      offers = snapshot.data!.offers;
-                      drivers = snapshot.data!.drivers;
-                    }
-
-                    return RideMarketSheet(
-                      bottomNavHeight: kBottomNavH,
-                      originText: _pts.first.controller.text,
-                      destinationText: _pts.last.controller.text,
-                      distanceText: _distanceText,
-                      durationText: _durationText,
-                      offers: offers,
-                      loading: !snapshot.hasData,
-                      onRefresh: () {
-                        _dbg("[RideMarketSheet] onRefresh triggered");
-                        _startRideMarket();
-                      },
-                      onCancel: () {
-                        _dbg("[RideMarketSheet] onCancel triggered");
-                        _stopRideMarket();
-                        _clearBookingVisuals();
-                        setState(() {
-                          _pts.last
-                            ..latLng = null
-                            ..controller.text = '';
-                          _marketOpen = false;
-                        });
-                      },
-                      onSelect: (offer) async {
-                        _dbg("[RideMarketSheet] onSelect offer", offer.id);
-                        _stopRideMarket();
-                        _selectedOffer = offer;
-
-                        final riderId = _prefs.getString('user_id') ?? 'guest';
-                        _booking?.dispose();
-                        _booking = BookingController(_api);
-
-                        final rideId = await _startBooking(
-                          riderId: riderId,
-                          offer: offer,
-                          pickup: _pts.first.latLng!,
-                          destination: _pts.last.latLng!,
-                        );
-
-                        if (rideId == null) {
-                          _dbg("[RideMarketSheet] Booking failed for offer", offer.id);
-                          _toast('Booking failed', 'Could not book this driver.');
-                          _startRideMarket();
-                          return;
-                        }
-
-                        _dbg("[RideMarketSheet] Booking successful, rideId", rideId);
-
-                        final stream = _bookingUpdatesStream();
-                        if (stream == null) {
-                          _dbg("[RideMarketSheet] Booking update stream is null!");
-                          _toast('Booking error', 'No update stream from controller.');
-                          return;
-                        }
-
-                        stream.listen((u) async {
-                          if (!mounted) return;
-
-                          final drvLL = _coerceDriverLL(u);
-                          if (drvLL != null) {
-                            final head = _coerceHeading(u);
-                            setState(() {
-                              _markers.removeWhere((m) => m.markerId == _driverSelectedId);
-                              _markers.add(
-                                Marker(
-                                  markerId: _driverSelectedId,
-                                  position: drvLL,
-                                  icon: _driverIcon ??
-                                      BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueViolet),
-                                  flat: true,
-                                  rotation: head,
-                                  anchor: const Offset(0.5, 0.6),
-                                  zIndex: 50,
-                                ),
-                              );
-                            });
-                            _dbg("[BookingStream] Driver moved to", '${drvLL.latitude},${drvLL.longitude}');
-
-                            // Optional: if you want driver→pickup route visible, uncomment:
-                            // await _buildRouteFromDriverToPickup(drvLL);
-                          }
-
-                          final ph = _coercePhase(u);
-                          _dbg("[BookingStream] Ride phase", ph);
-
-                          if (_isArrived(ph)) _toast('Driver arrived', 'Please meet your driver.');
-                          if (_isInRide(ph)) setState(() => _driverLines.clear());
-                          if (_isCompleted(ph)) _clearBookingVisuals();
-                          if (_isCanceled(ph)) _clearBookingVisuals();
-                        });
-
-                        setState(() => _marketOpen = false);
-                      },
-                    );
+                    : (tripActive
+                    ? _tripControlSheet(bottomNavH)
+                    : RideMarketSheet(
+                  bottomNavHeight: bottomNavH,
+                  originText: _pts.first.controller.text,
+                  destinationText: _pts.last.controller.text,
+                  distanceText: _distanceText,
+                  durationText: _durationText,
+                  offers: _offers,
+                  loading: _offersLoading,
+                  drivers: _drivers.values.toList(),
+                  driversNearbyCount: _drivers.length,
+                  onRefresh: () => _startRideMarket(),
+                  onCancel: () {
+                    _stopRideMarket();
+                    _resetTripState();
+                    setState(() {
+                      _pts.last
+                        ..latLng = null
+                        ..controller.text = '';
+                      _marketOpen = false;
+                    });
+                    _syncSearchCircle();
                   },
-                ),
+                  onBook: (driver, offer) async {
+                    await _onBookDriverAndOffer(driver, offer);
+                  },
+                )),
               ),
             ),
           ),
 
-          // Full-screen overlay for search/autocomplete
           if (_expanded)
             FadeTransition(
               opacity: _overlayFadeAnim,
               child: AutoOverlay(
                 safeTop: safeTop,
-                bottomPadding: kBottomNavH + 12,
+                bottomPadding: bottomNavH + 12,
                 autoStatus: _autoStatus,
                 autoError: _autoError,
                 isTyping: _isTyping,
@@ -3155,7 +3634,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
             ),
         ],
       ),
-      bottomNavigationBar: !_marketOpen
+      bottomNavigationBar: (!_marketOpen && _tripPhase == TripPhase.browsing)
           ? CustomBottomNavBar(
         currentIndex: _currentIndex,
         onTap: (i) {
@@ -3166,6 +3645,117 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
         },
       )
           : null,
+    );
+  }
+
+  // Trip control bottom sheet
+  Widget _tripControlSheet(double bottomNavHeight) {
+    final cs = Theme.of(context).colorScheme;
+
+    String title;
+    String subtitle;
+    bool canStart = false;
+
+    if (_tripPhase == TripPhase.driverToPickup) {
+      title = 'Driver on the way';
+      subtitle = 'Tracking driver → pickup (updates every 2s)';
+    } else if (_tripPhase == TripPhase.waitingPickup) {
+      title = 'Driver arrived';
+      subtitle = 'You can now start the trip';
+      canStart = true;
+    } else {
+      title = 'On Trip';
+      subtitle = 'Navigation mode active';
+    }
+
+    return Align(
+      alignment: Alignment.bottomCenter,
+      child: Material(
+        color: Colors.transparent,
+        child: Container(
+          width: double.infinity,
+          decoration: BoxDecoration(
+            color: Theme.of(context).cardColor,
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(18)),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(0.18),
+                blurRadius: 16,
+                offset: const Offset(0, -6),
+              ),
+            ],
+          ),
+          child: SafeArea(
+            top: false,
+            child: Padding(
+              padding: EdgeInsets.fromLTRB(12, 10, 12, 10 + bottomNavHeight),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Container(
+                    width: 54,
+                    height: 5,
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(999),
+                      color: cs.onSurface.withOpacity(0.18),
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  Row(
+                    children: [
+                      IconButton(
+                        onPressed: () {
+                          _resetTripState();
+                          _startRideMarket();
+                        },
+                        icon: const Icon(Icons.close_rounded),
+                      ),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(title, style: const TextStyle(fontWeight: FontWeight.w900)),
+                            const SizedBox(height: 3),
+                            Text(
+                              subtitle,
+                              style: TextStyle(
+                                fontWeight: FontWeight.w700,
+                                color: cs.onSurface.withOpacity(0.60),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      if (_tripPhase == TripPhase.enRoute)
+                        Icon(Icons.navigation_rounded, color: AppColors.primary),
+                    ],
+                  ),
+                  const SizedBox(height: 10),
+                  SizedBox(
+                    width: double.infinity,
+                    height: 52,
+                    child: ElevatedButton(
+                      onPressed: canStart ? () => _startTrip() : null,
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: AppColors.primary,
+                        foregroundColor: Colors.white,
+                        disabledBackgroundColor: AppColors.primary.withOpacity(0.35),
+                        disabledForegroundColor: Colors.white.withOpacity(0.75),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                        elevation: 0,
+                      ),
+                      child: Text(
+                        _tripPhase == TripPhase.enRoute ? 'Trip started' : 'Start Trip',
+                        style: const TextStyle(fontWeight: FontWeight.w900),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
     );
   }
 
@@ -3186,6 +3776,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
       });
       _putMarker(0, ll, addr);
       _putLocationCircle(ll, accuracy: _curPos!.accuracy);
+      _syncSearchCircle();
     } catch (_) {
       final ll = LatLng(_curPos!.latitude, _curPos!.longitude);
       setState(() {
@@ -3195,6 +3786,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
           ..isCurrent = true;
       });
       _putMarker(0, ll, 'Current location');
+      _syncSearchCircle();
     }
   }
 
@@ -3203,6 +3795,33 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
     final ll = LatLng(_curPos!.latitude, _curPos!.longitude);
     setState(() => _pts.first.latLng = ll);
     _putMarker(0, ll, _pts.first.controller.text);
+    _syncSearchCircle();
+  }
+
+  // ===== Point markers =====
+  void _putMarker(int idx, LatLng pos, String title) {
+    final p = _pts[idx];
+    final id = MarkerId('p_$idx');
+    final icon = p.type == PointType.pickup
+        ? (_pickupIcon ?? BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueAzure))
+        : p.type == PointType.destination
+        ? (_dropIcon ?? BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueGreen))
+        : BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueOrange);
+
+    if (!mounted) return;
+    setState(() {
+      _markers.removeWhere((m) => m.markerId == id);
+      _markers.add(
+        Marker(
+          markerId: id,
+          position: pos,
+          icon: icon,
+          anchor: const Offset(0.5, 0.5),
+          infoWindow: InfoWindow(title: p.type.label, snippet: title),
+          consumeTapEvents: false,
+        ),
+      );
+    });
   }
 
   String _fmtPlacemark(geo.Placemark? p) {

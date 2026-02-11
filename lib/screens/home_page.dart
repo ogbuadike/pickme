@@ -1612,6 +1612,8 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
 
       _putLocationCircle(ll, accuracy: pos.accuracy);
       _syncSearchCircle();
+      _maybeKickNearbyDrivers();
+
     });
   }
 
@@ -2374,15 +2376,32 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
     return moved >= 1.2 || dh >= 6.0;
   }
 
-  void _startNearbyDriversPolling() {
+  void _startNearbyDriversPolling({bool force = false}) {
     if (!mounted) return;
-    if (_curPos == null) return;
-    if (_nearbyDriversTimer != null) return;
+    if (_tripPhase != TripPhase.browsing) return;
     if (_marketOpen) return;
 
+    // if already running and not forcing, do nothing
+    if (_nearbyDriversTimer != null && !force) return;
+
+    // Ensure we have *some* location seed ASAP (even if _initLocation hasn't completed)
+    if (_curPos == null) {
+      Geolocator.getLastKnownPosition().then((p) {
+        if (!mounted || p == null) return;
+        _curPos ??= p;
+        _startNearbyDriversPolling(force: true);
+      });
+      return;
+    }
+
+    // Restart cleanly if forcing
+    _nearbyDriversTimer?.cancel();
     _nearbyDriversTimer = Timer.periodic(kDriversPollInterval, (_) => _tickNearbyDrivers());
+
+    // Immediate first tick
     _tickNearbyDrivers();
   }
+
 
   void _stopNearbyDriversPolling() {
     _nearbyDriversTimer?.cancel();
@@ -2391,12 +2410,27 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
     _syncSearchCircle();
   }
 
+  void _maybeKickNearbyDrivers() {
+    if (!mounted) return;
+    if (_tripPhase != TripPhase.browsing) return;
+    if (_marketOpen) return;
+    if (_nearbyDriversTimer != null) return;
+    if (_curPos == null) return;
+
+    _startNearbyDriversPolling();
+  }
+
+
   Future<void> _tickNearbyDrivers() async {
     if (!mounted) return;
     if (_curPos == null) return;
-    if (_map == null) return;
-    if (_expanded) return;
+
+    // Allow first fetch even if overlay is open, so markers appear immediately on load.
+    final bool allowFirstFetchWhileExpanded = _drivers.isEmpty;
+    if (_expanded && !allowFirstFetchWhileExpanded) return;
+
     if (_marketOpen) return;
+    if (_tripPhase != TripPhase.browsing) return;
     if (_nearbyDriversBusy) return;
 
     final now = DateTime.now();
@@ -2407,7 +2441,11 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
     _syncSearchCircle();
 
     try {
-      final origin = LatLng(_curPos!.latitude, _curPos!.longitude);
+      // Use pickup if available, else GPS
+      final LatLng origin =
+      (_pts.isNotEmpty && _pts.first.latLng != null)
+          ? _pts.first.latLng!
+          : LatLng(_curPos!.latitude, _curPos!.longitude);
 
       final riderId =
           _prefs.getString('user_id') ??
@@ -2419,21 +2457,16 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
         ApiConstants.driversNearbyEndpoint,
         method: 'POST',
         data: {
-          // ✅ required location fields (unchanged)
           'lat': origin.latitude.toString(),
           'lng': origin.longitude.toString(),
           'radius_km': _homeRadiusKm().toStringAsFixed(1),
           'vehicle': 'car',
           'cursor': _nearbyDriversCursor ?? '',
-
-          // ✅ include user id (send multiple keys to match any backend expectation)
           'user_id': riderId,
         },
       ).timeout(const Duration(seconds: 6));
 
-
       if (!mounted) return;
-
       if (res.statusCode != 200) return;
 
       dynamic decoded;
@@ -2448,13 +2481,22 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
           : (decoded is Map ? decoded.cast<String, dynamic>() : <String, dynamic>{});
 
       final err = m['error'];
-      final errTrue = (err == true) || (err?.toString().toLowerCase() == 'true') || (err?.toString() == '1');
+      final errTrue = (err == true) ||
+          (err?.toString().toLowerCase() == 'true') ||
+          (err?.toString() == '1');
       if (errTrue) return;
 
       _nearbyDriversCursor = m['cursor']?.toString() ?? _nearbyDriversCursor;
 
+      // Broader compatibility with backend field names
       List raw = const [];
-      final cand = m['drivers'] ?? m['delta'] ?? m['driversNearby'] ?? m['data'] ?? m['results'];
+      final cand = m['drivers'] ??
+          m['delta'] ??
+          m['driversNearby'] ??
+          m['drivers_nearby'] ??
+          m['nearbyDrivers'] ??
+          m['data'] ??
+          m['results'];
       if (cand is List) raw = cand;
 
       if (raw.isEmpty) {
@@ -2545,14 +2587,13 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
       return _initialCam.target;
     }
 
-    _marketSub = _rideMarketService
-        .stream(
+    _marketSub = _rideMarketService.stream(
       origin: safePickup(),
       destination: safeDrop(),
       originProvider: () => safePickup(),
       destinationProvider: () => safeDrop(),
+      userIdProvider: () => _prefs.getString('user_id') ?? _user?['id']?.toString() ?? '',
       pollInterval: const Duration(seconds: 2),
-      simulateOnFailure: false,
     )
         .listen((snap) {
       if (!mounted) return;
@@ -3434,7 +3475,11 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
                 if (_routePts.isNotEmpty) {
                   Future.delayed(const Duration(milliseconds: 60), () => _fitCurrentRouteToViewport());
                 }
+
+                // ✅ NEW: ensures drivers appear even if GPS resolved before map controller
+                _maybeKickNearbyDrivers();
               },
+
               onCameraMove: (pos) => _lastCamTarget = pos.target,
               onTap: (_) => _collapse(),
             ),

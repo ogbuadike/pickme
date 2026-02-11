@@ -1,22 +1,25 @@
 // lib/widgets/ride_market_sheet.dart
 //
-// Bottom-sheet (edge-to-edge, touches bottom) + driver selection + offer selection.
-// Auto-locks when drivers appear to stop shuffling so user can choose calmly.
+// ✅ Dense “Bybit-like” UI (tiny scale, information-rich)
+// ✅ Stable list with freeze (prevents reload vibe)
+// ✅ NOW: initial driver list is ordered by Highest Rating + Rank (then ETA/dist as tie-breakers)
+// ✅ Organized into clear sections for long-term maintenance
 //
-// REQUIRED in HomePage call:
-//  - pass drivers + driversNearbyCount
-//  - implement onBook(driver, offer)
-//
-// NOTE: uses your theme + AppColors.primary (light theme friendly)
+// NOTE: Uses FontFeature -> requires dart:ui import.
 
 import 'dart:math' as math;
+import 'dart:ui' show FontFeature;
+
 import 'package:flutter/material.dart';
-import 'package:intl/intl.dart';
+import 'package:intl/intl.dart' as intl;
 
 import '../themes/app_theme.dart';
-import '../services/ride_market_service.dart'; // RideOffer, DriverCar (or compatible)
+import '../services/ride_market_service.dart'; // RideOffer, DriverCar
 import 'driver_details_sheet.dart';
 
+/// ===============================
+/// DATA MODEL (UI VM)
+/// ===============================
 class RideNearbyDriver {
   final String id;
   final String name;
@@ -29,21 +32,29 @@ class RideNearbyDriver {
   final double distanceKm;
   final int etaMin;
 
-  // ✅ NEW (fits your API standard; added, not removing anything)
+  // vehicle/profile
   final String vehicleType; // car | bike
   final int seats;
-  final List<String> vehicleImages; // multiple images
+  final List<String> vehicleImages;
   final String vehicleDescription;
-  final String carImageUrl; // backward compat / single image
+  final String carImageUrl;
+  final String avatarUrl;
   final String phone;
   final String nin;
   final String rank;
+
   final int completedTrips;
   final int cancelledTrips;
   final int incompleteTrips;
   final int reviewsCount;
   final int totalTrips;
-  final String avatarUrl;
+
+  // pricing (driver-based)
+  final String currency; // e.g. NGN
+  final double pricePerKm; // e.g. 250
+  final double baseFare; // e.g. 500
+  final double estimatedTotal; // server computed if any
+  final double tripKm; // echo from API if any
 
   const RideNearbyDriver({
     required this.id,
@@ -56,13 +67,12 @@ class RideNearbyDriver {
     required this.lng,
     required this.distanceKm,
     required this.etaMin,
-
-    // defaults
     this.vehicleType = 'car',
     this.seats = 4,
     this.vehicleImages = const [],
     this.vehicleDescription = '',
     this.carImageUrl = '',
+    this.avatarUrl = '',
     this.phone = '',
     this.nin = '',
     this.rank = '',
@@ -71,7 +81,11 @@ class RideNearbyDriver {
     this.incompleteTrips = 0,
     this.reviewsCount = 0,
     this.totalTrips = 0,
-    this.avatarUrl = '',
+    this.currency = 'NGN',
+    this.pricePerKm = 0,
+    this.baseFare = 0,
+    this.estimatedTotal = 0,
+    this.tripKm = 0,
   });
 
   String get initials {
@@ -84,38 +98,36 @@ class RideNearbyDriver {
   }
 
   List<String> get imagesEffective {
-    final imgs = <String>[];
+    final out = <String>[];
     for (final x in vehicleImages) {
       final s = x.trim();
-      if (s.isNotEmpty) imgs.add(s);
+      if (s.isNotEmpty) out.add(s);
     }
-    if (imgs.isEmpty && carImageUrl.trim().isNotEmpty) imgs.add(carImageUrl.trim());
-    return imgs;
+    if (out.isEmpty && carImageUrl.trim().isNotEmpty) out.add(carImageUrl.trim());
+    return out;
   }
 }
 
+/// ===============================
+/// MAIN SHEET
+/// ===============================
 class RideMarketSheet extends StatefulWidget {
   final double bottomNavHeight;
 
   final String originText;
   final String destinationText;
-
   final String? distanceText;
   final String? durationText;
-
-  // ✅ optional numeric distance (km) if you have it; otherwise we parse distanceText.
   final double? tripDistanceKm;
 
   final int driversNearbyCount;
   final List<dynamic>? drivers;
 
-  final List<RideOffer> offers;
+  final List<RideOffer> offers; // legacy / optional
   final bool loading;
 
   final VoidCallback onRefresh;
   final VoidCallback onCancel;
-
-  /// Booking action: after user selects a driver + offer and confirms in driver details sheet.
   final void Function(RideNearbyDriver driver, RideOffer offer) onBook;
 
   const RideMarketSheet({
@@ -140,252 +152,21 @@ class RideMarketSheet extends StatefulWidget {
 }
 
 class _RideMarketSheetState extends State<RideMarketSheet> {
-  final _moneyFmt = NumberFormat.decimalPattern();
+  final _moneyFmt = intl.NumberFormat.decimalPattern();
 
-  // Auto-lock when drivers appear (stops shuffling)
-  bool _locked = false;
+  // ✅ Stable list (frozen order)
+  final List<String> _stableIds = <String>[];
+  List<RideNearbyDriver> _stableDrivers = const [];
 
-  // Snapshots used while locked
-  List<dynamic> _driversSnap = const [];
-  List<RideOffer> _offersSnap = const [];
-  int _driversCountSnap = 0;
+  // ✅ selection by ID (no index drift)
+  String? _selectedDriverId;
 
-  // Selection
-  int _selectedDriverIdx = -1;
-  int _selectedOfferIdx = -1;
+  // ✅ Freeze controls
+  bool _orderFrozen = false; // we have a stable ID order
+  bool _fullyFrozen = false; // stop updating driver cards (prevents reload feel)
+  DateTime? _settleUntil; // allow brief enrichment window right after first load
 
-  bool get _effectiveLoading => _locked ? false : widget.loading;
-
-  List<dynamic> get _driversRaw => _locked ? _driversSnap : (widget.drivers ?? const []);
-  List<RideOffer> get _offersRaw => _locked ? _offersSnap : widget.offers;
-
-  int get _driversCountEffective {
-    final count = _locked ? _driversCountSnap : widget.driversNearbyCount;
-    return math.max(count, _driversVM.length);
-  }
-
-  bool get _hasDrivers => _driversCountEffective > 0;
-  bool get _hasOffers => _offersRaw.isNotEmpty;
-
-  // ✅ Only show “No cars nearby” when truly nothing exists.
-  bool get _showNoCars => !_effectiveLoading && !_hasDrivers && !_hasOffers;
-
-  // -------------------------
-  // Robust adapters
-  // -------------------------
-  RideNearbyDriver _driverVM(dynamic raw) {
-    // helper for list fields
-    List<String> strList(dynamic v) {
-      if (v == null) return const [];
-      if (v is List) {
-        return v.map((e) => e.toString()).where((s) => s.trim().isNotEmpty).toList();
-      }
-      // sometimes backend could send CSV
-      final s = v.toString().trim();
-      if (s.isEmpty) return const [];
-      if (s.startsWith('[') && s.endsWith(']')) {
-        // looks like JSON array string but without decoding here; keep simple split fallback
-        final inner = s.substring(1, s.length - 1);
-        return inner
-            .split(',')
-            .map((x) => x.replaceAll('"', '').replaceAll("'", '').trim())
-            .where((x) => x.isNotEmpty)
-            .toList();
-      }
-      return s.split(',').map((x) => x.trim()).where((x) => x.isNotEmpty).toList();
-    }
-
-    if (raw is DriverCar) {
-      final ll = (raw as dynamic).ll;
-      final lat = (ll != null) ? (ll.latitude as double) : 0.0;
-      final lng = (ll != null) ? (ll.longitude as double) : 0.0;
-
-      // try read new fields if they exist on object
-      final d = raw as dynamic;
-
-      return RideNearbyDriver(
-        id: ((d).id ?? '').toString(),
-        name: ((d).name ?? 'Driver').toString(),
-        category: ((d).category ?? 'Economy').toString(),
-        rating: _num((d).rating, 0).toDouble(),
-        carPlate: ((d).carPlate ?? '').toString(),
-        heading: _num((d).heading, 0).toDouble(),
-        lat: lat,
-        lng: lng,
-        distanceKm: _num((d).distanceKm, 0).toDouble(),
-        etaMin: _num((d).etaMin, 0).toInt(),
-
-        vehicleType: ((d).vehicleType ?? (d).vehicle_type ?? 'car').toString(),
-        seats: _num((d).seats, 4).toInt(),
-        vehicleImages: strList((d).vehicleImages ?? (d).vehicle_images),
-        vehicleDescription: ((d).vehicleDescription ?? (d).vehicle_description ?? '').toString(),
-        carImageUrl: ((d).carImageUrl ?? (d).car_image_url ?? '').toString(),
-        phone: ((d).phone ?? '').toString(),
-        nin: ((d).nin ?? '').toString(),
-        rank: ((d).rank ?? '').toString(),
-        completedTrips: _num((d).completedTrips ?? (d).completed_trips, 0).toInt(),
-        cancelledTrips: _num((d).cancelledTrips ?? (d).cancelled_trips, 0).toInt(),
-        incompleteTrips: _num((d).incompleteTrips ?? (d).incomplete_trips, 0).toInt(),
-        reviewsCount: _num((d).reviewsCount ?? (d).reviews_count, 0).toInt(),
-        totalTrips: _num((d).totalTrips ?? (d).total_trips, 0).toInt(),
-        avatarUrl: ((d).avatarUrl ?? (d).avatar_url ?? '').toString(),
-      );
-    }
-
-    if (raw is Map) {
-      final m = raw.cast<String, dynamic>();
-      return RideNearbyDriver(
-        id: (m['id'] ?? '').toString(),
-        name: (m['name'] ?? 'Driver').toString(),
-        category: (m['category'] ?? 'Economy').toString(),
-        rating: _num(m['rating'], 0).toDouble(),
-        carPlate: (m['car_plate'] ?? m['plate'] ?? '').toString(),
-        heading: _num(m['heading'], 0).toDouble(),
-        lat: _num(m['lat'], 0).toDouble(),
-        lng: _num(m['lng'], 0).toDouble(),
-        distanceKm: _num(m['distance_km'], 0).toDouble(),
-        etaMin: _num(m['eta_min'], 0).toInt(),
-
-        // ✅ your API fields
-        vehicleType: (m['vehicle_type'] ?? 'car').toString(),
-        seats: _num(m['seats'], 4).toInt(),
-        vehicleImages: strList(m['vehicle_images']),
-        vehicleDescription: (m['vehicle_description'] ?? '').toString(),
-        carImageUrl: (m['car_image_url'] ?? '').toString(),
-        phone: (m['phone'] ?? '').toString(),
-        nin: (m['nin'] ?? '').toString(),
-        rank: (m['rank'] ?? '').toString(),
-        completedTrips: _num(m['completed_trips'], 0).toInt(),
-        cancelledTrips: _num(m['cancelled_trips'], 0).toInt(),
-        incompleteTrips: _num(m['incomplete_trips'], 0).toInt(),
-        reviewsCount: _num(m['reviews_count'], 0).toInt(),
-        totalTrips: _num(m['total_trips'], 0).toInt(),
-        avatarUrl: (m['avatar_url'] ?? '').toString(),
-      );
-    }
-
-    // Unknown object
-    try {
-      final d = raw as dynamic;
-
-      List<String> strList(dynamic v) {
-        if (v == null) return const [];
-        if (v is List) {
-          return v.map((e) => e.toString()).where((s) => s.trim().isNotEmpty).toList();
-        }
-        final s = v.toString().trim();
-        if (s.isEmpty) return const [];
-        return s.split(',').map((x) => x.trim()).where((x) => x.isNotEmpty).toList();
-      }
-
-      return RideNearbyDriver(
-        id: (d.id ?? '').toString(),
-        name: (d.name ?? 'Driver').toString(),
-        category: (d.category ?? 'Economy').toString(),
-        rating: _num(d.rating, 0).toDouble(),
-        carPlate: (d.carPlate ?? d.car_plate ?? d.plate ?? '').toString(),
-        heading: _num(d.heading, 0).toDouble(),
-        lat: _num(d.ll?.latitude ?? d.lat, 0).toDouble(),
-        lng: _num(d.ll?.longitude ?? d.lng, 0).toDouble(),
-        distanceKm: _num(d.distanceKm ?? d.distance_km, 0).toDouble(),
-        etaMin: _num(d.etaMin ?? d.eta_min, 0).toInt(),
-
-        vehicleType: (d.vehicleType ?? d.vehicle_type ?? 'car').toString(),
-        seats: _num(d.seats, 4).toInt(),
-        vehicleImages: strList(d.vehicleImages ?? d.vehicle_images),
-        vehicleDescription: (d.vehicleDescription ?? d.vehicle_description ?? '').toString(),
-        carImageUrl: (d.carImageUrl ?? d.car_image_url ?? '').toString(),
-        phone: (d.phone ?? '').toString(),
-        nin: (d.nin ?? '').toString(),
-        rank: (d.rank ?? '').toString(),
-        completedTrips: _num(d.completedTrips ?? d.completed_trips, 0).toInt(),
-        cancelledTrips: _num(d.cancelledTrips ?? d.cancelled_trips, 0).toInt(),
-        incompleteTrips: _num(d.incompleteTrips ?? d.incomplete_trips, 0).toInt(),
-        reviewsCount: _num(d.reviewsCount ?? d.reviews_count, 0).toInt(),
-        totalTrips: _num(d.totalTrips ?? d.total_trips, 0).toInt(),
-        avatarUrl: (d.avatarUrl ?? d.avatar_url ?? '').toString(),
-      );
-    } catch (_) {
-      return const RideNearbyDriver(
-        id: '',
-        name: 'Driver',
-        category: 'Economy',
-        rating: 0,
-        carPlate: '',
-        heading: 0,
-        lat: 0,
-        lng: 0,
-        distanceKm: 0,
-        etaMin: 0,
-      );
-    }
-  }
-
-  static num _num(dynamic v, num fallback) {
-    if (v == null) return fallback;
-    if (v is num) return v;
-    if (v is String) return num.tryParse(v) ?? fallback;
-    return fallback;
-  }
-
-  List<RideNearbyDriver> get _driversVM {
-    final out = <RideNearbyDriver>[];
-    for (final x in _driversRaw) {
-      final d = _driverVM(x);
-      if (d.id.isEmpty) continue;
-      out.add(d);
-    }
-    out.sort((a, b) => a.distanceKm.compareTo(b.distanceKm));
-    return out;
-  }
-
-  Map<String, dynamic> _offerToMap(RideOffer o) {
-    try {
-      final j = (o as dynamic).toJson?.call();
-      if (j is Map) return j.cast<String, dynamic>();
-    } catch (_) {}
-    final d = o as dynamic;
-    final m = <String, dynamic>{};
-    try { m['category'] = d.category; } catch (_) {}
-    try { m['name'] = d.name; } catch (_) {}
-    try { m['label'] = d.label; } catch (_) {}
-    try { m['eta_min'] = d.etaMin; } catch (_) {}
-    try { m['price'] = d.price; } catch (_) {}
-    try { m['currency'] = d.currency; } catch (_) {}
-    try { m['seats'] = d.seats; } catch (_) {}
-    try { m['rating'] = d.rating; } catch (_) {}
-    try { m['promo_applied'] = d.promoApplied; } catch (_) {}
-    try { m['original_price'] = d.originalPrice; } catch (_) {}
-
-    // ✅ allow per-km pricing payloads
-    try { m['price_per_km'] = d.pricePerKm; } catch (_) {}
-    try { m['vehicle_type'] = d.vehicleType; } catch (_) {}
-    return m;
-  }
-
-  String _offerTitle(RideOffer o) {
-    final m = _offerToMap(o);
-    return (m['category'] ?? m['name'] ?? m['label'] ?? 'Ride').toString();
-  }
-
-  int _offerEta(RideOffer o) => _num(_offerToMap(o)['eta_min'], 0).toInt();
-
-  double _offerPerKmPrice(RideOffer o) {
-    final m = _offerToMap(o);
-    final pk = _num(m['price_per_km'], -1).toDouble();
-    if (pk >= 0) return pk;
-    // fallback: treat "price" as per-km if no other info
-    return _num(m['price'], 0).toDouble();
-  }
-
-  double _offerOld(RideOffer o) => _num(_offerToMap(o)['original_price'], 0).toDouble();
-
-  String _currency(RideOffer o) {
-    final c = (_offerToMap(o)['currency'] ?? 'NGN').toString().toUpperCase();
-    if (c == 'NGN') return '₦';
-    if (c == 'USD') return '\$';
-    return c;
-  }
+  bool get _showNoDrivers => !widget.loading && _stableDrivers.isEmpty && (widget.drivers ?? const []).isEmpty;
 
   double get _tripKm {
     if (widget.tripDistanceKm != null && widget.tripDistanceKm! > 0) return widget.tripDistanceKm!;
@@ -399,125 +180,450 @@ class _RideMarketSheetState extends State<RideMarketSheet> {
     final v = (numStr == null) ? 0.0 : (double.tryParse(numStr) ?? 0.0);
     if (v <= 0) return 0;
     if (t.contains('m') && !t.contains('km')) return v / 1000.0;
-    return v; // assume km
+    return v;
   }
 
-  double _offerTotalForTrip(RideOffer o) {
-    final perKm = _offerPerKmPrice(o);
-    final km = _tripKm;
-    if (km > 0) return perKm * km;
-    return perKm;
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _reconcileDrivers();
+    });
   }
 
-  Map<String, dynamic> _driverToMap(RideNearbyDriver d) {
-    return <String, dynamic>{
-      'id': d.id,
-      'name': d.name,
-      'category': d.category,
-      'rating': d.rating,
-      'car_plate': d.carPlate,
-      'lat': d.lat,
-      'lng': d.lng,
-      'heading': d.heading,
-      'distance_km': d.distanceKm,
-      'eta_min': d.etaMin,
-
-      'vehicle_type': d.vehicleType,
-      'seats': d.seats,
-      'vehicle_images': d.vehicleImages,
-      'vehicle_description': d.vehicleDescription,
-      'car_image_url': d.carImageUrl,
-
-      'phone': d.phone,
-      'nin': d.nin,
-      'rank': d.rank,
-      'completed_trips': d.completedTrips,
-      'cancelled_trips': d.cancelledTrips,
-      'incomplete_trips': d.incompleteTrips,
-      'reviews_count': d.reviewsCount,
-      'total_trips': d.totalTrips,
-      'avatar_url': d.avatarUrl,
-    };
-  }
-
-  // -------------------------
-  // Auto-lock when drivers appear
-  // -------------------------
   @override
   void didUpdateWidget(covariant RideMarketSheet oldWidget) {
     super.didUpdateWidget(oldWidget);
 
-    // Default-select first offer when offers arrive (like Bolt “Select Bolt”).
-    if (_selectedOfferIdx < 0 && widget.offers.isNotEmpty) {
-      _selectedOfferIdx = 0;
+    // If route changed, reset everything so new trip has fresh list.
+    final routeChanged = oldWidget.originText != widget.originText ||
+        oldWidget.destinationText != widget.destinationText ||
+        oldWidget.tripDistanceKm != widget.tripDistanceKm ||
+        oldWidget.distanceText != widget.distanceText;
+
+    if (routeChanged) {
+      _resetStable(alsoClearSelection: true);
     }
 
-    // Auto-lock when drivers become available (stops shuffling)
-    final incomingDriversCount = math.max(widget.driversNearbyCount, (widget.drivers ?? const []).length);
-    if (!_locked && incomingDriversCount > 0) {
-      _lockNow();
+    _reconcileDrivers();
+  }
+
+  /// ===============================
+  /// ADAPTER + NORMALIZERS
+  /// ===============================
+  static num _num(dynamic v, num fallback) {
+    if (v == null) return fallback;
+    if (v is num) return v;
+    if (v is String) return num.tryParse(v) ?? fallback;
+    return fallback;
+  }
+
+  static List<String> _strList(dynamic v) {
+    if (v == null) return const [];
+    if (v is List) {
+      return v.map((e) => e.toString()).where((s) => s.trim().isNotEmpty).toList(growable: false);
+    }
+
+    final s = v.toString().trim();
+    if (s.isEmpty) return const [];
+    if (s.startsWith('[') && s.endsWith(']')) {
+      final inner = s.substring(1, s.length - 1);
+      return inner
+          .split(',')
+          .map((x) => x.replaceAll('"', '').replaceAll("'", '').trim())
+          .where((x) => x.isNotEmpty)
+          .toList(growable: false);
+    }
+    return s.split(',').map((x) => x.trim()).where((x) => x.isNotEmpty).toList(growable: false);
+  }
+
+  // ✅ normalize URLs for more reliable loading
+  String _fixUrl(String url) {
+    var u = url.trim();
+    if (u.isEmpty) return '';
+    if (u.startsWith('//')) u = 'https:$u';
+    if (u.startsWith('http://')) u = 'https://${u.substring(7)}';
+    return u;
+  }
+
+  RideNearbyDriver _driverVM(dynamic raw) {
+    if (raw is DriverCar) {
+      final d = raw as dynamic;
+
+      final ll = d.ll;
+      final lat = (ll != null) ? (ll.latitude as double) : 0.0;
+      final lng = (ll != null) ? (ll.longitude as double) : 0.0;
+
+      String vehicleType = 'car';
+      try {
+        vehicleType = (d.vehicleType ?? d.vehicle_type ?? 'car').toString();
+      } catch (_) {}
+
+      int seats = 4;
+      try {
+        seats = (d.seats is num) ? (d.seats as num).toInt() : seats;
+      } catch (_) {}
+      if (vehicleType.toLowerCase().contains('bike')) seats = 1;
+
+      String rank = '';
+      try {
+        rank = (d.rank ?? '').toString();
+      } catch (_) {}
+
+      String avatarUrl = '';
+      try {
+        avatarUrl = (d.avatarUrl ?? d.avatar_url ?? '').toString();
+      } catch (_) {}
+
+      String carPlate = '';
+      try {
+        carPlate = (d.carPlate ?? d.car_plate ?? d.plate ?? '').toString();
+      } catch (_) {}
+
+      final currency = (() {
+        try {
+          return (d.currency ?? 'NGN').toString();
+        } catch (_) {
+          return 'NGN';
+        }
+      })();
+
+      final pricePerKm = (() {
+        try {
+          return _num(d.pricePerKm ?? d.price_per_km, 0).toDouble();
+        } catch (_) {
+          return 0.0;
+        }
+      })();
+
+      final baseFare = (() {
+        try {
+          return _num(d.baseFare ?? d.base_fare, 0).toDouble();
+        } catch (_) {
+          return 0.0;
+        }
+      })();
+
+      final estimatedTotal = (() {
+        try {
+          return _num(d.estimatedTotal ?? d.estimated_total ?? d.price_total, 0).toDouble();
+        } catch (_) {
+          return 0.0;
+        }
+      })();
+
+      final tripKm = (() {
+        try {
+          return _num(d.tripKm ?? d.trip_km, 0).toDouble();
+        } catch (_) {
+          return 0.0;
+        }
+      })();
+
+      List<String> images = const [];
+      try {
+        final v = d.vehicleImages ?? d.vehicle_images;
+        images = _strList(v);
+      } catch (_) {}
+
+      String carImg = '';
+      try {
+        carImg = (d.carImageUrl ?? d.car_image_url ?? '').toString();
+      } catch (_) {}
+
+      return RideNearbyDriver(
+        id: (d.id ?? '').toString(),
+        name: (d.name ?? 'Driver').toString(),
+        category: (d.category ?? 'Standard').toString(),
+        rating: _num(d.rating, 0).toDouble(),
+        carPlate: carPlate,
+        heading: _num(d.heading, 0).toDouble(),
+        lat: lat,
+        lng: lng,
+        distanceKm: _num(d.distanceKm ?? d.distance_km, 0).toDouble(),
+        etaMin: _num(d.etaMin ?? d.eta_min, 0).toInt(),
+        vehicleType: vehicleType,
+        seats: seats,
+        vehicleImages: images.map(_fixUrl).where((x) => x.isNotEmpty).toList(growable: false),
+        carImageUrl: _fixUrl(carImg),
+        avatarUrl: _fixUrl(avatarUrl),
+        rank: rank,
+        currency: currency,
+        pricePerKm: pricePerKm,
+        baseFare: baseFare,
+        estimatedTotal: estimatedTotal,
+        tripKm: tripKm,
+      );
+    }
+
+    if (raw is Map) {
+      final m = raw.cast<String, dynamic>();
+
+      final vt = (m['vehicle_type'] ?? 'car').toString();
+      int seats = _num(m['seats'], 4).toInt();
+      if (vt.toLowerCase().contains('bike')) seats = 1;
+
+      return RideNearbyDriver(
+        id: (m['id'] ?? '').toString(),
+        name: (m['name'] ?? 'Driver').toString(),
+        category: (m['category'] ?? 'Standard').toString(),
+        rating: _num(m['rating'], 0).toDouble(),
+        carPlate: (m['car_plate'] ?? m['plate'] ?? '').toString(),
+        heading: _num(m['heading'], 0).toDouble(),
+        lat: _num(m['lat'], 0).toDouble(),
+        lng: _num(m['lng'], 0).toDouble(),
+        distanceKm: _num(m['distance_km'], 0).toDouble(),
+        etaMin: _num(m['eta_min'], 0).toInt(),
+        vehicleType: vt,
+        seats: seats,
+        vehicleImages: _strList(m['vehicle_images']).map(_fixUrl).where((x) => x.isNotEmpty).toList(growable: false),
+        carImageUrl: _fixUrl((m['car_image_url'] ?? '').toString()),
+        avatarUrl: _fixUrl((m['avatar_url'] ?? '').toString()),
+        rank: (m['rank'] ?? '').toString(),
+        currency: (m['currency'] ?? 'NGN').toString(),
+        pricePerKm: _num(m['price_per_km'], 0).toDouble(),
+        baseFare: _num(m['base_fare'], 0).toDouble(),
+        estimatedTotal: _num(m['estimated_total'] ?? m['price_total'], 0).toDouble(),
+        tripKm: _num(m['trip_km'], 0).toDouble(),
+      );
+    }
+
+    return const RideNearbyDriver(
+      id: '',
+      name: 'Driver',
+      category: 'Standard',
+      rating: 0,
+      carPlate: '',
+      heading: 0,
+      lat: 0,
+      lng: 0,
+      distanceKm: 0,
+      etaMin: 0,
+    );
+  }
+
+  /// ===============================
+  /// ORDERING: Highest Rating + Rank
+  /// ===============================
+  int _rankWeight(String r) {
+    final x = r.trim().toLowerCase();
+    if (x.contains('diamond')) return 6;
+    if (x.contains('platinum')) return 5;
+    if (x.contains('gold')) return 4;
+    if (x.contains('silver')) return 3;
+    if (x.contains('bronze')) return 2;
+    if (x.contains('verified')) return 1;
+    return 0;
+  }
+
+  double _safeRating(double r) {
+    if (r.isNaN || r.isInfinite) return 0;
+    return r.clamp(0, 5).toDouble();
+  }
+
+  int _compareDrivers(RideNearbyDriver a, RideNearbyDriver b) {
+    // Primary: rating desc
+    final ar = _safeRating(a.rating);
+    final br = _safeRating(b.rating);
+    final c1 = br.compareTo(ar);
+    if (c1 != 0) return c1;
+
+    // Secondary: rank weight desc (empty -> verified)
+    final aw = _rankWeight(a.rank.trim().isEmpty ? 'verified' : a.rank);
+    final bw = _rankWeight(b.rank.trim().isEmpty ? 'verified' : b.rank);
+    final c2 = bw.compareTo(aw);
+    if (c2 != 0) return c2;
+
+    // Next best tie-breakers: closer ETA, closer distance
+    final c3 = a.etaMin.compareTo(b.etaMin);
+    if (c3 != 0) return c3;
+
+    final c4 = a.distanceKm.compareTo(b.distanceKm);
+    if (c4 != 0) return c4;
+
+    // Deterministic
+    final an = a.name.toLowerCase();
+    final bn = b.name.toLowerCase();
+    final c5 = an.compareTo(bn);
+    if (c5 != 0) return c5;
+
+    return a.id.compareTo(b.id);
+  }
+
+  /// ===============================
+  /// FREEZE / STABILIZE (Stops “Reloading” Feel)
+  /// ===============================
+  bool _hasPrice(RideNearbyDriver d) {
+    if (d.estimatedTotal > 0) return true;
+    if (d.pricePerKm > 0) return true;
+    if (d.baseFare > 0) return true;
+    return false;
+  }
+
+  bool _hasImage(RideNearbyDriver d) {
+    if (d.imagesEffective.isNotEmpty) return true;
+    if (d.carImageUrl.trim().isNotEmpty) return true;
+    return false;
+  }
+
+  void _resetStable({bool alsoClearSelection = false}) {
+    _stableIds.clear();
+    _stableDrivers = const [];
+    _orderFrozen = false;
+    _fullyFrozen = false;
+    _settleUntil = null;
+    if (alsoClearSelection) _selectedDriverId = null;
+  }
+
+  void _reconcileDrivers() {
+    // If user already selected a driver, freeze immediately (old “lock” vibe).
+    if (_selectedDriverId != null) {
+      _fullyFrozen = true;
+      return;
+    }
+
+    // After settle window ends, freeze fully.
+    if (_settleUntil != null && DateTime.now().isAfter(_settleUntil!)) {
+      _fullyFrozen = true;
+    }
+    if (_fullyFrozen) return;
+
+    final incomingRaw = widget.drivers ?? const [];
+    if (incomingRaw.isEmpty) return;
+
+    final incoming = <RideNearbyDriver>[];
+    for (final x in incomingRaw) {
+      final d = _driverVM(x);
+      if (d.id.isEmpty) continue;
+      incoming.add(d);
+    }
+    if (incoming.isEmpty) return;
+
+    final byId = <String, RideNearbyDriver>{};
+    for (final d in incoming) {
+      byId[d.id] = d;
+    }
+
+    // ✅ First non-empty load: sort by rating+rank, then freeze IDs (no later reordering)
+    if (_stableIds.isEmpty) {
+      incoming.sort(_compareDrivers);
+
+      _stableIds.addAll(incoming.map((e) => e.id));
+      _stableDrivers = List<RideNearbyDriver>.from(incoming, growable: false);
+
+      _orderFrozen = true;
+      _settleUntil = DateTime.now().add(const Duration(milliseconds: 1200)); // brief enrich window
+
+      if (_selectedDriverId != null && !_stableIds.contains(_selectedDriverId)) {
+        _selectedDriverId = null;
+      }
+
+      setState(() {});
+      return;
+    }
+
+    // ✅ After order frozen: keep IDs fixed; only enrich missing price/images/rating during settle window
+    final oldById = <String, RideNearbyDriver>{for (final d in _stableDrivers) d.id: d};
+
+    bool changed = false;
+    final updated = <RideNearbyDriver>[];
+
+    for (final id in _stableIds) {
+      final old = oldById[id];
+      final fresh = byId[id];
+
+      if (old == null && fresh != null) {
+        updated.add(fresh);
+        changed = true;
+        continue;
+      }
+
+      if (old != null && fresh != null) {
+        final needPrice = !_hasPrice(old) && _hasPrice(fresh);
+        final needImage = !_hasImage(old) && _hasImage(fresh);
+        final needRating = (_safeRating(old.rating) <= 0 && _safeRating(fresh.rating) > 0);
+
+        if (needPrice || needImage || needRating) {
+          updated.add(fresh);
+          changed = true;
+        } else {
+          updated.add(old);
+        }
+        continue;
+      }
+
+      if (old != null) updated.add(old);
+    }
+
+    // If everything now has price/images OR settle window ended -> freeze fully
+    final allGood = updated.isNotEmpty &&
+        updated.every((d) => _hasPrice(d) || _tripKm <= 0) &&
+        updated.every(_hasImage);
+    if (allGood) _fullyFrozen = true;
+
+    if (changed) {
+      setState(() => _stableDrivers = updated);
     }
   }
 
-  void _lockNow() {
-    setState(() {
-      _locked = true;
-      _driversSnap = List<dynamic>.from(widget.drivers ?? const []);
-      _offersSnap = List<RideOffer>.from(widget.offers);
-      _driversCountSnap = widget.driversNearbyCount;
-    });
+  /// ===============================
+  /// PRICING DISPLAY
+  /// ===============================
+  String _curSym(String c) {
+    final x = c.trim().toUpperCase();
+    if (x == 'NGN') return '₦';
+    if (x == 'USD') return '\$';
+    if (x == 'EUR') return '€';
+    if (x == 'GBP') return '£';
+    return x;
   }
 
-  void _unlockAndRefresh() {
-    setState(() {
-      _locked = false;
-      _driversSnap = const [];
-      _offersSnap = const [];
-      _driversCountSnap = 0;
-      _selectedDriverIdx = -1;
-      // Keep offer default behavior
-    });
-    widget.onRefresh();
+  double _driverTotal(RideNearbyDriver d) {
+    if (d.estimatedTotal > 0) return d.estimatedTotal;
+
+    final km = (_tripKm > 0) ? _tripKm : (d.tripKm > 0 ? d.tripKm : 0);
+    if (km > 0 && d.pricePerKm > 0) return d.baseFare + d.pricePerKm * km;
+
+    return 0;
   }
 
-  // -------------------------
-  // UI
-  // -------------------------
+  /// ===============================
+  /// BUILD
+  /// ===============================
   @override
   Widget build(BuildContext context) {
     final mq = MediaQuery.of(context);
     final cs = Theme.of(context).colorScheme;
 
-    // True “bottom sheet” feel: full width, bottom-aligned, no outer margin.
+    final drivers = _stableDrivers;
+
     return Align(
       alignment: Alignment.bottomCenter,
       child: Material(
         color: Colors.transparent,
         child: Container(
           width: double.infinity,
-          constraints: BoxConstraints(
-            // Similar to screenshot: not too tall; scroll inside.
-            maxHeight: mq.size.height * 0.52,
-          ),
+          constraints: BoxConstraints(maxHeight: mq.size.height * 0.56),
           decoration: BoxDecoration(
             color: Theme.of(context).cardColor,
-            borderRadius: const BorderRadius.vertical(top: Radius.circular(18)),
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(22)),
             boxShadow: [
               BoxShadow(
-                color: Colors.black.withOpacity(0.18),
-                blurRadius: 16,
-                offset: const Offset(0, -6),
+                color: Colors.black.withOpacity(0.20),
+                blurRadius: 20,
+                offset: const Offset(0, -10),
               ),
             ],
           ),
           child: Column(
             children: [
-              const SizedBox(height: 8),
+              const SizedBox(height: 10),
               _handle(cs),
-              const SizedBox(height: 6),
+              const SizedBox(height: 8),
               _topBar(context),
-              Expanded(child: _content(context)),
-              _bottomBar(context, mq),
+              Expanded(child: _content(context, drivers)),
+              _bottomBar(context, mq, drivers),
             ],
           ),
         ),
@@ -527,11 +633,11 @@ class _RideMarketSheetState extends State<RideMarketSheet> {
 
   Widget _handle(ColorScheme cs) {
     return Container(
-      width: 54,
-      height: 5,
+      width: 60,
+      height: 6,
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(999),
-        color: cs.onSurface.withOpacity(0.18),
+        color: cs.onSurface.withOpacity(0.16),
       ),
     );
   }
@@ -539,113 +645,78 @@ class _RideMarketSheetState extends State<RideMarketSheet> {
   Widget _topBar(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 10),
+      padding: const EdgeInsets.symmetric(horizontal: 6),
       child: Row(
         children: [
           IconButton(
             onPressed: widget.onCancel,
             icon: const Icon(Icons.close_rounded),
+            tooltip: 'Close',
           ),
           Expanded(
-            child: Text(
-              'Ride options',
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                fontWeight: FontWeight.w900,
-                color: cs.onSurface.withOpacity(0.85),
-              ),
+            child: Column(
+              children: [
+                Text(
+                  'Select a driver',
+                  style: TextStyle(
+                    fontWeight: FontWeight.w900,
+                    color: cs.onSurface.withOpacity(0.92),
+                    fontSize: 14,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  widget.loading ? 'Searching…' : 'Live availability',
+                  style: TextStyle(
+                    fontWeight: FontWeight.w800,
+                    color: cs.onSurface.withOpacity(0.55),
+                    fontSize: 11,
+                  ),
+                ),
+              ],
             ),
           ),
           IconButton(
-            onPressed: _locked ? _unlockAndRefresh : widget.onRefresh,
-            icon: Icon(_locked ? Icons.lock_open_rounded : Icons.refresh_rounded),
-            tooltip: _locked ? 'Unlock & refresh' : 'Refresh',
+            onPressed: () {
+              setState(() => _resetStable(alsoClearSelection: true));
+              widget.onRefresh();
+            },
+            icon: const Icon(Icons.refresh_rounded),
+            tooltip: 'Refresh',
           ),
         ],
       ),
     );
   }
 
-  Widget _content(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    final drivers = _driversVM;
-    final offers = _offersRaw;
-
+  Widget _content(BuildContext context, List<RideNearbyDriver> drivers) {
     return ListView(
       physics: const BouncingScrollPhysics(),
       padding: const EdgeInsets.fromLTRB(12, 0, 12, 10),
       children: [
         _routeMini(context),
         const SizedBox(height: 10),
-
-        if (_locked)
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-            decoration: BoxDecoration(
-              color: AppColors.primary.withOpacity(0.10),
-              borderRadius: BorderRadius.circular(14),
-              border: Border.all(color: AppColors.primary.withOpacity(0.25)),
-            ),
-            child: Row(
-              children: [
-                Icon(Icons.lock_rounded, color: AppColors.primary),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Text(
-                    'Drivers found. List locked so user can select.',
-                    style: TextStyle(fontWeight: FontWeight.w900, color: cs.onSurface.withOpacity(0.78)),
-                  ),
-                ),
-              ],
-            ),
-          ),
-
-        if (_locked) const SizedBox(height: 10),
-
-        if (_showNoCars) ...[
-          _emptyState(context),
-        ] else ...[
-          if (drivers.isNotEmpty) ...[
-            _driversHeader(context, drivers.length),
-            const SizedBox(height: 8),
-            if (drivers.length >= 2) ...[
-              _smartDriverInsights(context, drivers),
-              const SizedBox(height: 10),
-            ],
-            ...List.generate(drivers.length, (i) {
-              final selected = i == _selectedDriverIdx;
-              return Padding(
-                padding: const EdgeInsets.only(bottom: 8),
-                child: _driverCard(context, drivers[i], selected: selected, onTap: () {
-                  setState(() => _selectedDriverIdx = i);
-                }),
-              );
-            }),
-            const SizedBox(height: 6),
-          ] else if (_hasDrivers) ...[
-            _driversHeader(context, 0),
-            const SizedBox(height: 8),
-            _hint(context, '${_driversCountEffective} drivers nearby', 'Pass drivers list to show full details.'),
-            const SizedBox(height: 10),
-          ],
-
-          _section('Ride options'),
-          const SizedBox(height: 8),
-
-          if (_effectiveLoading) _loadingRow(context),
-
-          ...List.generate(offers.length, (i) {
-            final selected = i == _selectedOfferIdx;
+        if (_showNoDrivers)
+          _emptyState(context)
+        else ...[
+          const SizedBox(height: 10),
+          if (widget.loading && drivers.isEmpty) _loadingRow(context),
+          ...List.generate(drivers.length, (i) {
+            final d = drivers[i];
+            final selected = (_selectedDriverId == d.id);
             return Padding(
               padding: const EdgeInsets.only(bottom: 10),
-              child: _offerCard(context, offers[i], selected: selected, onTap: () {
-                setState(() => _selectedOfferIdx = i);
-              }),
+              child: KeyedSubtree(
+                key: ValueKey(d.id),
+                child: _driverCard(
+                  context,
+                  d,
+                  selected: selected,
+                  onTap: () => setState(() => _selectedDriverId = d.id),
+                ),
+              ),
             );
           }),
-
-          if (!_effectiveLoading && _hasDrivers && offers.isEmpty)
-            _hint(context, 'Drivers found', 'Fetching prices… tap refresh if it takes too long.'),
         ],
       ],
     );
@@ -655,187 +726,35 @@ class _RideMarketSheetState extends State<RideMarketSheet> {
     final cs = Theme.of(context).colorScheme;
     final origin = widget.originText.trim().isEmpty ? 'Pickup' : widget.originText.trim();
     final dest = widget.destinationText.trim().isEmpty ? 'Destination' : widget.destinationText.trim();
-    final dist = widget.distanceText ?? '--';
-    final dur = widget.durationText ?? '--';
+    final count = math.max(widget.driversNearbyCount, _stableDrivers.length);
 
     return Container(
-      padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+      padding: const EdgeInsets.fromLTRB(12, 12, 12, 12),
       decoration: BoxDecoration(
         color: cs.surface,
-        borderRadius: BorderRadius.circular(14),
+        borderRadius: BorderRadius.circular(16),
         border: Border.all(color: cs.onSurface.withOpacity(0.08)),
       ),
-      child: Row(
-        children: [
-          // ✅ blue/green dot like your screenshot
-          Column(
-            children: [
-              Container(width: 10, height: 10, decoration: const BoxDecoration(color: Color(0xFF1A73E8), shape: BoxShape.circle)),
-              Container(width: 2, height: 18, margin: const EdgeInsets.symmetric(vertical: 3), decoration: BoxDecoration(color: cs.onSurface.withOpacity(0.18), borderRadius: BorderRadius.circular(99))),
-              Container(width: 10, height: 10, decoration: const BoxDecoration(color: Color(0xFF1E8E3E), shape: BoxShape.circle)),
-            ],
-          ),
-          const SizedBox(width: 10),
-
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(origin, maxLines: 1, overflow: TextOverflow.ellipsis,
-                    style: TextStyle(fontWeight: FontWeight.w900, color: cs.onSurface.withOpacity(0.85))),
-                const SizedBox(height: 4),
-                Text(dest, maxLines: 1, overflow: TextOverflow.ellipsis,
-                    style: TextStyle(fontWeight: FontWeight.w800, color: cs.onSurface.withOpacity(0.60))),
-                const SizedBox(height: 10),
-                Row(
-                  children: [
-                    _pill(context, Icons.schedule_rounded, dur),
-                    const SizedBox(width: 8),
-                    _pill(context, Icons.straighten_rounded, dist),
-                    const Spacer(),
-                    _nearbyPill(context),
-                  ],
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
+      child: _FromToMini(origin: origin, dest: dest, count: count, cs: cs),
     );
   }
 
-  Widget _nearbyPill(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    final txt = _hasDrivers ? '$_driversCountEffective nearby' : '0 nearby';
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-      decoration: BoxDecoration(
-        color: cs.onSurface.withOpacity(0.04),
-        borderRadius: BorderRadius.circular(999),
-        border: Border.all(color: cs.onSurface.withOpacity(0.10)),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(Icons.near_me_rounded, size: 16, color: cs.onSurface.withOpacity(0.65)),
-          const SizedBox(width: 8),
-          Text(txt, style: TextStyle(fontWeight: FontWeight.w900, color: cs.onSurface.withOpacity(0.75), fontSize: 12)),
-        ],
-      ),
-    );
+  /// ===============================
+  /// DRIVER CARD (Dense + Premium)
+  /// ===============================
+  IconData _vehicleIcon(String t) {
+    final x = t.trim().toLowerCase();
+    if (x.contains('bike')) return Icons.two_wheeler_rounded;
+    return Icons.directions_car_rounded;
   }
 
-  Widget _driversHeader(BuildContext context, int count) {
-    final cs = Theme.of(context).colorScheme;
-    return Row(
-      children: [
-        Expanded(
-          child: Text('Nearby drivers', style: TextStyle(fontWeight: FontWeight.w900, color: cs.onSurface.withOpacity(0.88), fontSize: 13)),
-        ),
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-          decoration: BoxDecoration(
-            color: AppColors.primary.withOpacity(0.10),
-            borderRadius: BorderRadius.circular(999),
-            border: Border.all(color: AppColors.primary.withOpacity(0.25)),
-          ),
-          child: Text(
-            count > 0 ? '$count available' : '${_driversCountEffective} nearby',
-            style: TextStyle(fontWeight: FontWeight.w900, color: AppColors.primary, fontSize: 12),
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _smartDriverInsights(BuildContext context, List<RideNearbyDriver> drivers) {
-    final cs = Theme.of(context).colorScheme;
-    final bestRated = drivers.reduce((a, b) => (a.rating >= b.rating) ? a : b);
-    final nearest = drivers.reduce((a, b) => (a.distanceKm <= b.distanceKm) ? a : b);
-    final fastest = drivers.reduce((a, b) => (a.etaMin <= b.etaMin) ? a : b);
-
-    Widget chip(String title, String value, IconData icon) {
-      return Expanded(
-        child: Container(
-          padding: const EdgeInsets.fromLTRB(10, 10, 10, 10),
-          decoration: BoxDecoration(
-            color: cs.surface,
-            borderRadius: BorderRadius.circular(14),
-            border: Border.all(color: cs.onSurface.withOpacity(0.08)),
-          ),
-          child: Row(
-            children: [
-              Container(
-                width: 34,
-                height: 34,
-                decoration: BoxDecoration(
-                  color: AppColors.primary.withOpacity(0.10),
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: AppColors.primary.withOpacity(0.18)),
-                ),
-                child: Icon(icon, color: AppColors.primary, size: 18),
-              ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(title, maxLines: 1, overflow: TextOverflow.ellipsis,
-                        style: TextStyle(fontWeight: FontWeight.w900, color: cs.onSurface.withOpacity(0.75), fontSize: 11)),
-                    const SizedBox(height: 4),
-                    Text(value, maxLines: 1, overflow: TextOverflow.ellipsis,
-                        style: TextStyle(fontWeight: FontWeight.w900, color: cs.onSurface.withOpacity(0.88), fontSize: 12)),
-                  ],
-                ),
-              ),
-            ],
-          ),
-        ),
-      );
-    }
-
-    return Row(
-      children: [
-        chip('Best rated', '${bestRated.name} • ${bestRated.rating.toStringAsFixed(2)}', Icons.star_rounded),
-        const SizedBox(width: 8),
-        chip('Nearest', '${nearest.name} • ${_fmtDist(nearest.distanceKm)}', Icons.near_me_rounded),
-        const SizedBox(width: 8),
-        chip('Fastest', '${fastest.name} • ${fastest.etaMin} min', Icons.timer_rounded),
-      ],
-    );
-  }
-
-  Widget _section(String t) {
-    return Padding(
-      padding: const EdgeInsets.only(left: 2),
-      child: Text(t, style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 13)),
-    );
-  }
-
-  Widget _pill(BuildContext context, IconData icon, String text) {
-    final cs = Theme.of(context).colorScheme;
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
-      decoration: BoxDecoration(
-        color: cs.surface,
-        borderRadius: BorderRadius.circular(999),
-        border: Border.all(color: cs.onSurface.withOpacity(0.10)),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(icon, size: 15, color: cs.onSurface.withOpacity(0.65)),
-          const SizedBox(width: 6),
-          Text(text, style: TextStyle(fontWeight: FontWeight.w900, color: cs.onSurface.withOpacity(0.75), fontSize: 12)),
-        ],
-      ),
-    );
-  }
-
-  String _fmtDist(double km) {
-    if (km <= 0) return 'Nearby';
-    if (km < 1) return '${(km * 1000).round()} m';
-    return '${km.toStringAsFixed(1)} km';
+  IconData _rankIcon(String r) {
+    final x = r.trim().toLowerCase();
+    if (x.contains('platinum')) return Icons.workspace_premium_rounded;
+    if (x.contains('gold')) return Icons.emoji_events_rounded;
+    if (x.contains('silver')) return Icons.military_tech_rounded;
+    if (x.contains('bronze')) return Icons.military_tech_outlined;
+    return Icons.verified_rounded;
   }
 
   Color _rankColor(String r) {
@@ -844,177 +763,377 @@ class _RideMarketSheetState extends State<RideMarketSheet> {
     if (x.contains('gold')) return const Color(0xFFB8860B);
     if (x.contains('silver')) return const Color(0xFF607D8B);
     if (x.contains('bronze')) return const Color(0xFF8D6E63);
-    return AppColors.primary;
-  }
-
-  IconData _vehicleIcon(String t) {
-    final x = t.trim().toLowerCase();
-    if (x.contains('bike')) return Icons.two_wheeler_rounded;
-    return Icons.directions_car_rounded;
+    return const Color(0xFF1E8E3E);
   }
 
   Widget _driverCard(BuildContext context, RideNearbyDriver d, {required bool selected, required VoidCallback onTap}) {
     final cs = Theme.of(context).colorScheme;
 
-    final distText = _fmtDist(d.distanceKm);
-    final eta = d.etaMin <= 0 ? '1 min' : '${d.etaMin} min';
+    final rankText = d.rank.trim().isEmpty ? 'Verified' : d.rank.trim();
+    final rc = _rankColor(rankText);
 
-    final rank = d.rank.trim().isEmpty ? 'Verified' : d.rank.trim();
-    final rankColor = _rankColor(rank);
+    final vt = d.vehicleType.trim().isEmpty ? 'car' : d.vehicleType.trim();
+    final seats = vt.toLowerCase().contains('bike') ? 1 : (d.seats <= 0 ? 4 : d.seats);
 
-    final vehicleType = d.vehicleType.trim().isEmpty ? 'car' : d.vehicleType.trim();
-    final seats = (vehicleType.toLowerCase().contains('bike')) ? 1 : (d.seats <= 0 ? 4 : d.seats);
+    final etaText = d.etaMin <= 0 ? '1m' : '${d.etaMin}m';
+    final distText = _fmtDistShort(d.distanceKm);
 
-    final vehicleThumb = d.imagesEffective.isNotEmpty ? d.imagesEffective.first : '';
+    final total = _driverTotal(d);
+    final sym = _curSym(d.currency);
+    final totalText = total > 0 ? '$sym${_moneyFmt.format(total.round())}' : '—';
 
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(14),
-      child: Container(
-        padding: const EdgeInsets.fromLTRB(12, 12, 12, 12),
-        decoration: BoxDecoration(
-          color: selected ? AppColors.primary.withOpacity(0.10) : cs.surface,
-          borderRadius: BorderRadius.circular(14),
-          border: Border.all(
-            color: selected ? AppColors.primary.withOpacity(0.40) : cs.onSurface.withOpacity(0.08),
-            width: selected ? 1.4 : 1.0,
-          ),
-        ),
-        child: Row(
-          children: [
-            // avatar
-            _avatarCircle(context, d.avatarUrl, d.initials, selected: selected),
-            const SizedBox(width: 10),
+    final img = (d.imagesEffective.isNotEmpty) ? _fixUrl(d.imagesEffective.first) : '';
 
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      Expanded(
-                        child: Text(d.name, maxLines: 1, overflow: TextOverflow.ellipsis,
-                            style: TextStyle(fontWeight: FontWeight.w900, color: cs.onSurface.withOpacity(0.90))),
-                      ),
-                      const SizedBox(width: 8),
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                        decoration: BoxDecoration(
-                          color: rankColor.withOpacity(0.12),
-                          borderRadius: BorderRadius.circular(999),
-                          border: Border.all(color: rankColor.withOpacity(0.20)),
-                        ),
-                        child: Text(rank, style: TextStyle(fontWeight: FontWeight.w900, color: rankColor, fontSize: 11)),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 6),
-                  Wrap(
-                    spacing: 8,
-                    runSpacing: 6,
-                    children: [
-                      _miniChip(context, _vehicleIcon(vehicleType), '${vehicleType.toLowerCase().contains('bike') ? 'Bike' : 'Car'} • $seats seats'),
-                      _miniChip(context, Icons.local_taxi_rounded, d.category),
-                      if (d.carPlate.trim().isNotEmpty) _miniChip(context, Icons.confirmation_number_rounded, d.carPlate.trim()),
-                      _miniChip(context, Icons.timer_rounded, eta),
-                      _miniChip(context, Icons.near_me_rounded, distText),
-                      _stars(context, d.rating),
-                      if (d.totalTrips > 0) _miniChip(context, Icons.verified_rounded, '${d.totalTrips} trips'),
-                    ],
-                  ),
-                ],
-              ),
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 140),
+      curve: Curves.easeOut,
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(18),
+        boxShadow: selected
+            ? [
+          BoxShadow(
+            color: AppColors.primary.withOpacity(0.16),
+            blurRadius: 18,
+            offset: const Offset(0, 10),
+          )
+        ]
+            : [],
+      ),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(16),
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 180),
+          curve: Curves.easeOut,
+          padding: const EdgeInsets.fromLTRB(10, 9, 10, 9),
+          decoration: BoxDecoration(
+            color: selected ? AppColors.primary.withOpacity(0.10) : cs.surface,
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(
+              color: selected ? AppColors.primary.withOpacity(0.55) : cs.onSurface.withOpacity(0.08),
+              width: selected ? 1.6 : 1.0,
             ),
+            boxShadow: selected
+                ? [
+              BoxShadow(
+                blurRadius: 18,
+                offset: const Offset(0, 10),
+                color: AppColors.primary.withOpacity(0.10),
+              ),
+              BoxShadow(
+                blurRadius: 10,
+                offset: const Offset(0, 4),
+                color: Colors.black.withOpacity(0.08),
+              ),
+            ]
+                : [
+              BoxShadow(
+                blurRadius: 10,
+                offset: const Offset(0, 6),
+                color: Colors.black.withOpacity(0.06),
+              ),
+            ],
+          ),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              _avatarWithRank(context, d.avatarUrl, d.initials, rankText, rc, selected: selected),
+              const SizedBox(width: 10),
 
-            const SizedBox(width: 10),
-
-            // vehicle thumb
-            if (vehicleThumb.isNotEmpty)
-              ClipRRect(
-                borderRadius: BorderRadius.circular(12),
-                child: SizedBox(
-                  width: 56,
-                  height: 56,
-                  child: Image.network(
-                    vehicleThumb,
-                    fit: BoxFit.cover,
-                    filterQuality: FilterQuality.low,
-                    errorBuilder: (_, __, ___) => Container(
-                      color: cs.onSurface.withOpacity(0.06),
-                      child: Icon(_vehicleIcon(vehicleType), color: cs.onSurface.withOpacity(0.55)),
-                    ),
-                    loadingBuilder: (c, w, p) {
-                      if (p == null) return w;
-                      return Container(
-                        color: cs.onSurface.withOpacity(0.06),
-                        child: Center(
-                          child: SizedBox(
-                            width: 18,
-                            height: 18,
-                            child: CircularProgressIndicator(strokeWidth: 2.4, valueColor: AlwaysStoppedAnimation<Color>(AppColors.primary)),
+              // MAIN
+              Expanded(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            d.name,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              fontWeight: FontWeight.w900,
+                              color: cs.onSurface.withOpacity(0.92),
+                              fontSize: 12.2,
+                              height: 1.05,
+                              letterSpacing: -0.2,
+                            ),
                           ),
                         ),
-                      );
-                    },
-                  ),
+                        const SizedBox(width: 8),
+                        _starsBadge(context, d.rating),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    Wrap(
+                      spacing: 7,
+                      runSpacing: 7,
+                      children: [
+                        _chipNx(
+                          context,
+                          icon: _vehicleIconNx(vt),
+                          text: vt.toLowerCase().contains('bike') ? 'Bike' : 'Car',
+                          tone: AppColors.primary,
+                          strong: true,
+                        ),
+                        _chipNx(
+                          context,
+                          icon: Icons.airline_seat_recline_normal_rounded,
+                          text: '$seats seat',
+                          tone: const Color(0xFF1A73E8),
+                        ),
+                        if (d.carPlate.trim().isNotEmpty)
+                          _chipNx(
+                            context,
+                            icon: Icons.qr_code_rounded,
+                            text: d.carPlate.trim(),
+                            tone: const Color(0xFF6A5ACD),
+                            mono: true,
+                          ),
+                        _chipNx(
+                          context,
+                          icon: Icons.av_timer_rounded,
+                          text: etaText,
+                          tone: const Color(0xFFB8860B),
+                        ),
+                        _chipNx(
+                          context,
+                          icon: Icons.route_rounded,
+                          text: distText,
+                          tone: const Color(0xFF1E8E3E),
+                        ),
+                        if (d.category.trim().isNotEmpty)
+                          _chipNx(
+                            context,
+                            icon: Icons.bolt_rounded,
+                            text: _shortCat(d.category),
+                            tone: AppColors.primary,
+                          ),
+                      ],
+                    ),
+                  ],
                 ),
-              )
-            else
-              Container(
-                width: 56,
-                height: 56,
-                decoration: BoxDecoration(
-                  color: cs.onSurface.withOpacity(0.06),
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: cs.onSurface.withOpacity(0.10)),
-                ),
-                child: Icon(_vehicleIcon(vehicleType), color: cs.onSurface.withOpacity(0.55)),
               ),
 
-            if (selected) ...[
-              const SizedBox(width: 8),
-              Icon(Icons.check_circle_rounded, color: AppColors.primary),
+              const SizedBox(width: 10),
+
+              // RIGHT: stable price column
+              ConstrainedBox(
+                constraints: const BoxConstraints(minWidth: 82, maxWidth: 92),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.end,
+                      children: [
+                        _thumb(context, img, vt),
+                        if (selected) ...[
+                          const SizedBox(width: 6),
+                          Icon(Icons.verified_rounded, size: 18, color: AppColors.primary.withOpacity(0.95)),
+                        ],
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      totalText,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontWeight: FontWeight.w900,
+                        color: cs.onSurface.withOpacity(0.92),
+                        fontSize: 12.2,
+                        height: 1.05,
+                        letterSpacing: -0.2,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
             ],
-          ],
+          ),
         ),
       ),
     );
   }
 
-  Widget _avatarCircle(BuildContext context, String url, String initials, {required bool selected}) {
-    final cs = Theme.of(context).colorScheme;
-    final borderColor = selected ? AppColors.primary.withOpacity(0.35) : cs.onSurface.withOpacity(0.10);
-    final bg = cs.onSurface.withOpacity(0.06);
+  String _shortCat(String s) {
+    final x = s.trim();
+    if (x.length <= 10) return x;
+    return '${x.substring(0, 10)}…';
+  }
 
-    Widget fallback() {
+  String _fmtDistShort(double km) {
+    if (km <= 0) return 'Near';
+    if (km < 1) return '${(km * 1000).round()}m';
+    return '${km.toStringAsFixed(1)}km';
+  }
+
+  /// ===============================
+  /// UI PARTS
+  /// ===============================
+  Widget _starsBadge(BuildContext context, double rating) {
+    final cs = Theme.of(context).colorScheme;
+    final r = rating.clamp(0, 5).toDouble();
+    int full = r.floor();
+    final hasHalf = (r - full) >= 0.5;
+    if (full > 5) full = 5;
+
+    final icons = <Widget>[];
+    for (int i = 0; i < full; i++) {
+      icons.add(const Icon(Icons.star_rounded, size: 14, color: Color(0xFFFFD54F)));
+    }
+    if (hasHalf && full < 5) icons.add(const Icon(Icons.star_half_rounded, size: 14, color: Color(0xFFFFD54F)));
+    while (icons.length < 5) {
+      icons.add(Icon(Icons.star_outline_rounded, size: 14, color: cs.onSurface.withOpacity(0.25)));
+    }
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 6),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(999),
+        color: const Color(0xFFFFD54F).withOpacity(0.14),
+        border: Border.all(color: cs.onSurface.withOpacity(0.08)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          ...icons,
+          const SizedBox(width: 6),
+          Text(
+            r.toStringAsFixed(1),
+            style: TextStyle(fontWeight: FontWeight.w900, color: cs.onSurface.withOpacity(0.82), fontSize: 11),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _avatarWithRank(
+      BuildContext context,
+      String url,
+      String initials,
+      String rank,
+      Color rc, {
+        required bool selected,
+      }) {
+    final cs = Theme.of(context).colorScheme;
+    final borderColor = selected ? AppColors.primary.withOpacity(0.45) : cs.onSurface.withOpacity(0.10);
+    final bg = cs.onSurface.withOpacity(0.06);
+    final u = _fixUrl(url);
+
+    Widget avatarFallback() {
       return Container(
         width: 44,
         height: 44,
-        decoration: BoxDecoration(shape: BoxShape.circle, color: bg, border: Border.all(color: borderColor)),
+        decoration: BoxDecoration(shape: BoxShape.circle, color: bg, border: Border.all(color: borderColor, width: 1.2)),
         child: Center(
-          child: Text(initials, style: TextStyle(fontWeight: FontWeight.w900, color: cs.onSurface.withOpacity(0.75))),
+          child: Text(initials, style: TextStyle(fontWeight: FontWeight.w900, color: cs.onSurface.withOpacity(0.78), fontSize: 12)),
         ),
       );
     }
 
-    final u = url.trim();
-    if (u.isEmpty) return fallback();
-
-    return ClipOval(
+    final avatar = (u.isEmpty)
+        ? avatarFallback()
+        : ClipOval(
       child: Container(
         width: 44,
         height: 44,
-        decoration: BoxDecoration(color: bg, border: Border.all(color: borderColor)),
+        decoration: BoxDecoration(color: bg, border: Border.all(color: borderColor, width: 1.2)),
         child: Image.network(
           u,
           fit: BoxFit.cover,
+          cacheWidth: (44 * MediaQuery.of(context).devicePixelRatio).round(),
+          filterQuality: FilterQuality.low,
+          errorBuilder: (_, __, ___) => avatarFallback(),
+          loadingBuilder: (c, w, p) {
+            if (p == null) return w;
+            return Container(
+              color: bg,
+              child: const Center(
+                child: SizedBox(
+                  width: 16,
+                  height: 16,
+                  child: CircularProgressIndicator(strokeWidth: 2.2, valueColor: AlwaysStoppedAnimation<Color>(AppColors.primary)),
+                ),
+              ),
+            );
+          },
+        ),
+      ),
+    );
+
+    return SizedBox(
+      width: 46,
+      height: 46,
+      child: Stack(
+        clipBehavior: Clip.none,
+        children: [
+          Positioned.fill(child: avatar),
+          Positioned(
+            right: -1,
+            top: -1,
+            child: Container(
+              padding: const EdgeInsets.all(5),
+              decoration: BoxDecoration(
+                color: Theme.of(context).cardColor,
+                borderRadius: BorderRadius.circular(999),
+                border: Border.all(color: cs.onSurface.withOpacity(0.10)),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withOpacity(0.10),
+                    blurRadius: 10,
+                    offset: const Offset(0, 6),
+                  ),
+                ],
+              ),
+              child: Icon(_rankIcon(rank), size: 14, color: rc),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _thumb(BuildContext context, String url, String vehicleType) {
+    final cs = Theme.of(context).colorScheme;
+
+    Widget fallback() {
+      return Container(
+        width: 54,
+        height: 54,
+        decoration: BoxDecoration(
+          color: cs.onSurface.withOpacity(0.06),
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: cs.onSurface.withOpacity(0.10)),
+        ),
+        child: Center(child: Icon(_vehicleIcon(vehicleType), color: cs.onSurface.withOpacity(0.55), size: 22)),
+      );
+    }
+
+    final u = _fixUrl(url);
+    if (u.isEmpty) return fallback();
+
+    final dpr = MediaQuery.of(context).devicePixelRatio;
+    final cacheW = (54 * dpr).round();
+
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(16),
+      child: SizedBox(
+        width: 54,
+        height: 54,
+        child: Image.network(
+          u,
+          fit: BoxFit.cover,
+          cacheWidth: cacheW,
           filterQuality: FilterQuality.low,
           errorBuilder: (_, __, ___) => fallback(),
           loadingBuilder: (c, w, p) {
             if (p == null) return w;
             return Container(
-              color: bg,
-              child: Center(
+              color: cs.onSurface.withOpacity(0.06),
+              child: const Center(
                 child: SizedBox(
                   width: 16,
                   height: 16,
@@ -1028,142 +1147,6 @@ class _RideMarketSheetState extends State<RideMarketSheet> {
     );
   }
 
-  Widget _offerCard(BuildContext context, RideOffer offer, {required bool selected, required VoidCallback onTap}) {
-    final cs = Theme.of(context).colorScheme;
-    final title = _offerTitle(offer);
-    final eta = _offerEta(offer);
-    final perKm = _offerPerKmPrice(offer);
-    final total = _offerTotalForTrip(offer);
-    final old = _offerOld(offer);
-    final cur = _currency(offer);
-
-    final km = _tripKm;
-    final totalText = '$cur${_moneyFmt.format(total.round())}';
-    final perKmText = perKm > 0 ? '$cur${_moneyFmt.format(perKm.round())}/km' : '';
-    final kmText = km > 0 ? '${km.toStringAsFixed(1)} km' : '';
-
-    final oldText = (old > 0 && old > total) ? '$cur${_moneyFmt.format(old.round())}' : null;
-
-    // if a driver is selected, show seats/type from driver
-    final drivers = _driversVM;
-    final driverSelected = (_selectedDriverIdx >= 0 && _selectedDriverIdx < drivers.length);
-    final d = driverSelected ? drivers[_selectedDriverIdx] : null;
-
-    final vt = (d?.vehicleType ?? (_offerToMap(offer)['vehicle_type'] ?? 'car')).toString();
-    final seats = (vt.toLowerCase().contains('bike')) ? 1 : (d?.seats ?? _num(_offerToMap(offer)['seats'], 4).toInt());
-
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(14),
-      child: Container(
-        padding: const EdgeInsets.fromLTRB(12, 12, 12, 12),
-        decoration: BoxDecoration(
-          color: selected ? AppColors.primary.withOpacity(0.10) : cs.surface,
-          borderRadius: BorderRadius.circular(14),
-          border: Border.all(
-            color: selected ? AppColors.primary.withOpacity(0.40) : cs.onSurface.withOpacity(0.08),
-            width: selected ? 1.4 : 1.0,
-          ),
-        ),
-        child: Row(
-          children: [
-            Container(
-              width: 52,
-              height: 52,
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(14),
-                color: cs.onSurface.withOpacity(0.05),
-                border: Border.all(color: cs.onSurface.withOpacity(0.08)),
-              ),
-              child: Icon(_vehicleIcon(vt), color: cs.onSurface.withOpacity(0.65), size: 28),
-            ),
-            const SizedBox(width: 10),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(title, maxLines: 1, overflow: TextOverflow.ellipsis,
-                      style: TextStyle(fontWeight: FontWeight.w900, color: cs.onSurface.withOpacity(0.85))),
-                  const SizedBox(height: 6),
-                  Wrap(
-                    spacing: 8,
-                    runSpacing: 6,
-                    children: [
-                      _miniChip(context, Icons.timer_rounded, eta <= 0 ? '—' : '$eta min'),
-                      if (kmText.isNotEmpty) _miniChip(context, Icons.straighten_rounded, kmText),
-                      if (perKmText.isNotEmpty) _miniChip(context, Icons.price_change_rounded, perKmText),
-                      _miniChip(context, _vehicleIcon(vt), '${vt.toLowerCase().contains('bike') ? 'Bike' : 'Car'} • $seats'),
-                    ],
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(width: 10),
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.end,
-              children: [
-                Text(totalText, style: TextStyle(fontWeight: FontWeight.w900, color: cs.onSurface.withOpacity(0.88))),
-                if (oldText != null) ...[
-                  const SizedBox(height: 2),
-                  Text(oldText,
-                      style: TextStyle(
-                        fontWeight: FontWeight.w800,
-                        color: cs.onSurface.withOpacity(0.45),
-                        decoration: TextDecoration.lineThrough,
-                      )),
-                ],
-                const SizedBox(height: 4),
-                Text('Trip total', style: TextStyle(fontWeight: FontWeight.w800, color: cs.onSurface.withOpacity(0.55), fontSize: 11)),
-              ],
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _miniChip(BuildContext context, IconData icon, String text) {
-    final cs = Theme.of(context).colorScheme;
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(999),
-        color: cs.onSurface.withOpacity(0.04),
-        border: Border.all(color: cs.onSurface.withOpacity(0.10)),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(icon, size: 15, color: cs.onSurface.withOpacity(0.65)),
-          const SizedBox(width: 6),
-          Text(text, style: TextStyle(fontWeight: FontWeight.w900, color: cs.onSurface.withOpacity(0.70), fontSize: 12)),
-        ],
-      ),
-    );
-  }
-
-  Widget _stars(BuildContext context, double rating) {
-    final cs = Theme.of(context).colorScheme;
-    final r = rating.clamp(0, 5);
-    final full = r.floor();
-    final half = (r - full) >= 0.5 ? 1 : 0;
-    final empty = 5 - full - half;
-
-    final icons = <Widget>[];
-    for (int i = 0; i < full; i++) icons.add(const Icon(Icons.star_rounded, size: 16, color: Color(0xFFFFD54F)));
-    if (half == 1) icons.add(const Icon(Icons.star_half_rounded, size: 16, color: Color(0xFFFFD54F)));
-    for (int i = 0; i < empty; i++) icons.add(Icon(Icons.star_outline_rounded, size: 16, color: cs.onSurface.withOpacity(0.30)));
-
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        ...icons,
-        const SizedBox(width: 6),
-        Text(r.toStringAsFixed(2), style: TextStyle(fontWeight: FontWeight.w900, color: cs.onSurface.withOpacity(0.65), fontSize: 12)),
-      ],
-    );
-  }
-
   Widget _loadingRow(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
     return Container(
@@ -1171,12 +1154,12 @@ class _RideMarketSheetState extends State<RideMarketSheet> {
       padding: const EdgeInsets.fromLTRB(12, 12, 12, 12),
       decoration: BoxDecoration(
         color: cs.surface,
-        borderRadius: BorderRadius.circular(14),
+        borderRadius: BorderRadius.circular(16),
         border: Border.all(color: cs.onSurface.withOpacity(0.08)),
       ),
       child: Row(
         children: [
-          SizedBox(
+          const SizedBox(
             width: 18,
             height: 18,
             child: CircularProgressIndicator(
@@ -1186,35 +1169,7 @@ class _RideMarketSheetState extends State<RideMarketSheet> {
           ),
           const SizedBox(width: 10),
           Expanded(
-            child: Text('Searching…', style: TextStyle(fontWeight: FontWeight.w900, color: cs.onSurface.withOpacity(0.75))),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _hint(BuildContext context, String title, String subtitle) {
-    final cs = Theme.of(context).colorScheme;
-    return Container(
-      padding: const EdgeInsets.fromLTRB(12, 12, 12, 12),
-      decoration: BoxDecoration(
-        color: cs.surface,
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: cs.onSurface.withOpacity(0.08)),
-      ),
-      child: Row(
-        children: [
-          Icon(Icons.info_rounded, color: cs.onSurface.withOpacity(0.55)),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(title, style: TextStyle(fontWeight: FontWeight.w900, color: cs.onSurface.withOpacity(0.80))),
-                const SizedBox(height: 4),
-                Text(subtitle, style: TextStyle(fontWeight: FontWeight.w700, color: cs.onSurface.withOpacity(0.58), height: 1.2)),
-              ],
-            ),
+            child: Text('Searching…', style: TextStyle(fontWeight: FontWeight.w900, color: cs.onSurface.withOpacity(0.78))),
           ),
         ],
       ),
@@ -1227,28 +1182,32 @@ class _RideMarketSheetState extends State<RideMarketSheet> {
       padding: const EdgeInsets.fromLTRB(14, 16, 14, 16),
       decoration: BoxDecoration(
         color: cs.surface,
-        borderRadius: BorderRadius.circular(14),
+        borderRadius: BorderRadius.circular(18),
         border: Border.all(color: cs.onSurface.withOpacity(0.08)),
       ),
       child: Column(
         children: [
           Icon(Icons.directions_car_filled_rounded, color: cs.onSurface.withOpacity(0.55), size: 36),
           const SizedBox(height: 10),
-          Text('No cars nearby right now', style: TextStyle(fontWeight: FontWeight.w900, color: cs.onSurface.withOpacity(0.82))),
+          Text('No drivers nearby', style: TextStyle(fontWeight: FontWeight.w900, color: cs.onSurface.withOpacity(0.84))),
           const SizedBox(height: 6),
-          Text('Try again in a moment.', style: TextStyle(fontWeight: FontWeight.w700, color: cs.onSurface.withOpacity(0.58))),
+          Text('Try refresh in a moment.', style: TextStyle(fontWeight: FontWeight.w700, color: cs.onSurface.withOpacity(0.60))),
           const SizedBox(height: 12),
           SizedBox(
             width: double.infinity,
-            height: 46,
+            height: 48,
             child: ElevatedButton(
-              onPressed: widget.onRefresh,
+              onPressed: () {
+                setState(() => _resetStable(alsoClearSelection: true));
+                widget.onRefresh();
+              },
               style: ElevatedButton.styleFrom(
                 backgroundColor: AppColors.primary,
                 foregroundColor: Colors.white,
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                elevation: 0,
               ),
-              child: const Text('Try again', style: TextStyle(fontWeight: FontWeight.w900)),
+              child: const Text('Refresh', style: TextStyle(fontWeight: FontWeight.w900)),
             ),
           ),
         ],
@@ -1256,21 +1215,17 @@ class _RideMarketSheetState extends State<RideMarketSheet> {
     );
   }
 
-  // ✅ bottom bar now opens driver details sheet when user taps "Select ..."
-  Widget _bottomBar(BuildContext context, MediaQueryData mq) {
+  /// ===============================
+  /// BOTTOM BAR
+  /// ===============================
+  Widget _bottomBar(BuildContext context, MediaQueryData mq, List<RideNearbyDriver> drivers) {
     final cs = Theme.of(context).colorScheme;
 
-    final drivers = _driversVM;
-    final offers = _offersRaw;
+    final selected = (_selectedDriverId != null)
+        ? drivers.where((x) => x.id == _selectedDriverId).toList(growable: false)
+        : const <RideNearbyDriver>[];
 
-    final driverSelected = (_selectedDriverIdx >= 0 && _selectedDriverIdx < drivers.length);
-    final offerSelected = (_selectedOfferIdx >= 0 && _selectedOfferIdx < offers.length);
-
-    final canProceed = driverSelected && offerSelected;
-
-    final offerTitle = offerSelected ? _offerTitle(offers[_selectedOfferIdx]) : 'Ride';
-
-    final btnText = canProceed ? 'Select $offerTitle' : (driverSelected ? 'Select a ride option' : 'Select a driver');
+    final driverSelected = selected.isNotEmpty;
 
     return SafeArea(
       top: false,
@@ -1280,65 +1235,384 @@ class _RideMarketSheetState extends State<RideMarketSheet> {
           color: Theme.of(context).cardColor,
           border: Border(top: BorderSide(color: cs.onSurface.withOpacity(0.08))),
         ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            // Payment row (screenshot-like)
-            Row(
+        child: SizedBox(
+          width: double.infinity,
+          height: 54,
+          child: ElevatedButton(
+            onPressed: driverSelected
+                ? () async {
+              final d = selected.first;
+
+              // freeze immediately once selecting (prevents any refresh feel)
+              setState(() => _fullyFrozen = true);
+
+              final driverMap = _driverToMap(d);
+              final offerMap = _offerMapFromDriver(d);
+
+              final payload = await showModalBottomSheet<Map<String, dynamic>>(
+                context: context,
+                isScrollControlled: true,
+                backgroundColor: Colors.transparent,
+                builder: (_) {
+                  return DriverDetailsSheet(
+                    driver: driverMap,
+                    offer: offerMap,
+                    originText: widget.originText,
+                    destinationText: widget.destinationText,
+                    distanceText: widget.distanceText,
+                    durationText: widget.durationText,
+                    tripDistanceKm: _tripKm,
+
+                    // ✅ Pass coords if you have them
+                    userLocation: /* GeoPoint(userLat, userLng) */ null,
+                    pickupLocation: /* GeoPoint(pickupLat, pickupLng) */ null,
+                    dropLocation: /* GeoPoint(dropLat, dropLng) */ null,
+                  );
+                },
+              );
+
+              if (payload != null) {
+                // ✅ Send payload to rideBookEndpoint here (your API client)
+                // await ApiClient.post('/rideBookEndpoint', payload);
+
+                // Keep your existing onBook flow if needed:
+                // widget.onBook(d, offer);
+              }
+
+            }
+                : null,
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppColors.primary,
+              foregroundColor: Colors.white,
+              disabledBackgroundColor: cs.onSurface.withOpacity(0.10),
+              disabledForegroundColor: cs.onSurface.withOpacity(0.40),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+              elevation: 0,
+            ),
+            child: const Text('Select a driver', style: TextStyle(fontWeight: FontWeight.w900)),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// ===============================
+  /// MAP BUILDERS (Details Sheet)
+  /// ===============================
+  Map<String, dynamic> _driverToMap(RideNearbyDriver d) {
+    return <String, dynamic>{
+      'id': d.id,
+      'name': d.name,
+      'category': d.category,
+      'rating': d.rating,
+      'car_plate': d.carPlate,
+      'lat': d.lat,
+      'lng': d.lng,
+      'heading': d.heading,
+      'distance_km': d.distanceKm,
+      'eta_min': d.etaMin,
+      'vehicle_type': d.vehicleType,
+      'seats': d.seats,
+      'vehicle_images': d.vehicleImages,
+      'vehicle_description': d.vehicleDescription,
+      'car_image_url': d.carImageUrl,
+      'avatar_url': d.avatarUrl,
+      'phone': d.phone,
+      'nin': d.nin,
+      'rank': d.rank,
+      'completed_trips': d.completedTrips,
+      'cancelled_trips': d.cancelledTrips,
+      'incomplete_trips': d.incompleteTrips,
+      'reviews_count': d.reviewsCount,
+      'total_trips': d.totalTrips,
+      // pricing
+      'currency': d.currency,
+      'price_per_km': d.pricePerKm,
+      'base_fare': d.baseFare,
+      'estimated_total': _driverTotal(d),
+      'trip_km': _tripKm,
+    };
+  }
+
+  Map<String, dynamic> _offerMapFromDriver(RideNearbyDriver d) {
+    final total = _driverTotal(d);
+    return <String, dynamic>{
+      'id': 'driver-${d.id}',
+      'provider': 'PickMe',
+      'category': d.vehicleType.toLowerCase().contains('bike') ? 'Bike' : 'Car',
+      'vehicle_type': d.vehicleType,
+      'seats': d.seats,
+      'eta_min': d.etaMin,
+      'currency': d.currency,
+      'price_per_km': d.pricePerKm,
+      'base_fare': d.baseFare,
+      'estimated_total': total,
+      'trip_km': _tripKm,
+      'price_total': total,
+    };
+  }
+}
+
+/// ===============================
+/// ROUTE MINI (From/To tree)
+/// ===============================
+class _FromToMini extends StatelessWidget {
+  final String origin;
+  final String dest;
+  final int count;
+  final ColorScheme cs;
+
+  const _FromToMini({
+    required this.origin,
+    required this.dest,
+    required this.count,
+    required this.cs,
+  });
+
+  static const double _h = 48;
+  static const double _treeW = 18;
+  static const double _gap = 10;
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      height: _h,
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          _RouteTreeAligned(cs: cs, height: _h, width: _treeW),
+          const SizedBox(width: _gap),
+          Expanded(
+            child: Stack(
+              clipBehavior: Clip.none,
               children: [
-                Icon(Icons.payments_rounded, color: cs.onSurface.withOpacity(0.60), size: 18),
-                const SizedBox(width: 8),
-                Text('Cash', style: TextStyle(fontWeight: FontWeight.w900, color: cs.onSurface.withOpacity(0.78))),
-                const SizedBox(width: 6),
-                Icon(Icons.keyboard_arrow_down_rounded, color: cs.onSurface.withOpacity(0.55)),
-                const Spacer(),
-                if (_locked) Text('Locked', style: TextStyle(fontWeight: FontWeight.w900, color: AppColors.primary)),
+                Padding(
+                  padding: const EdgeInsets.only(right: 110),
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      _LabeledLine(label: "FROM", value: origin, cs: cs, strong: true),
+                      _LabeledLine(label: "TO", value: dest, cs: cs, strong: false),
+                    ],
+                  ),
+                ),
+                Positioned(
+                  right: 0,
+                  top: -1,
+                  child: _NearbyPillMini(count: count, cs: cs),
+                ),
               ],
             ),
-            const SizedBox(height: 10),
-            SizedBox(
-              width: double.infinity,
-              height: 52,
-              child: ElevatedButton(
-                onPressed: canProceed
-                    ? () async {
-                  final d = drivers[_selectedDriverIdx];
-                  final o = offers[_selectedOfferIdx];
+          ),
+        ],
+      ),
+    );
+  }
+}
 
-                  final driverMap = _driverToMap(d);
-                  final offerMap = _offerToMap(o);
+class _RouteTreeAligned extends StatelessWidget {
+  final ColorScheme cs;
+  final double height;
+  final double width;
 
-                  await showModalBottomSheet(
-                    context: context,
-                    isScrollControlled: true,
-                    backgroundColor: Colors.transparent,
-                    builder: (_) {
-                      return DriverDetailsSheet(
-                        driver: driverMap,
-                        offer: offerMap,
-                        originText: widget.originText,
-                        destinationText: widget.destinationText,
-                        distanceText: widget.distanceText,
-                        durationText: widget.durationText,
-                        tripDistanceKm: _tripKm,
-                        onConfirm: () {
-                          Navigator.of(context).pop();
-                          widget.onBook(d, o);
-                        },
-                      );
-                    },
-                  );
-                }
-                    : null,
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: AppColors.primary,
-                  foregroundColor: Colors.white,
-                  disabledBackgroundColor: AppColors.primary.withOpacity(0.35),
-                  disabledForegroundColor: Colors.white.withOpacity(0.75),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-                  elevation: 0,
-                ),
-                child: Text(btnText, style: const TextStyle(fontWeight: FontWeight.w900)),
+  const _RouteTreeAligned({
+    required this.cs,
+    required this.height,
+    required this.width,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    const start = Color(0xFF1A73E8);
+    const end = Color(0xFF1E8E3E);
+
+    return SizedBox(
+      width: width,
+      height: height,
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          const _ProNode(color: start, glyph: Icons.my_location_rounded),
+          Expanded(
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 3),
+              child: CustomPaint(
+                painter: _DottedStemPainter(color: cs.onSurface.withOpacity(0.22)),
+              ),
+            ),
+          ),
+          const _ProNode(color: end, glyph: Icons.place_rounded),
+        ],
+      ),
+    );
+  }
+}
+
+class _ProNode extends StatelessWidget {
+  final Color color;
+  final IconData glyph;
+
+  const _ProNode({required this.color, required this.glyph});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 12,
+      height: 12,
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        color: color.withOpacity(0.16),
+        border: Border.all(color: Colors.white.withOpacity(0.10), width: 0.6),
+        boxShadow: [
+          BoxShadow(
+            blurRadius: 10,
+            offset: const Offset(0, 3),
+            color: color.withOpacity(0.20),
+          ),
+        ],
+      ),
+      child: Center(
+        child: Container(
+          width: 10,
+          height: 10,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            gradient: RadialGradient(
+              center: const Alignment(-0.25, -0.25),
+              radius: 0.9,
+              colors: [
+                color.withOpacity(0.98),
+                color.withOpacity(0.60),
+              ],
+            ),
+          ),
+          child: Center(
+            child: Icon(glyph, size: 9, color: Colors.white.withOpacity(0.95)),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _DottedStemPainter extends CustomPainter {
+  final Color color;
+  const _DottedStemPainter({required this.color});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final p = Paint()..color = color;
+    const dashH = 3.0;
+    const gap = 2.0;
+
+    final x = size.width / 2;
+    double y = 0;
+
+    while (y < size.height) {
+      final h = (y + dashH <= size.height) ? dashH : (size.height - y);
+      final rect = RRect.fromRectAndRadius(
+        Rect.fromCenter(center: Offset(x, y + h / 2), width: 1.8, height: h),
+        const Radius.circular(99),
+      );
+      canvas.drawRRect(rect, p);
+      y += dashH + gap;
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _DottedStemPainter oldDelegate) => oldDelegate.color != color;
+}
+
+class _LabeledLine extends StatelessWidget {
+  final String label;
+  final String value;
+  final ColorScheme cs;
+  final bool strong;
+
+  const _LabeledLine({
+    required this.label,
+    required this.value,
+    required this.cs,
+    required this.strong,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.center,
+      children: [
+        SizedBox(
+          width: 34,
+          child: Text(
+            label,
+            maxLines: 1,
+            overflow: TextOverflow.clip,
+            style: TextStyle(
+              fontSize: 9.2,
+              height: 1.0,
+              fontWeight: FontWeight.w900,
+              letterSpacing: 0.4,
+              color: cs.onSurface.withOpacity(0.42),
+            ),
+          ),
+        ),
+        const SizedBox(width: 6),
+        Expanded(
+          child: Text(
+            value,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              fontSize: strong ? 12.2 : 11.2,
+              height: 1.0,
+              letterSpacing: -0.2,
+              fontWeight: strong ? FontWeight.w900 : FontWeight.w800,
+              color: cs.onSurface.withOpacity(strong ? 0.92 : 0.66),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _NearbyPillMini extends StatelessWidget {
+  final int count;
+  final ColorScheme cs;
+
+  const _NearbyPillMini({required this.count, required this.cs});
+
+  @override
+  Widget build(BuildContext context) {
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: cs.surfaceContainerHighest.withOpacity(0.60),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: AppColors.primary.withOpacity(0.25), width: 1),
+        boxShadow: [
+          BoxShadow(
+            blurRadius: 14,
+            offset: const Offset(0, 6),
+            color: Colors.black.withOpacity(0.18),
+          ),
+        ],
+      ),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.near_me_rounded, size: 12, color: AppColors.primary),
+            const SizedBox(width: 5),
+            Text(
+              "$count nearby",
+              style: TextStyle(
+                fontSize: 10.4,
+                height: 1.0,
+                fontWeight: FontWeight.w900,
+                letterSpacing: -0.15,
+                color: cs.onSurface.withOpacity(0.88),
               ),
             ),
           ],
@@ -1346,4 +1620,84 @@ class _RideMarketSheetState extends State<RideMarketSheet> {
       ),
     );
   }
+}
+
+/// ===============================
+/// NEXT-GEN CHIP (tiny, premium)
+/// ===============================
+IconData _vehicleIconNx(String vt) {
+  final v = vt.toLowerCase();
+  if (v.contains('bike') || v.contains('moto')) return Icons.two_wheeler_rounded;
+  if (v.contains('bus') || v.contains('van')) return Icons.airport_shuttle_rounded;
+  if (v.contains('lux') || v.contains('vip')) return Icons.workspace_premium_rounded;
+  return Icons.directions_car_filled_rounded;
+}
+
+Widget _chipNx(
+    BuildContext context, {
+      required IconData icon,
+      required String text,
+      required Color tone,
+      bool strong = false,
+      bool mono = false,
+    }) {
+  final cs = Theme.of(context).colorScheme;
+
+  return DecoratedBox(
+    decoration: BoxDecoration(
+      color: tone.withOpacity(0.10),
+      borderRadius: BorderRadius.circular(999),
+      border: Border.all(color: tone.withOpacity(0.22), width: 1),
+      boxShadow: [
+        BoxShadow(
+          blurRadius: 12,
+          offset: const Offset(0, 6),
+          color: tone.withOpacity(0.07),
+        ),
+      ],
+    ),
+    child: Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Stack(
+            alignment: Alignment.center,
+            children: [
+              Container(
+                width: 16,
+                height: 16,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  gradient: RadialGradient(
+                    center: const Alignment(-0.2, -0.2),
+                    radius: 0.9,
+                    colors: [
+                      tone.withOpacity(0.40),
+                      tone.withOpacity(0.08),
+                    ],
+                  ),
+                ),
+              ),
+              Icon(icon, size: 12.5, color: tone.withOpacity(0.95)),
+            ],
+          ),
+          const SizedBox(width: 6),
+          Text(
+            text,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              fontWeight: strong ? FontWeight.w900 : FontWeight.w800,
+              color: cs.onSurface.withOpacity(0.86),
+              fontSize: 10.4,
+              height: 1.0,
+              letterSpacing: -0.1,
+              fontFeatures: mono ? const [FontFeature.tabularFigures()] : null,
+            ),
+          ),
+        ],
+      ),
+    ),
+  );
 }

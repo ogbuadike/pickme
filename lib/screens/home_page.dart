@@ -381,7 +381,10 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
       p.focus.dispose();
     }
 
-    _map?.dispose();
+    try {
+      _map?.dispose();
+    } catch (_) {}
+
     _requestQueue.clear();
     _routePts.clear();
     _spatialIndex.clear();
@@ -1765,6 +1768,9 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
       _durationText = _fmtDuration(durationSeconds);
       _fare = _calcFare(distanceMeters);
       _isConnected = true;
+
+      // important: avoid duplicate segments
+      _lines.clear();
     });
 
     _routePts = points;
@@ -1974,6 +1980,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
       _durationText = _fmtDuration(dSecs);
       _fare = _calcFare(dMeters);
       _isConnected = true;
+      _lines.clear();
     });
 
     _routePts = pts;
@@ -2056,7 +2063,6 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
       textDirection: ui.TextDirection.ltr,
     )..layout();
 
-    // ✅ FIXED: TextSpan uses `text:` (NOT `texttext:`)
     final minTp = TextPainter(
       text: const TextSpan(
         text: 'min',
@@ -3022,7 +3028,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
   }
 
   // ============================================================================
-  // ✅ AUTOCOMPLETE + STOPS + SWAP (WAS MISSING IN YOUR FILE → FIXED)
+  // ✅ AUTOCOMPLETE + STOPS + SWAP
   // ============================================================================
   void _ensurePlacesSession() {
     if (_placesSession.isEmpty) _placesSession = _uuid.v4();
@@ -3087,7 +3093,6 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
         }
       } catch (_) {}
 
-      // Fallbacks if empty
       if (sugs.isEmpty) {
         try {
           result = await _auto
@@ -3178,7 +3183,6 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
   }
 
   void _focusNextUnfilled() {
-    // Prefer next empty text field after current selection.
     for (int i = 0; i < _pts.length; i++) {
       if (_pts[i].controller.text.trim().isEmpty) {
         _activeIdx = i;
@@ -3186,7 +3190,6 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
         return;
       }
     }
-    // If all filled, close overlay.
     _collapse();
   }
 
@@ -3222,9 +3225,8 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
 
       _putMarker(_activeIdx, ll, s.description);
       _saveRecent(s);
-      _placesSession = ''; // end session after a selection
+      _placesSession = '';
 
-      // If route is complete, build + fit + open market automatically.
       if (_hasPickupAndDropoff) {
         _cachedRoute = null;
         await _buildRoute();
@@ -3241,7 +3243,6 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
 
   void _addStop() {
     HapticFeedback.selectionClick();
-    // Insert before destination.
     if (_pts.length >= 6) {
       _toast('Limit', 'Maximum stops reached.');
       return;
@@ -3293,7 +3294,6 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
     removed.controller.dispose();
     removed.focus.dispose();
 
-    // Repaint markers for remaining points (ids depend on index)
     for (int i = 0; i < _pts.length; i++) {
       final ll = _pts[i].latLng;
       if (ll != null) _putMarker(i, ll, _pts[i].controller.text);
@@ -3799,6 +3799,17 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
   }
 
   // ===== Point markers =====
+  String _pointLabel(PointType t) {
+    switch (t) {
+      case PointType.pickup:
+        return 'Pickup';
+      case PointType.destination:
+        return 'Destination';
+      case PointType.stop:
+        return 'Stop';
+    }
+  }
+
   void _putMarker(int idx, LatLng pos, String title) {
     final p = _pts[idx];
     final id = MarkerId('p_$idx');
@@ -3817,7 +3828,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
           position: pos,
           icon: icon,
           anchor: const Offset(0.5, 0.5),
-          infoWindow: InfoWindow(title: p.type.label, snippet: title),
+          infoWindow: InfoWindow(title: _pointLabel(p.type), snippet: title),
           consumeTapEvents: false,
         ),
       );

@@ -647,8 +647,42 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
     return BitmapDescriptor.fromBytes(bytes);
   }
 
+  Future<BitmapDescriptor> _bitmapDescriptorFromAsset(
+      String assetPath, {
+        int targetWidth = 96,
+      }) async {
+    final bd = await rootBundle.load(assetPath);
+    final bytes = bd.buffer.asUint8List();
+
+    final codec = await ui.instantiateImageCodec(
+      bytes,
+      targetWidth: targetWidth,
+    );
+    final frame = await codec.getNextFrame();
+    final pngBytes =
+    (await frame.image.toByteData(format: ui.ImageByteFormat.png))!
+        .buffer
+        .asUint8List();
+
+    return BitmapDescriptor.fromBytes(pngBytes);
+  }
+
+
   Future<void> _createDriverIcon() async {
     if (_driverIcon != null) return;
+
+    // ✅ 1) Try to use your real “Open Top View Car” PNG from assets
+    try {
+      _driverIcon = await _bitmapDescriptorFromAsset(
+        'assets/images/open_top_view_car.png', // <-- put your PNG here
+        targetWidth: 96,
+      );
+      return;
+    } catch (_) {
+      // fall through to your existing vector fallback below
+    }
+
+    // ✅ 2) Fallback: your original drawn marker (unchanged)
     const w = 72.0, h = 72.0;
     final rec = ui.PictureRecorder();
     final c = Canvas(rec);
@@ -666,7 +700,8 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
     c.drawCircle(const Offset(46, 44), 5, Paint()..color = Colors.black87);
 
     final img = await rec.endRecording().toImage(w.toInt(), h.toInt());
-    final bytes = (await img.toByteData(format: ui.ImageByteFormat.png))!.buffer.asUint8List();
+    final bytes =
+    (await img.toByteData(format: ui.ImageByteFormat.png))!.buffer.asUint8List();
     _driverIcon = BitmapDescriptor.fromBytes(bytes);
   }
 
@@ -2374,19 +2409,27 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
     try {
       final origin = LatLng(_curPos!.latitude, _curPos!.longitude);
 
-      final res = await _api
-          .request(
+      final riderId =
+          _prefs.getString('user_id') ??
+              _user?['id']?.toString() ??
+              _user?['user_id']?.toString() ??
+              'guest';
+
+      final res = await _api.request(
         ApiConstants.driversNearbyEndpoint,
         method: 'POST',
         data: {
+          // ✅ required location fields (unchanged)
           'lat': origin.latitude.toString(),
           'lng': origin.longitude.toString(),
           'radius_km': _homeRadiusKm().toStringAsFixed(1),
           'vehicle': 'car',
           'cursor': _nearbyDriversCursor ?? '',
+
+          'user_id': riderId,
         },
-      )
-          .timeout(const Duration(seconds: 6));
+      ).timeout(const Duration(seconds: 6));
+
 
       if (!mounted) return;
 

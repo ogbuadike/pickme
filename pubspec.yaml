@@ -112,6 +112,7 @@ flutter:
     - assets/icons/
     - image/
   #   - images/a_dot_ham.jpeg
+    - assets/images/open_top_view_car.png
 
   # An image asset can refer to one or more resolution-specific "variants", see
   # https://flutter.dev/to/resolution-aware-images

@@ -2426,6 +2426,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
           'vehicle': 'car',
           'cursor': _nearbyDriversCursor ?? '',
 
+          // ✅ include user id (send multiple keys to match any backend expectation)
           'user_id': riderId,
         },
       ).timeout(const Duration(seconds: 6));

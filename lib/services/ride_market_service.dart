@@ -4,6 +4,7 @@
 // ✅ Sends trip_km to drivers endpoint (and offers endpoint optionally) so PHP returns estimated_total.
 // ✅ Adds stable driver ordering in-service (prevents “shuffle” across ticks for ALL consumers).
 // ✅ Fingerprint now includes trip_km + pricing (so UI updates when destination/trip changes).
+// ✅ NOW supports user_id (rider id) on BOTH offers + drivers requests (via userId / userIdProvider).
 // - Resilient JSON parsing for dynamic backend output
 // - Polls offers + nearby drivers (cursor supported)
 // - NO print(); logs are assert-guarded (zero overhead in release)
@@ -110,7 +111,6 @@ class RideOffer {
       estimatedTotal: estTotal,
       vehicleType: (m['vehicle_type'] ?? m['vehicle'] ?? m['type'])?.toString(),
     );
-    // NOTE: Keep this compatible with older backends.
   }
 }
 
@@ -320,7 +320,7 @@ class RideMarketService {
       if (!debug) return true;
       final d = data == null ? '' : ' → $data';
       // ignore: avoid_print
-      //debugPrint('[RideMarketService] $msg$d');
+      // debugPrint('[RideMarketService] $msg$d');
       return true;
     }());
   }
@@ -400,7 +400,8 @@ class RideMarketService {
 
   /// Starts a polling stream (single active stream per service instance).
   ///
-  /// New: pass tripKm (or tripKmProvider) so backend returns estimated_total.
+  /// ✅ New: pass userId (or userIdProvider) so backend can personalize / log / filter.
+  /// ✅ New: pass tripKm (or tripKmProvider) so backend returns estimated_total.
   Stream<RideMarketSnapshot> stream({
     required LatLng origin,
     required LatLng destination,
@@ -410,6 +411,10 @@ class RideMarketService {
     // optional dynamic providers
     LatLng Function()? originProvider,
     LatLng Function()? destinationProvider,
+
+    // ✅ NEW: user id support
+    String? userId,
+    String Function()? userIdProvider,
 
     // ✅ NEW: trip distance in KM (used for driver price_total/estimated_total)
     double? tripKm,
@@ -444,6 +449,12 @@ class RideMarketService {
     LatLng getO() => originProvider?.call() ?? origin;
     LatLng getD() => destinationProvider?.call() ?? destination;
 
+    String getUid() {
+      final v = userIdProvider?.call() ?? userId ?? '';
+      final s = v.trim();
+      return s;
+    }
+
     double getTripKm(LatLng o, LatLng d) {
       final v = tripKmProvider?.call() ?? tripKm ?? _haversineKm(o, d);
       if (v.isNaN || v.isInfinite) return 0.0;
@@ -462,23 +473,32 @@ class RideMarketService {
       try {
         final o = getO();
         final d = getD();
+        final uid = getUid();
         final tripKmVal = getTripKm(o, d);
 
         // ---------- OFFERS ----------
         if (!driversOnly) {
           try {
+            final offData = <String, String>{
+              'origin': '${o.latitude},${o.longitude}',
+              'destination': '${d.latitude},${d.longitude}',
+              'radius_km': searchRadiusKm.toStringAsFixed(1),
+              'vehicle': vehicle,
+              // ✅ send trip_km for backends that use it
+              'trip_km': tripKmVal.toStringAsFixed(3),
+            };
+
+            // ✅ user id (optional)
+            if (uid.isNotEmpty) {
+              offData['user_id'] = uid;
+              //offData['rider_id'] = uid; // harmless alias if backend ignores
+            }
+
             final offRes = await api
                 .request(
               ApiConstants.rideOffersEndpoint,
               method: 'POST',
-              data: {
-                'origin': '${o.latitude},${o.longitude}',
-                'destination': '${d.latitude},${d.longitude}',
-                'radius_km': searchRadiusKm.toStringAsFixed(1),
-                'vehicle': vehicle,
-                // ✅ send trip_km for backends that use it
-                'trip_km': tripKmVal.toStringAsFixed(3),
-              },
+              data: offData, // ✅ Map<String,String>
             )
                 .timeout(requestTimeout);
 
@@ -500,19 +520,27 @@ class RideMarketService {
         // ---------- DRIVERS ----------
         if (!offersOnly) {
           try {
+            final drvData = <String, String>{
+              'lat': o.latitude.toString(),
+              'lng': o.longitude.toString(),
+              'radius_km': searchRadiusKm.toStringAsFixed(1),
+              'vehicle': vehicle,
+              'cursor': _cursor ?? '',
+              // ✅ critical for new PHP pricing
+              'trip_km': tripKmVal.toStringAsFixed(3),
+            };
+
+            // ✅ user id (optional)
+            if (uid.isNotEmpty) {
+              drvData['user_id'] = uid;
+              drvData['rider_id'] = uid; // harmless alias if backend ignores
+            }
+
             final drvRes = await api
                 .request(
               ApiConstants.driversNearbyEndpoint,
               method: 'POST',
-              data: {
-                'lat': o.latitude.toString(),
-                'lng': o.longitude.toString(),
-                'radius_km': searchRadiusKm.toStringAsFixed(1),
-                'vehicle': vehicle,
-                'cursor': _cursor ?? '',
-                // ✅ critical for new PHP pricing
-                'trip_km': tripKmVal.toStringAsFixed(3),
-              },
+              data: drvData, // ✅ Map<String,String>
             )
                 .timeout(requestTimeout);
 
@@ -526,8 +554,8 @@ class RideMarketService {
                   .toList(growable: false);
 
               // ✅ stable ordering to stop shuffling across ticks
-              for (final d in drivers) {
-                _stableDriverOrder.putIfAbsent(d.id, () => _stableSeq++);
+              for (final d0 in drivers) {
+                _stableDriverOrder.putIfAbsent(d0.id, () => _stableSeq++);
               }
               drivers.sort((a, b) => (_stableDriverOrder[a.id] ?? 0).compareTo(_stableDriverOrder[b.id] ?? 0));
 

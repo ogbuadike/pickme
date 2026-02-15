@@ -10,7 +10,8 @@
 
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io' show Platform;
+//import 'dart:io' show Platform;
+import 'package:flutter/foundation.dart' show defaultTargetPlatform, TargetPlatform, kIsWeb;
 import 'dart:math' as math;
 import 'dart:ui' as ui;
 
@@ -341,12 +342,22 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
     _startCompass();
 
     _svcStatusSub?.cancel();
-    _svcStatusSub = Geolocator.getServiceStatusStream().listen((status) {
-      _logLocationDiagnostic('Service status: $status');
-      if (status == ServiceStatus.enabled) {
-        _restartLocationStreamWithBackoff();
+
+    // Some platforms (esp. web / certain builds) can throw for service-status stream.
+    // Keep behavior the same on supported platforms, but never crash initState.
+    if (!kIsWeb) {
+      try {
+        _svcStatusSub = Geolocator.getServiceStatusStream().listen((status) {
+          _logLocationDiagnostic('Service status: $status');
+          if (status == ServiceStatus.enabled) {
+            _restartLocationStreamWithBackoff();
+          }
+        }, onError: (_) {});
+      } catch (_) {
+        // ignore (unsupported)
       }
-    });
+    }
+
   }
 
   @override
@@ -558,7 +569,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
 
   Future<void> _createUserPinIcon() async {
     try {
-      final avatarUrl = _safeAvatarUrl(_user?['user_logo'] as String?);
+      final avatarUrl = _safeAvatarUrl(_user?['user_logo']?.toString());
       _userPinIcon = await _buildAvatarPinIcon(avatarUrl);
       if (!mounted) return;
       setState(() {});
@@ -960,14 +971,31 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
     );
   }
 
+  double _effectiveBoundsPadding(double base) {
+    // Map padding is already in logical pixels; include it so bounds won't hide under UI.
+    final extraV = math.max(_mapPadding.top, _mapPadding.bottom);
+    final extraH = math.max(_mapPadding.left, _mapPadding.right);
+    final extra = math.max(extraV, extraH);
+
+    // Add a small buffer so polylines don't touch edges.
+    final p = base + extra + 14.0;
+
+    // Avoid crazy zoom-out on very tall sheets.
+    return p.clamp(base, base + 520.0);
+  }
+
+
   Future<void> _animateBoundsSafe(LatLngBounds bounds, {double padding = 70}) async {
     if (_map == null) return;
 
     _camMode = _CamMode.overview;
     _rotateWithHeading = false;
 
+    // NEW: compensate for header/sheets/bottom-nav padding already applied to the map.
+    final pad = _effectiveBoundsPadding(padding);
+
     try {
-      await _map!.animateCamera(CameraUpdate.newLatLngBounds(bounds, padding));
+      await _map!.animateCamera(CameraUpdate.newLatLngBounds(bounds, pad));
       return;
     } catch (_) {}
 
@@ -975,14 +1003,16 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
     if (_map == null) return;
 
     try {
-      await _map!.animateCamera(CameraUpdate.newLatLngBounds(bounds, padding));
+      await _map!.animateCamera(CameraUpdate.newLatLngBounds(bounds, pad));
     } catch (_) {
       final c = LatLng(
         (bounds.northeast.latitude + bounds.southwest.latitude) / 2,
         (bounds.northeast.longitude + bounds.southwest.longitude) / 2,
       );
       await _map!.animateCamera(
-        CameraUpdate.newCameraPosition(CameraPosition(target: c, zoom: 13.5, tilt: 0, bearing: 0)),
+        CameraUpdate.newCameraPosition(
+          CameraPosition(target: c, zoom: 13.5, tilt: 0, bearing: 0),
+        ),
       );
     }
   }
@@ -1135,10 +1165,23 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
     final gp = Perf.I.gpsProfile(moving: moving);
     final accuracy = moving ? gp.accuracy : LocationAccuracy.high;
 
-    if (Platform.isAndroid) {
+    final int distanceFilter =
+    (moving ? gp.distanceFilterM : math.max(12, gp.distanceFilterM)).toInt();
+
+    // Web must NOT touch AndroidSettings/AppleSettings behaviorally.
+    if (kIsWeb) {
+      return LocationSettings(
+        accuracy: accuracy,
+        distanceFilter: distanceFilter,
+      );
+    }
+
+    final tp = defaultTargetPlatform;
+
+    if (tp == TargetPlatform.android) {
       return AndroidSettings(
         accuracy: accuracy,
-        distanceFilter: moving ? gp.distanceFilterM : math.max(12, gp.distanceFilterM),
+        distanceFilter: distanceFilter,
         intervalDuration: Duration(milliseconds: gp.intervalMs),
         forceLocationManager: false,
         foregroundNotificationConfig: const ForegroundNotificationConfig(
@@ -1147,18 +1190,19 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
           enableWakeLock: false,
         ),
       );
-    } else if (Platform.isIOS) {
+    } else if (tp == TargetPlatform.iOS) {
       return AppleSettings(
         accuracy: accuracy,
-        distanceFilter: moving ? gp.distanceFilterM : math.max(12, gp.distanceFilterM),
+        distanceFilter: distanceFilter,
         activityType: ActivityType.automotiveNavigation,
         pauseLocationUpdatesAutomatically: true,
         showBackgroundLocationIndicator: false,
       );
     }
+
     return LocationSettings(
       accuracy: accuracy,
-      distanceFilter: moving ? gp.distanceFilterM : math.max(12, gp.distanceFilterM),
+      distanceFilter: distanceFilter,
     );
   }
 

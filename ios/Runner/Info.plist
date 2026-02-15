@@ -30,10 +30,14 @@
 	<true/>
 	<key>NSFaceIDUsageDescription</key>
 	<string>Pick Me uses Face ID to quickly and securely verify it’s you.</string>
+
+	<key>NSLocationAlwaysUsageDescription</key>
+	<string>We use your location to show your live position and routes.</string>
 	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
 	<string>We use your location to show your live position and routes.</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string>We use your location to show your live position and routes.</string>
+
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
 	<key>UIBackgroundModes</key>

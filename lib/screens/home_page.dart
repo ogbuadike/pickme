@@ -416,12 +416,64 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
     }
   }
 
+  Future<void> _primeNearbyDriversAsap() async {
+    if (!mounted) return;
+    if (_tripPhase != TripPhase.browsing) return;
+    if (_marketOpen) return;
+
+    try {
+      final perm = await Geolocator.checkPermission();
+      if (perm == LocationPermission.denied ||
+          perm == LocationPermission.deniedForever ||
+          perm == LocationPermission.unableToDetermine) {
+        return;
+      }
+
+      final svc = await Geolocator.isLocationServiceEnabled();
+      if (!svc) return;
+
+      final last = await Geolocator.getLastKnownPosition();
+      if (last == null) return;
+
+      // seed location immediately (no geocoding, no prompts)
+      _curPos ??= last;
+
+      // force first call to be a full snapshot
+      _nearbyDriversCursor = null;
+
+      // start polling immediately (first tick runs instantly)
+      _startNearbyDriversPolling(force: true);
+
+      // show user marker immediately too
+      final ll = LatLng(last.latitude, last.longitude);
+      _updateUserMarker(ll, rotation: (last.heading.isFinite && last.heading >= 0) ? last.heading : 0);
+    } catch (_) {}
+  }
+
+
   Future<void> _bootstrap() async {
     _prefs = await SharedPreferences.getInstance();
-    await Future.wait([_fetchUser(), _loadRecents(), _preloadAllIcons()]);
-    await _initLocation();
+
+    // ✅ NEW: immediate drivers attempt from last-known (fast)
+    await _primeNearbyDriversAsap();
+
+    final locFuture = _initLocation();
+
+    final otherFuture = Future.wait([
+      _fetchUser(),
+      _loadRecents(),
+      _preloadAllIcons(),
+    ]);
+
+    await Future.wait([locFuture, otherFuture]);
+
+    _refreshDriverMarkers();
     _scheduleMapPaddingUpdate();
   }
+
+
+
+
 
   Future<void> _fetchUser() async {
     setState(() => _busyProfile = true);
@@ -488,10 +540,21 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
   Future<void> _preloadAllIcons() async {
     if (_iconsPreloaded) return;
     try {
-      await Future.wait([_ensurePointIcons(), _createUserPinIcon(), _createDriverIcon()]);
+      await Future.wait([
+        _ensurePointIcons(),
+        _createUserPinIcon(),
+        _createDriverIcon(),
+      ]);
       _iconsPreloaded = true;
+
+      // ✅ If drivers already fetched while icons were loading, redraw them now.
+      if (mounted) {
+        _refreshDriverMarkers();
+        setState(() {});
+      }
     } catch (_) {}
   }
+
 
   Future<void> _createUserPinIcon() async {
     try {
@@ -677,6 +740,12 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
         'assets/images/open_top_view_car.png', // <-- put your PNG here
         targetWidth: 96,
       );
+
+      // ✅ Immediately repaint any already-fetched drivers with the real icon
+      if (mounted) {
+        _refreshDriverMarkers();
+        setState(() {});
+      }
       return;
     } catch (_) {
       // fall through to your existing vector fallback below
@@ -703,6 +772,12 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
     final bytes =
     (await img.toByteData(format: ui.ImageByteFormat.png))!.buffer.asUint8List();
     _driverIcon = BitmapDescriptor.fromBytes(bytes);
+
+    // ✅ Immediately repaint any already-fetched drivers with fallback icon
+    if (mounted) {
+      _refreshDriverMarkers();
+      setState(() {});
+    }
   }
 
   // ===== Markers =====
@@ -2453,18 +2528,24 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
               _user?['user_id']?.toString() ??
               'guest';
 
-      final res = await _api.request(
+      final payload = <String, String>{
+        'lat': origin.latitude.toString(),
+        'lng': origin.longitude.toString(),
+        'radius_km': _homeRadiusKm().toStringAsFixed(1),
+        'vehicle': 'car',
+        'user_id': riderId,
+        if ((_nearbyDriversCursor ?? '').isNotEmpty) 'cursor': _nearbyDriversCursor!,
+      };
+
+      final res = await _api
+          .request(
         ApiConstants.driversNearbyEndpoint,
         method: 'POST',
-        data: {
-          'lat': origin.latitude.toString(),
-          'lng': origin.longitude.toString(),
-          'radius_km': _homeRadiusKm().toStringAsFixed(1),
-          'vehicle': 'car',
-          'cursor': _nearbyDriversCursor ?? '',
-          'user_id': riderId,
-        },
-      ).timeout(const Duration(seconds: 6));
+        data: payload,
+      )
+          .timeout(const Duration(seconds: 6));
+
+
 
       if (!mounted) return;
       if (res.statusCode != 200) return;
@@ -2497,7 +2578,13 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
           m['nearbyDrivers'] ??
           m['data'] ??
           m['results'];
-      if (cand is List) raw = cand;
+
+      if (cand is List) {
+        raw = cand;
+      } else if (cand is Map) {
+        raw = cand.values.toList();
+      }
+
 
       if (raw.isEmpty) {
         _applyNearbyDrivers(const []);
@@ -2630,7 +2717,8 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
   }
 
   void _refreshDriverMarkers() {
-    if (_driverIcon == null) return;
+    // ✅ Use fallback icon immediately, then auto-upgrade when _driverIcon becomes available
+    final icon = _driverIcon ?? BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueAzure);
 
     final next = <Marker>{};
     for (final d in _drivers.values) {
@@ -2638,7 +2726,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
         Marker(
           markerId: MarkerId('driver_${d.id}'),
           position: d.ll,
-          icon: _driverIcon!,
+          icon: icon,
           flat: true,
           rotation: d.heading,
           anchor: const Offset(0.5, 0.6),
@@ -2654,6 +2742,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
         ..addAll(next);
     });
   }
+
 
   // ===== Booking adapter helpers =====
   Future<String?> _startBooking({

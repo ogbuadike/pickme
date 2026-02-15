@@ -31,59 +31,57 @@ dependencies:
   flutter:
     sdk: flutter
 
-  flutter_map: ^6.1.0
-  latlong2: ^0.9.0
-
-  flutter_compass: ^0.8.0
-
   # UI / visuals
   cupertino_icons: ^1.0.8
-  flutter_svg: ^2.0.7
-  google_fonts: ^4.0.3
+  flutter_svg: ^2.2.1
+  google_fonts: ^4.0.5
   animations: ^2.0.11
-  lottie: ^2.3.2
-  smooth_page_indicator: ^1.2.0+3
-  fl_chart: ^0.40.0
-  barcode: ^2.2.8
-  fluttertoast: ^8.0.9
-  cached_network_image: ^3.3.0
+  lottie: ^2.7.0
+  smooth_page_indicator: ^1.2.1
+  fl_chart: ^0.40.6
+  fluttertoast: ^8.2.14
+  cached_network_image: ^3.3.1
   flutter_cache_manager: ^3.3.1
 
   # Storage / device
-  shared_preferences: ^2.1.0
-  flutter_secure_storage: ^9.0.0
+  shared_preferences: ^2.5.3
+  flutter_secure_storage: ^9.2.4
   path_provider: ^2.1.5
-  device_info_plus: ^10.0.0
+  device_info_plus: ^10.1.2
   synchronized: ^3.1.0
-  image_picker: ^0.8.7+4
+  image_picker: ^0.8.9
 
   # Net / platform
-  http: ^1.2.2
-  connectivity_plus: ^4.0.1
-  url_launcher: ^6.1.10
+  http: ^1.5.0
+  connectivity_plus: ^4.0.2
+  url_launcher: ^6.3.0
   intl: ^0.19.0
 
-  # Firebase (push only + optional auth)
-  firebase_core: ^3.5.0
-  firebase_messaging: ^15.0.0
-  firebase_auth: ^5.7.0           # ⬅️ upgraded to match firebase_core 3.x
+  # Firebase (Dart packages can stay modern; iOS SDK is pinned in Podfile)
+  firebase_core: ^3.15.2
+  firebase_messaging: ^15.2.10
+  firebase_auth: ^5.7.0
+
+  # Google Sign-In (we will force the iOS implementation to 5.7.8)
   google_sign_in: ^6.2.0
 
   # Maps & location
-  google_maps_flutter: ^2.7.0
-  geolocator: ^12.0.0              # ⬅️ keep this exact name
+  google_maps_flutter: ^2.13.1
+  geolocator: ^12.0.0
   geocoding: ^3.0.0
-  flutter_polyline_points: ^2.0.0
-  uuid: ^4.4.0
+  flutter_polyline_points: ^2.1.0
+  uuid: ^4.5.1
 
-  #google_maps_flutter: ^2.6.1
-  #geolocator: ^12.0.0
-  #geocoding: ^3.0.0
-  #uuid: ^4.4.0
+  # Optional (keep only if you really use it)
+  flutter_map: ^6.2.1
+  latlong2: ^0.9.0
+  flutter_compass: ^0.8.0
+  local_auth: ^2.3.0
 
-  local_auth: ^2.1.0
+dependency_overrides:
+  # Critical: forces GoogleSignIn pod ~> 7.1 (compatible with Firebase iOS SDK 10.29.0)
+  google_sign_in_ios: 5.7.8
 
-  # IMPORTANT: removed google_place to avoid http ^0.13.x pin
 
 dev_dependencies:
   flutter_test:

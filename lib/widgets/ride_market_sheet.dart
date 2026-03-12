@@ -14,12 +14,11 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart' as intl;
 
 import '../themes/app_theme.dart';
-import '../services/ride_market_service.dart'; // RideOffer, DriverCar
+import '../services/ride_market_service.dart';
 import 'driver_details_sheet.dart';
 
-/// ===============================
-/// DATA MODEL (UI VM)
-/// ===============================
+import '../models/geo_point.dart';
+
 class RideNearbyDriver {
   final String id;
   final String name;
@@ -32,8 +31,7 @@ class RideNearbyDriver {
   final double distanceKm;
   final int etaMin;
 
-  // vehicle/profile
-  final String vehicleType; // car | bike
+  final String vehicleType;
   final int seats;
   final List<String> vehicleImages;
   final String vehicleDescription;
@@ -49,12 +47,12 @@ class RideNearbyDriver {
   final int reviewsCount;
   final int totalTrips;
 
-  // pricing (driver-based)
-  final String currency; // e.g. NGN
-  final double pricePerKm; // e.g. 250
-  final double baseFare; // e.g. 500
-  final double estimatedTotal; // server computed if any
-  final double tripKm; // echo from API if any
+  final String currency;
+  final double pricePerKm;
+  final double baseFare;
+  final double estimatedTotal;
+  final double tripKm;
+
 
   const RideNearbyDriver({
     required this.id,
@@ -108,9 +106,6 @@ class RideNearbyDriver {
   }
 }
 
-/// ===============================
-/// MAIN SHEET
-/// ===============================
 class RideMarketSheet extends StatefulWidget {
   final double bottomNavHeight;
 
@@ -123,8 +118,12 @@ class RideMarketSheet extends StatefulWidget {
   final int driversNearbyCount;
   final List<dynamic>? drivers;
 
-  final List<RideOffer> offers; // legacy / optional
+  final List<RideOffer> offers;
   final bool loading;
+
+  final GeoPoint? userLocation;
+  final GeoPoint? pickupLocation;
+  final GeoPoint? dropLocation;
 
   final VoidCallback onRefresh;
   final VoidCallback onCancel;
@@ -145,6 +144,9 @@ class RideMarketSheet extends StatefulWidget {
     required this.onRefresh,
     required this.onCancel,
     required this.onBook,
+    this.userLocation,
+    this.pickupLocation,
+    this.dropLocation,
   });
 
   @override
@@ -154,22 +156,20 @@ class RideMarketSheet extends StatefulWidget {
 class _RideMarketSheetState extends State<RideMarketSheet> {
   final _moneyFmt = intl.NumberFormat.decimalPattern();
 
-  // ✅ Stable list (frozen order)
   final List<String> _stableIds = <String>[];
   List<RideNearbyDriver> _stableDrivers = const [];
-
-  // ✅ selection by ID (no index drift)
   String? _selectedDriverId;
 
-  // ✅ Freeze controls
-  bool _orderFrozen = false; // we have a stable ID order
-  bool _fullyFrozen = false; // stop updating driver cards (prevents reload feel)
-  DateTime? _settleUntil; // allow brief enrichment window right after first load
+  bool _fullyFrozen = false;
+  DateTime? _settleUntil;
 
-  bool get _showNoDrivers => !widget.loading && _stableDrivers.isEmpty && (widget.drivers ?? const []).isEmpty;
+  bool get _showNoDrivers =>
+      !widget.loading && _stableDrivers.isEmpty && (widget.drivers ?? const []).isEmpty;
 
   double get _tripKm {
-    if (widget.tripDistanceKm != null && widget.tripDistanceKm! > 0) return widget.tripDistanceKm!;
+    if (widget.tripDistanceKm != null && widget.tripDistanceKm! > 0) {
+      return widget.tripDistanceKm!;
+    }
     return _parseDistanceKm(widget.distanceText ?? '');
   }
 
@@ -196,7 +196,6 @@ class _RideMarketSheetState extends State<RideMarketSheet> {
   void didUpdateWidget(covariant RideMarketSheet oldWidget) {
     super.didUpdateWidget(oldWidget);
 
-    // If route changed, reset everything so new trip has fresh list.
     final routeChanged = oldWidget.originText != widget.originText ||
         oldWidget.destinationText != widget.destinationText ||
         oldWidget.tripDistanceKm != widget.tripDistanceKm ||
@@ -209,9 +208,6 @@ class _RideMarketSheetState extends State<RideMarketSheet> {
     _reconcileDrivers();
   }
 
-  /// ===============================
-  /// ADAPTER + NORMALIZERS
-  /// ===============================
   static num _num(dynamic v, num fallback) {
     if (v == null) return fallback;
     if (v is num) return v;
@@ -235,10 +231,14 @@ class _RideMarketSheetState extends State<RideMarketSheet> {
           .where((x) => x.isNotEmpty)
           .toList(growable: false);
     }
-    return s.split(',').map((x) => x.trim()).where((x) => x.isNotEmpty).toList(growable: false);
+
+    return s
+        .split(',')
+        .map((x) => x.trim())
+        .where((x) => x.isNotEmpty)
+        .toList(growable: false);
   }
 
-  // ✅ normalize URLs for more reliable loading
   String _fixUrl(String url) {
     var u = url.trim();
     if (u.isEmpty) return '';
@@ -250,7 +250,6 @@ class _RideMarketSheetState extends State<RideMarketSheet> {
   RideNearbyDriver _driverVM(dynamic raw) {
     if (raw is DriverCar) {
       final d = raw as dynamic;
-
       final ll = d.ll;
       final lat = (ll != null) ? (ll.latitude as double) : 0.0;
       final lng = (ll != null) ? (ll.longitude as double) : 0.0;
@@ -359,7 +358,6 @@ class _RideMarketSheetState extends State<RideMarketSheet> {
 
     if (raw is Map) {
       final m = raw.cast<String, dynamic>();
-
       final vt = (m['vehicle_type'] ?? 'car').toString();
       int seats = _num(m['seats'], 4).toInt();
       if (vt.toLowerCase().contains('bike')) seats = 1;
@@ -377,7 +375,10 @@ class _RideMarketSheetState extends State<RideMarketSheet> {
         etaMin: _num(m['eta_min'], 0).toInt(),
         vehicleType: vt,
         seats: seats,
-        vehicleImages: _strList(m['vehicle_images']).map(_fixUrl).where((x) => x.isNotEmpty).toList(growable: false),
+        vehicleImages: _strList(m['vehicle_images'])
+            .map(_fixUrl)
+            .where((x) => x.isNotEmpty)
+            .toList(growable: false),
         carImageUrl: _fixUrl((m['car_image_url'] ?? '').toString()),
         avatarUrl: _fixUrl((m['avatar_url'] ?? '').toString()),
         rank: (m['rank'] ?? '').toString(),
@@ -403,9 +404,6 @@ class _RideMarketSheetState extends State<RideMarketSheet> {
     );
   }
 
-  /// ===============================
-  /// ORDERING: Highest Rating + Rank
-  /// ===============================
   int _rankWeight(String r) {
     final x = r.trim().toLowerCase();
     if (x.contains('diamond')) return 6;
@@ -423,26 +421,22 @@ class _RideMarketSheetState extends State<RideMarketSheet> {
   }
 
   int _compareDrivers(RideNearbyDriver a, RideNearbyDriver b) {
-    // Primary: rating desc
     final ar = _safeRating(a.rating);
     final br = _safeRating(b.rating);
     final c1 = br.compareTo(ar);
     if (c1 != 0) return c1;
 
-    // Secondary: rank weight desc (empty -> verified)
     final aw = _rankWeight(a.rank.trim().isEmpty ? 'verified' : a.rank);
     final bw = _rankWeight(b.rank.trim().isEmpty ? 'verified' : b.rank);
     final c2 = bw.compareTo(aw);
     if (c2 != 0) return c2;
 
-    // Next best tie-breakers: closer ETA, closer distance
     final c3 = a.etaMin.compareTo(b.etaMin);
     if (c3 != 0) return c3;
 
     final c4 = a.distanceKm.compareTo(b.distanceKm);
     if (c4 != 0) return c4;
 
-    // Deterministic
     final an = a.name.toLowerCase();
     final bn = b.name.toLowerCase();
     final c5 = an.compareTo(bn);
@@ -451,9 +445,6 @@ class _RideMarketSheetState extends State<RideMarketSheet> {
     return a.id.compareTo(b.id);
   }
 
-  /// ===============================
-  /// FREEZE / STABILIZE (Stops “Reloading” Feel)
-  /// ===============================
   bool _hasPrice(RideNearbyDriver d) {
     if (d.estimatedTotal > 0) return true;
     if (d.pricePerKm > 0) return true;
@@ -470,20 +461,17 @@ class _RideMarketSheetState extends State<RideMarketSheet> {
   void _resetStable({bool alsoClearSelection = false}) {
     _stableIds.clear();
     _stableDrivers = const [];
-    _orderFrozen = false;
     _fullyFrozen = false;
     _settleUntil = null;
     if (alsoClearSelection) _selectedDriverId = null;
   }
 
   void _reconcileDrivers() {
-    // If user already selected a driver, freeze immediately (old “lock” vibe).
     if (_selectedDriverId != null) {
       _fullyFrozen = true;
       return;
     }
 
-    // After settle window ends, freeze fully.
     if (_settleUntil != null && DateTime.now().isAfter(_settleUntil!)) {
       _fullyFrozen = true;
     }
@@ -505,27 +493,16 @@ class _RideMarketSheetState extends State<RideMarketSheet> {
       byId[d.id] = d;
     }
 
-    // ✅ First non-empty load: sort by rating+rank, then freeze IDs (no later reordering)
     if (_stableIds.isEmpty) {
       incoming.sort(_compareDrivers);
-
       _stableIds.addAll(incoming.map((e) => e.id));
       _stableDrivers = List<RideNearbyDriver>.from(incoming, growable: false);
-
-      _orderFrozen = true;
-      _settleUntil = DateTime.now().add(const Duration(milliseconds: 1200)); // brief enrich window
-
-      if (_selectedDriverId != null && !_stableIds.contains(_selectedDriverId)) {
-        _selectedDriverId = null;
-      }
-
+      _settleUntil = DateTime.now().add(const Duration(milliseconds: 1200));
       setState(() {});
       return;
     }
 
-    // ✅ After order frozen: keep IDs fixed; only enrich missing price/images/rating during settle window
     final oldById = <String, RideNearbyDriver>{for (final d in _stableDrivers) d.id: d};
-
     bool changed = false;
     final updated = <RideNearbyDriver>[];
 
@@ -556,10 +533,10 @@ class _RideMarketSheetState extends State<RideMarketSheet> {
       if (old != null) updated.add(old);
     }
 
-    // If everything now has price/images OR settle window ended -> freeze fully
     final allGood = updated.isNotEmpty &&
         updated.every((d) => _hasPrice(d) || _tripKm <= 0) &&
         updated.every(_hasImage);
+
     if (allGood) _fullyFrozen = true;
 
     if (changed) {
@@ -567,9 +544,6 @@ class _RideMarketSheetState extends State<RideMarketSheet> {
     }
   }
 
-  /// ===============================
-  /// PRICING DISPLAY
-  /// ===============================
   String _curSym(String c) {
     final x = c.trim().toUpperCase();
     if (x == 'NGN') return '₦';
@@ -588,14 +562,10 @@ class _RideMarketSheetState extends State<RideMarketSheet> {
     return 0;
   }
 
-  /// ===============================
-  /// BUILD
-  /// ===============================
   @override
   Widget build(BuildContext context) {
     final mq = MediaQuery.of(context);
     final cs = Theme.of(context).colorScheme;
-
     final drivers = _stableDrivers;
 
     return Align(
@@ -739,9 +709,6 @@ class _RideMarketSheetState extends State<RideMarketSheet> {
     );
   }
 
-  /// ===============================
-  /// DRIVER CARD (Dense + Premium)
-  /// ===============================
   IconData _vehicleIcon(String t) {
     final x = t.trim().toLowerCase();
     if (x.contains('bike')) return Icons.two_wheeler_rounded;
@@ -766,7 +733,12 @@ class _RideMarketSheetState extends State<RideMarketSheet> {
     return const Color(0xFF1E8E3E);
   }
 
-  Widget _driverCard(BuildContext context, RideNearbyDriver d, {required bool selected, required VoidCallback onTap}) {
+  Widget _driverCard(
+      BuildContext context,
+      RideNearbyDriver d, {
+        required bool selected,
+        required VoidCallback onTap,
+      }) {
     final cs = Theme.of(context).colorScheme;
 
     final rankText = d.rank.trim().isEmpty ? 'Verified' : d.rank.trim();
@@ -839,8 +811,6 @@ class _RideMarketSheetState extends State<RideMarketSheet> {
             children: [
               _avatarWithRank(context, d.avatarUrl, d.initials, rankText, rc, selected: selected),
               const SizedBox(width: 10),
-
-              // MAIN
               Expanded(
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
@@ -916,10 +886,7 @@ class _RideMarketSheetState extends State<RideMarketSheet> {
                   ],
                 ),
               ),
-
               const SizedBox(width: 10),
-
-              // RIGHT: stable price column
               ConstrainedBox(
                 constraints: const BoxConstraints(minWidth: 82, maxWidth: 92),
                 child: Column(
@@ -970,9 +937,6 @@ class _RideMarketSheetState extends State<RideMarketSheet> {
     return '${km.toStringAsFixed(1)}km';
   }
 
-  /// ===============================
-  /// UI PARTS
-  /// ===============================
   Widget _starsBadge(BuildContext context, double rating) {
     final cs = Theme.of(context).colorScheme;
     final r = rating.clamp(0, 5).toDouble();
@@ -984,7 +948,9 @@ class _RideMarketSheetState extends State<RideMarketSheet> {
     for (int i = 0; i < full; i++) {
       icons.add(const Icon(Icons.star_rounded, size: 14, color: Color(0xFFFFD54F)));
     }
-    if (hasHalf && full < 5) icons.add(const Icon(Icons.star_half_rounded, size: 14, color: Color(0xFFFFD54F)));
+    if (hasHalf && full < 5) {
+      icons.add(const Icon(Icons.star_half_rounded, size: 14, color: Color(0xFFFFD54F)));
+    }
     while (icons.length < 5) {
       icons.add(Icon(Icons.star_outline_rounded, size: 14, color: cs.onSurface.withOpacity(0.25)));
     }
@@ -1003,7 +969,11 @@ class _RideMarketSheetState extends State<RideMarketSheet> {
           const SizedBox(width: 6),
           Text(
             r.toStringAsFixed(1),
-            style: TextStyle(fontWeight: FontWeight.w900, color: cs.onSurface.withOpacity(0.82), fontSize: 11),
+            style: TextStyle(
+              fontWeight: FontWeight.w900,
+              color: cs.onSurface.withOpacity(0.82),
+              fontSize: 11,
+            ),
           ),
         ],
       ),
@@ -1027,9 +997,20 @@ class _RideMarketSheetState extends State<RideMarketSheet> {
       return Container(
         width: 44,
         height: 44,
-        decoration: BoxDecoration(shape: BoxShape.circle, color: bg, border: Border.all(color: borderColor, width: 1.2)),
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          color: bg,
+          border: Border.all(color: borderColor, width: 1.2),
+        ),
         child: Center(
-          child: Text(initials, style: TextStyle(fontWeight: FontWeight.w900, color: cs.onSurface.withOpacity(0.78), fontSize: 12)),
+          child: Text(
+            initials,
+            style: TextStyle(
+              fontWeight: FontWeight.w900,
+              color: cs.onSurface.withOpacity(0.78),
+              fontSize: 12,
+            ),
+          ),
         ),
       );
     }
@@ -1040,7 +1021,10 @@ class _RideMarketSheetState extends State<RideMarketSheet> {
       child: Container(
         width: 44,
         height: 44,
-        decoration: BoxDecoration(color: bg, border: Border.all(color: borderColor, width: 1.2)),
+        decoration: BoxDecoration(
+          color: bg,
+          border: Border.all(color: borderColor, width: 1.2),
+        ),
         child: Image.network(
           u,
           fit: BoxFit.cover,
@@ -1055,7 +1039,10 @@ class _RideMarketSheetState extends State<RideMarketSheet> {
                 child: SizedBox(
                   width: 16,
                   height: 16,
-                  child: CircularProgressIndicator(strokeWidth: 2.2, valueColor: AlwaysStoppedAnimation<Color>(AppColors.primary)),
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2.2,
+                    valueColor: AlwaysStoppedAnimation<Color>(AppColors.primary),
+                  ),
                 ),
               ),
             );
@@ -1108,7 +1095,9 @@ class _RideMarketSheetState extends State<RideMarketSheet> {
           borderRadius: BorderRadius.circular(16),
           border: Border.all(color: cs.onSurface.withOpacity(0.10)),
         ),
-        child: Center(child: Icon(_vehicleIcon(vehicleType), color: cs.onSurface.withOpacity(0.55), size: 22)),
+        child: Center(
+          child: Icon(_vehicleIcon(vehicleType), color: cs.onSurface.withOpacity(0.55), size: 22),
+        ),
       );
     }
 
@@ -1137,7 +1126,10 @@ class _RideMarketSheetState extends State<RideMarketSheet> {
                 child: SizedBox(
                   width: 16,
                   height: 16,
-                  child: CircularProgressIndicator(strokeWidth: 2.2, valueColor: AlwaysStoppedAnimation<Color>(AppColors.primary)),
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2.2,
+                    valueColor: AlwaysStoppedAnimation<Color>(AppColors.primary),
+                  ),
                 ),
               ),
             );
@@ -1169,7 +1161,13 @@ class _RideMarketSheetState extends State<RideMarketSheet> {
           ),
           const SizedBox(width: 10),
           Expanded(
-            child: Text('Searching…', style: TextStyle(fontWeight: FontWeight.w900, color: cs.onSurface.withOpacity(0.78))),
+            child: Text(
+              'Searching…',
+              style: TextStyle(
+                fontWeight: FontWeight.w900,
+                color: cs.onSurface.withOpacity(0.78),
+              ),
+            ),
           ),
         ],
       ),
@@ -1189,9 +1187,21 @@ class _RideMarketSheetState extends State<RideMarketSheet> {
         children: [
           Icon(Icons.directions_car_filled_rounded, color: cs.onSurface.withOpacity(0.55), size: 36),
           const SizedBox(height: 10),
-          Text('No drivers nearby', style: TextStyle(fontWeight: FontWeight.w900, color: cs.onSurface.withOpacity(0.84))),
+          Text(
+            'No drivers nearby',
+            style: TextStyle(
+              fontWeight: FontWeight.w900,
+              color: cs.onSurface.withOpacity(0.84),
+            ),
+          ),
           const SizedBox(height: 6),
-          Text('Try refresh in a moment.', style: TextStyle(fontWeight: FontWeight.w700, color: cs.onSurface.withOpacity(0.60))),
+          Text(
+            'Try refresh in a moment.',
+            style: TextStyle(
+              fontWeight: FontWeight.w700,
+              color: cs.onSurface.withOpacity(0.60),
+            ),
+          ),
           const SizedBox(height: 12),
           SizedBox(
             width: double.infinity,
@@ -1215,9 +1225,6 @@ class _RideMarketSheetState extends State<RideMarketSheet> {
     );
   }
 
-  /// ===============================
-  /// BOTTOM BAR
-  /// ===============================
   Widget _bottomBar(BuildContext context, MediaQueryData mq, List<RideNearbyDriver> drivers) {
     final cs = Theme.of(context).colorScheme;
 
@@ -1243,7 +1250,6 @@ class _RideMarketSheetState extends State<RideMarketSheet> {
                 ? () async {
               final d = selected.first;
 
-              // freeze immediately once selecting (prevents any refresh feel)
               setState(() => _fullyFrozen = true);
 
               final driverMap = _driverToMap(d);
@@ -1262,23 +1268,36 @@ class _RideMarketSheetState extends State<RideMarketSheet> {
                     distanceText: widget.distanceText,
                     durationText: widget.durationText,
                     tripDistanceKm: _tripKm,
-
-                    // ✅ Pass coords if you have them
-                    userLocation: /* GeoPoint(userLat, userLng) */ null,
-                    pickupLocation: /* GeoPoint(pickupLat, pickupLng) */ null,
-                    dropLocation: /* GeoPoint(dropLat, dropLng) */ null,
+                    userLocation: widget.userLocation,
+                    pickupLocation: widget.pickupLocation,
+                    dropLocation: widget.dropLocation,
                   );
                 },
               );
 
-              if (payload != null) {
-                // ✅ Send payload to rideBookEndpoint here (your API client)
-                // await ApiClient.post('/rideBookEndpoint', payload);
+              if (payload == null) return;
 
-                // Keep your existing onBook flow if needed:
-                // widget.onBook(d, offer);
-              }
+              final offer = RideOffer(
+                id: 'driver-${d.id}',
+                provider: 'PickMe',
+                category: d.category.isNotEmpty
+                    ? d.category
+                    : (d.vehicleType.toLowerCase().contains('bike') ? 'Bike' : 'Car'),
+                etaToPickupMin: d.etaMin,
+                price: _driverTotal(d).round(),
+                surge: false,
+                driverName: d.name,
+                rating: d.rating,
+                carPlate: d.carPlate,
+                seats: d.seats,
+                currency: d.currency,
+                pricePerKm: d.pricePerKm,
+                baseFare: d.baseFare,
+                estimatedTotal: _driverTotal(d),
+                vehicleType: d.vehicleType,
+              );
 
+              widget.onBook(d, offer);
             }
                 : null,
             style: ElevatedButton.styleFrom(
@@ -1296,9 +1315,6 @@ class _RideMarketSheetState extends State<RideMarketSheet> {
     );
   }
 
-  /// ===============================
-  /// MAP BUILDERS (Details Sheet)
-  /// ===============================
   Map<String, dynamic> _driverToMap(RideNearbyDriver d) {
     return <String, dynamic>{
       'id': d.id,
@@ -1325,7 +1341,6 @@ class _RideMarketSheetState extends State<RideMarketSheet> {
       'incomplete_trips': d.incompleteTrips,
       'reviews_count': d.reviewsCount,
       'total_trips': d.totalTrips,
-      // pricing
       'currency': d.currency,
       'price_per_km': d.pricePerKm,
       'base_fare': d.baseFare,
@@ -1353,9 +1368,6 @@ class _RideMarketSheetState extends State<RideMarketSheet> {
   }
 }
 
-/// ===============================
-/// ROUTE MINI (From/To tree)
-/// ===============================
 class _FromToMini extends StatelessWidget {
   final String origin;
   final String dest;
@@ -1392,8 +1404,8 @@ class _FromToMini extends StatelessWidget {
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      _LabeledLine(label: "FROM", value: origin, cs: cs, strong: true),
-                      _LabeledLine(label: "TO", value: dest, cs: cs, strong: false),
+                      _LabeledLine(label: 'FROM', value: origin, cs: cs, strong: true),
+                      _LabeledLine(label: 'TO', value: dest, cs: cs, strong: false),
                     ],
                   ),
                 ),
@@ -1606,7 +1618,7 @@ class _NearbyPillMini extends StatelessWidget {
             const Icon(Icons.near_me_rounded, size: 12, color: AppColors.primary),
             const SizedBox(width: 5),
             Text(
-              "$count nearby",
+              '$count nearby',
               style: TextStyle(
                 fontSize: 10.4,
                 height: 1.0,
@@ -1622,9 +1634,6 @@ class _NearbyPillMini extends StatelessWidget {
   }
 }
 
-/// ===============================
-/// NEXT-GEN CHIP (tiny, premium)
-/// ===============================
 IconData _vehicleIconNx(String vt) {
   final v = vt.toLowerCase();
   if (v.contains('bike') || v.contains('moto')) return Icons.two_wheeler_rounded;

@@ -31,6 +31,8 @@ class ApiConstants {
 
   static const String rideStatusEndpoint    = 'ride_status.php'; // POST: ride_id
 
+  static const String rideCancelEndpoint = 'ride_cancel_booking.php';
+
 
   // Other endpoints
   static const String upgradeKYCEndpoint = 'kyc_upgrade.php';

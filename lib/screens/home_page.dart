@@ -8,13 +8,23 @@
 // 4) On Start Trip: polyline user -> destination (tick 2s) + navigation camera.
 // 5) While nav mode is active, normal follow/compass camera work is paused.
 
+// lib/screens/home_page.dart
+//
+// Home map + routes + marketplace + booking
+//
+// Integrated flow in this version:
+// 1) RideMarketSheet uses onBook(driver, offer) with edge-to-edge bottom sheet.
+// 2) Nearby drivers render from polling and marketplace stream.
+// 3) Booking hands off into TripNavigationPage.
+// 4) Legacy in-page trip helpers are retained for compatibility/fallback.
+// 5) Normal follow/compass camera is paused only when nav mode is active.
+
 import 'dart:async';
 import 'dart:convert';
-//import 'dart:io' show Platform;
-import 'package:flutter/foundation.dart' show defaultTargetPlatform, TargetPlatform, kIsWeb;
 import 'dart:math' as math;
 import 'dart:ui' as ui;
 
+import 'package:flutter/foundation.dart' show TargetPlatform, defaultTargetPlatform, kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_compass/flutter_compass.dart';
@@ -35,43 +45,60 @@ import '../utility/notification.dart';
 
 // Widgets
 import '../widgets/app_menu_drawer.dart';
+import '../widgets/auto_overlay.dart';
 import '../widgets/bottom_navigation_bar.dart';
 import '../widgets/fund_account_sheet.dart';
-import '../widgets/auto_overlay.dart';
 import '../widgets/header_bar.dart';
 import '../widgets/locate_fab.dart';
-import '../widgets/route_sheet.dart';
 import '../widgets/ride_market_sheet.dart';
+import '../widgets/route_sheet.dart';
+import 'trip_navigation_page.dart';
 
 // State & services
-import 'state/home_models.dart';
 import '../services/autocomplete_service.dart';
+import '../services/booking_controller.dart';
 import '../services/perf_profile.dart';
 import '../services/ride_market_service.dart';
-import '../services/booking_controller.dart';
+import 'state/home_models.dart';
+
+import '../models/geo_point.dart';
 
 enum MovementMode { stationary, pedestrian, vehicle }
+
 enum BearingSource { route, gps, compass }
+
 enum _CamMode { follow, overview }
+
 enum TripPhase { browsing, driverToPickup, waitingPickup, enRoute }
 
 class _SpeedInterval {
-  final int start, end;
+  final int start;
+  final int end;
   final String speed;
+
   const _SpeedInterval(this.start, this.end, this.speed);
 }
 
 class _V2Route {
   final List<LatLng> points;
-  final int distanceMeters, durationSeconds;
+  final int distanceMeters;
+  final int durationSeconds;
   final List<_SpeedInterval> speedIntervals;
-  const _V2Route(this.points, this.distanceMeters, this.durationSeconds, this.speedIntervals);
+
+  const _V2Route(
+      this.points,
+      this.distanceMeters,
+      this.durationSeconds,
+      this.speedIntervals,
+      );
 }
 
 class _RouteCache {
   final _V2Route route;
   final DateTime timestamp;
+
   const _RouteCache(this.route, this.timestamp);
+
   bool get isStale => DateTime.now().difference(timestamp) > const Duration(hours: 24);
 }
 
@@ -80,6 +107,7 @@ class _NetworkRequest {
   final Future<http.Response> Function() executor;
   final Completer<http.Response> completer;
   int retries;
+
   _NetworkRequest(this.id, this.executor)
       : completer = Completer<http.Response>(),
         retries = 0;
@@ -88,14 +116,17 @@ class _NetworkRequest {
 class _SpatialNode {
   final LatLng point;
   final int index;
-  final double lat, lng;
+  final double lat;
+  final double lng;
+
   _SpatialNode(this.point, this.index)
       : lat = point.latitude,
         lng = point.longitude;
 }
 
 class HomePage extends StatefulWidget {
-  const HomePage({Key? key}) : super(key: key);
+  const HomePage({super.key});
+
   @override
   State<HomePage> createState() => _HomePageState();
 }
@@ -110,10 +141,10 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
   static const int kMaxRetries = 3;
 
   // Location/heading
-  static const Duration kGpsUpdateInterval = Duration(milliseconds: 200); // ≈5 Hz
-  static const Duration kHeadingTickMin = Duration(milliseconds: 33); // ~30 FPS
-  static const double kVehicleSpeedThreshold = 1.5; // m/s
-  static const double kPedestrianSpeedThreshold = 0.5; // m/s
+  static const Duration kGpsUpdateInterval = Duration(milliseconds: 200);
+  static const Duration kHeadingTickMin = Duration(milliseconds: 33);
+  static const double kVehicleSpeedThreshold = 1.5;
+  static const double kPedestrianSpeedThreshold = 0.5;
   static const Duration kStationaryTimeout = Duration(minutes: 2);
 
   // Follow tuning
@@ -121,17 +152,17 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
 
   // Bearing smoothing
   static const double kBearingDeadbandDeg = 0.5;
-  static const double kMaxBearingVel = 320.0; // deg/s
-  static const double kMaxBearingAccel = 1200.0; // deg/s^2
+  static const double kMaxBearingVel = 320.0;
+  static const double kMaxBearingAccel = 1200.0;
 
   // Route logic
-  static const double kRouteDeviationThreshold = 50.0; // meters
+  static const double kRouteDeviationThreshold = 50.0;
 
-  // Nearby driver polling (no sockets)
+  // Nearby driver polling
   static const Duration kDriversPollInterval = Duration(seconds: 2);
   static const int kMaxDriverMarkers = 80;
 
-  // Search circle (screenshot-style)
+  // Search circle
   static const CircleId _accuracyCircleId = CircleId('accuracy');
   static const CircleId _searchCircleId = CircleId('search_radius');
   static const double _searchCircleMinM = 220;
@@ -154,13 +185,25 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
   bool _busyProfile = false;
   int _currentIndex = 0;
 
+  int _indexOfFocus(FocusNode focus) {
+    for (int i = 0; i < _pts.length; i++) {
+      if (identical(_pts[i].focus, focus)) return i;
+    }
+    return 0;
+  }
+
   // Map & GPS
   GoogleMapController? _map;
-  final CameraPosition _initialCam = const CameraPosition(target: LatLng(6.458985, 7.548266), zoom: 15);
+  final CameraPosition _initialCam = const CameraPosition(
+    target: LatLng(6.458985, 7.548266),
+    zoom: 15,
+  );
 
-  Position? _curPos, _prevPos;
+  Position? _curPos;
+  Position? _prevPos;
   StreamSubscription<Position>? _gpsSub;
-  Timer? _gpsThrottleTimer, _stationaryTimer;
+  Timer? _gpsThrottleTimer;
+  Timer? _stationaryTimer;
   MovementMode _movementMode = MovementMode.stationary;
   bool _gpsActive = true;
 
@@ -175,16 +218,20 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
   StreamSubscription<ServiceStatus>? _svcStatusSub;
 
   // Icons
-  BitmapDescriptor? _userPinIcon, _pickupIcon, _dropIcon, _etaBubbleIcon, _minsBubbleIcon;
+  BitmapDescriptor? _userPinIcon;
+  BitmapDescriptor? _pickupIcon;
+  BitmapDescriptor? _dropIcon;
+  BitmapDescriptor? _etaBubbleIcon;
+  BitmapDescriptor? _minsBubbleIcon;
   bool _iconsPreloaded = false;
 
   // Drivers
   BitmapDescriptor? _driverIcon;
-  final Set<Marker> _driverMarkers = {};
+  final Set<Marker> _driverMarkers = <Marker>{};
 
-  final Set<Marker> _markers = {};
-  final Set<Polyline> _lines = {};
-  final Set<Circle> _circles = {};
+  final Set<Marker> _markers = <Marker>{};
+  final Set<Polyline> _lines = <Polyline>{};
+  final Set<Circle> _circles = <Circle>{};
 
   static const MarkerId _userMarkerId = MarkerId('user_location');
   static const MarkerId _etaMarkerId = MarkerId('eta_label');
@@ -192,7 +239,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
 
   // Booking visuals
   static const MarkerId _driverSelectedId = MarkerId('driver_selected');
-  final Set<Polyline> _driverLines = {};
+  final Set<Polyline> _driverLines = <Polyline>{};
   RideOffer? _selectedOffer;
 
   // Booking controller (dynamic adapter)
@@ -218,7 +265,8 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
 
   // Compass
   StreamSubscription<CompassEvent>? _compassSub;
-  double? _compassDeg, _lastBearingDeg;
+  double? _compassDeg;
+  double? _lastBearingDeg;
   double _bearingEma = 0;
   BearingSource _lastBearingSource = BearingSource.compass;
   double _userMarkerRotation = 0;
@@ -233,36 +281,40 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
   double _lastAccuracyRadius = 0;
 
   // Route
-  final List<RoutePoint> _pts = [];
+  final List<RoutePoint> _pts = <RoutePoint>[];
   int _activeIdx = 0;
 
-  String? _distanceText, _durationText;
+  String? _distanceText;
+  String? _durationText;
   double? _fare;
   DateTime? _arrivalTime;
   Timer? _routeRefreshTimer;
   String? _routeUiError;
   _RouteCache? _cachedRoute;
   String? _lastRouteHash;
-  List<LatLng> _routePts = [];
-  List<_SpatialNode> _spatialIndex = [];
+  List<LatLng> _routePts = <LatLng>[];
+  List<_SpatialNode> _spatialIndex = <_SpatialNode>[];
   int _lastSnapIndex = -1;
   DateTime _lastRerouteCheck = DateTime.now();
   bool _isRerouting = false;
 
   // Autocomplete
-  final _uuid = const Uuid();
+  final Uuid _uuid = const Uuid();
   String _placesSession = '';
   Timer? _debounce;
   late final AutocompleteService _auto;
-  List<Suggestion> _sugs = [], _recents = [];
+  List<Suggestion> _sugs = <Suggestion>[];
+  List<Suggestion> _recents = <Suggestion>[];
   bool _isTyping = false;
   int _lastQueryId = 0;
-  final Map<String, _NetworkRequest> _requestQueue = {};
+  final Map<String, _NetworkRequest> _requestQueue = <String, _NetworkRequest>{};
   int _activeRequests = 0;
-  String? _autoStatus, _autoError;
+  String? _autoStatus;
+  String? _autoError;
 
   // UI
-  bool _expanded = false, _isConnected = true;
+  bool _expanded = false;
+  bool _isConnected = true;
   Orientation? _lastOrientation;
   late final AnimationController _overlayAnimController;
   late final Animation<double> _overlayFadeAnim;
@@ -271,20 +323,20 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
   StreamSubscription<RideMarketSnapshot>? _marketSub;
   bool _marketOpen = false;
   bool _offersLoading = false;
-  List<RideOffer> _offers = const [];
-  final Map<String, DriverCar> _drivers = {};
+  List<RideOffer> _offers = const <RideOffer>[];
+  final Map<String, DriverCar> _drivers = <String, DriverCar>{};
 
   // Nearby drivers polling
   Timer? _nearbyDriversTimer;
   bool _nearbyDriversBusy = false;
   String? _nearbyDriversCursor;
   DateTime _lastNearbyTickAt = DateTime.fromMillisecondsSinceEpoch(0);
-  final Map<String, DateTime> _driverLastSeen = {};
+  final Map<String, DateTime> _driverLastSeen = <String, DateTime>{};
 
   // Debounce camera-fit when padding changes
   Timer? _fitBoundsDebounce;
 
-  // Trip / nav loop
+  // Trip / nav loop (legacy compatibility)
   TripPhase _tripPhase = TripPhase.browsing;
   bool _navMode = false;
   String? _engagedDriverId;
@@ -293,7 +345,57 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
 
   late final RideMarketService _rideMarketService;
 
-  // ===== Debug =====
+  // =========================================================
+  // Booking controller adapters
+  // =========================================================
+  Future<void> _bookingStartTrip() async {
+    final b = _booking;
+    if (b == null) return;
+
+    try {
+      await b.startTrip();
+      return;
+    } catch (_) {}
+
+    try {
+      await b.startRide();
+      return;
+    } catch (_) {}
+
+    try {
+      await b.commenceTrip();
+      return;
+    } catch (_) {}
+
+    try {
+      await b.beginTrip();
+      return;
+    } catch (_) {}
+  }
+
+  Future<void> _bookingCancelTrip() async {
+    final b = _booking;
+    if (b == null) return;
+
+    try {
+      await b.cancelTrip();
+      return;
+    } catch (_) {}
+
+    try {
+      await b.cancelRide();
+      return;
+    } catch (_) {}
+
+    try {
+      await b.abortTrip();
+      return;
+    } catch (_) {}
+  }
+
+  // =========================================================
+  // Debug
+  // =========================================================
   void _dbg(String msg, [Object? data]) {
     assert(() {
       final d = data == null ? '' : ' → $data';
@@ -303,15 +405,19 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
   }
 
   void _log(String msg, [Object? data]) => _dbg(msg, data);
+
   void _logLocationDiagnostic(String message) => _dbg('[GPS-DIAGNOSTICS] $message');
 
-  // ===== Utils =====
+  // =========================================================
+  // Utils
+  // =========================================================
   double _s(BuildContext c) {
     final mq = MediaQuery.of(c);
     final size = mq.size;
     final shortest = math.min(size.width, size.height);
     final longest = math.max(size.width, size.height);
     final aspect = longest / shortest;
+
     double scale = (shortest / 390.0).clamp(0.65, 1.20);
     if (aspect > 2.0) scale *= 0.90;
     if (aspect < 1.5) scale *= 1.08;
@@ -324,18 +430,26 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
     return kBottomNavH;
   }
 
-  // ===== Lifecycle =====
+  // =========================================================
+  // Lifecycle
+  // =========================================================
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+
     _api = ApiClient(http.Client(), context);
     _auto = AutocompleteService(logger: _log);
-
     _rideMarketService = RideMarketService(api: _api, debug: false);
 
-    _overlayAnimController = AnimationController(vsync: this, duration: const Duration(milliseconds: 220));
-    _overlayFadeAnim = CurvedAnimation(parent: _overlayAnimController, curve: Curves.easeOutCubic);
+    _overlayAnimController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 220),
+    );
+    _overlayFadeAnim = CurvedAnimation(
+      parent: _overlayAnimController,
+      curve: Curves.easeOutCubic,
+    );
 
     _initPoints();
     _bootstrap();
@@ -343,21 +457,19 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
 
     _svcStatusSub?.cancel();
 
-    // Some platforms (esp. web / certain builds) can throw for service-status stream.
-    // Keep behavior the same on supported platforms, but never crash initState.
     if (!kIsWeb) {
       try {
-        _svcStatusSub = Geolocator.getServiceStatusStream().listen((status) {
-          _logLocationDiagnostic('Service status: $status');
-          if (status == ServiceStatus.enabled) {
-            _restartLocationStreamWithBackoff();
-          }
-        }, onError: (_) {});
-      } catch (_) {
-        // ignore (unsupported)
-      }
+        _svcStatusSub = Geolocator.getServiceStatusStream().listen(
+              (status) {
+            _logLocationDiagnostic('Service status: $status');
+            if (status == ServiceStatus.enabled) {
+              _restartLocationStreamWithBackoff();
+            }
+          },
+          onError: (_) {},
+        );
+      } catch (_) {}
     }
-
   }
 
   @override
@@ -427,6 +539,9 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
     }
   }
 
+  // =========================================================
+  // Bootstrap
+  // =========================================================
   Future<void> _primeNearbyDriversAsap() async {
     if (!mounted) return;
     if (_tripPhase != TripPhase.browsing) return;
@@ -446,48 +561,41 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
       final last = await Geolocator.getLastKnownPosition();
       if (last == null) return;
 
-      // seed location immediately (no geocoding, no prompts)
       _curPos ??= last;
-
-      // force first call to be a full snapshot
       _nearbyDriversCursor = null;
 
-      // start polling immediately (first tick runs instantly)
       _startNearbyDriversPolling(force: true);
 
-      // show user marker immediately too
       final ll = LatLng(last.latitude, last.longitude);
-      _updateUserMarker(ll, rotation: (last.heading.isFinite && last.heading >= 0) ? last.heading : 0);
+      _updateUserMarker(
+        ll,
+        rotation: (last.heading.isFinite && last.heading >= 0) ? last.heading : 0,
+      );
     } catch (_) {}
   }
-
 
   Future<void> _bootstrap() async {
     _prefs = await SharedPreferences.getInstance();
 
-    // ✅ NEW: immediate drivers attempt from last-known (fast)
     await _primeNearbyDriversAsap();
 
     final locFuture = _initLocation();
-
-    final otherFuture = Future.wait([
+    final otherFuture = Future.wait<void>([
       _fetchUser(),
       _loadRecents(),
       _preloadAllIcons(),
     ]);
 
-    await Future.wait([locFuture, otherFuture]);
+    await Future.wait<void>([locFuture, otherFuture]);
 
     _refreshDriverMarkers();
     _scheduleMapPaddingUpdate();
   }
 
-
-
-
-
   Future<void> _fetchUser() async {
+    if (!mounted) return;
     setState(() => _busyProfile = true);
+
     try {
       final uid = _prefs.getString('user_id') ?? '';
       if (uid.isEmpty) return;
@@ -498,33 +606,48 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
             .request(
           ApiConstants.userInfoEndpoint,
           method: 'POST',
-          data: {'user': uid},
+              data: <String, String>{'user': uid},
         )
             .timeout(kApiTimeout),
       );
 
       if (res.statusCode == 200) {
         final body = jsonDecode(res.body);
-        if (body['error'] == false) {
-          setState(() => _user = body['user']);
+        if (body is Map<String, dynamic> && body['error'] == false) {
+          if (!mounted) return;
+          setState(() => _user = body['user'] as Map<String, dynamic>?);
           await _createUserPinIcon();
         }
       }
-      setState(() => _isConnected = true);
+
+      if (mounted) {
+        setState(() => _isConnected = true);
+      }
     } catch (_) {
-      setState(() => _isConnected = false);
+      if (mounted) {
+        setState(() => _isConnected = false);
+      }
     } finally {
-      if (mounted) setState(() => _busyProfile = false);
+      if (mounted) {
+        setState(() => _busyProfile = false);
+      }
     }
   }
 
-  // ===== Network retry =====
-  Future<http.Response> _executeWithRetry(String id, Future<http.Response> Function() executor) async {
+  // =========================================================
+  // Network retry
+  // =========================================================
+  Future<http.Response> _executeWithRetry(
+      String id,
+      Future<http.Response> Function() executor,
+      ) async {
     if (_requestQueue.containsKey(id)) {
       return _requestQueue[id]!.completer.future;
     }
+
     final request = _NetworkRequest(id, executor);
     _requestQueue[id] = request;
+
     try {
       while (request.retries <= kMaxRetries) {
         try {
@@ -541,24 +664,28 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
           await Future.delayed(Duration(milliseconds: delayMs.toInt()));
         }
       }
+
       throw Exception('Max retries exceeded');
     } finally {
       _requestQueue.remove(id);
     }
   }
 
-  // ===== Icons =====
+  // =========================================================
+  // Icons
+  // =========================================================
   Future<void> _preloadAllIcons() async {
     if (_iconsPreloaded) return;
+
     try {
-      await Future.wait([
+      await Future.wait<void>([
         _ensurePointIcons(),
         _createUserPinIcon(),
         _createDriverIcon(),
       ]);
+
       _iconsPreloaded = true;
 
-      // ✅ If drivers already fetched while icons were loading, redraw them now.
       if (mounted) {
         _refreshDriverMarkers();
         setState(() {});
@@ -566,13 +693,14 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
     } catch (_) {}
   }
 
-
   Future<void> _createUserPinIcon() async {
     try {
       final avatarUrl = _safeAvatarUrl(_user?['user_logo']?.toString());
       _userPinIcon = await _buildAvatarPinIcon(avatarUrl);
       if (!mounted) return;
+
       setState(() {});
+
       if (_curPos != null) {
         _updateUserMarker(
           LatLng(_curPos!.latitude, _curPos!.longitude),
@@ -598,6 +726,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
     final shadow = Paint()
       ..color = Colors.black.withOpacity(0.22)
       ..maskFilter = const ui.MaskFilter.blur(ui.BlurStyle.normal, 8);
+
     canvas.drawCircle(center + const Offset(0, 14), avatarRadius + 14, shadow);
 
     final pinPath = Path()
@@ -615,6 +744,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
         center.dy - (avatarRadius + 10),
       )
       ..close();
+
     canvas.drawPath(pinPath, Paint()..color = Colors.white.withOpacity(0.98));
 
     canvas.drawCircle(
@@ -635,7 +765,12 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
         if (resp.statusCode == 200) {
           final codec = await ui.instantiateImageCodec(resp.bodyBytes);
           final frame = await codec.getNextFrame();
-          final src = Rect.fromLTWH(0, 0, frame.image.width.toDouble(), frame.image.height.toDouble());
+          final src = Rect.fromLTWH(
+            0,
+            0,
+            frame.image.width.toDouble(),
+            frame.image.height.toDouble(),
+          );
           final dst = Rect.fromCircle(center: center, radius: avatarRadius);
           canvas.drawImageRect(frame.image, src, dst, Paint());
         } else {
@@ -647,6 +782,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
     } else {
       _drawFallbackAvatar(canvas, center, avatarRadius);
     }
+
     canvas.restore();
 
     final picture = recorder.endRecording();
@@ -659,9 +795,11 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
     final grad = ui.Gradient.linear(
       c - Offset(r, r),
       c + Offset(r, r),
-      [AppColors.primary, AppColors.accentColor],
+      <Color>[AppColors.primary, AppColors.accentColor],
     );
+
     canvas.drawCircle(c, r, Paint()..shader = grad);
+
     final tp = TextPainter(
       text: TextSpan(
         text: String.fromCharCode(Icons.person.codePoint),
@@ -673,16 +811,16 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
       ),
       textDirection: ui.TextDirection.ltr,
     )..layout();
+
     tp.paint(canvas, c - Offset(tp.width / 2, tp.height / 2));
   }
 
-  // ===== Screenshot-style point markers (ring + dot) =====
   Future<void> _ensurePointIcons() async {
     if (_pickupIcon != null && _dropIcon != null) return;
 
-    final results = await Future.wait([
-      _buildRingDotMarker(color: const Color(0xFF1A73E8)), // pickup blue
-      _buildRingDotMarker(color: const Color(0xFF00A651)), // destination green
+    final results = await Future.wait<BitmapDescriptor>(<Future<BitmapDescriptor>>[
+      _buildRingDotMarker(color: const Color(0xFF1A73E8)),
+      _buildRingDotMarker(color: const Color(0xFF00A651)),
     ]);
 
     _pickupIcon = results[0];
@@ -690,7 +828,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
   }
 
   Future<BitmapDescriptor> _buildRingDotMarker({required Color color}) async {
-    const double size = 64;
+    const size = 64.0;
     final rec = ui.PictureRecorder();
     final c = Canvas(rec);
     final center = const Offset(size / 2, size / 2);
@@ -734,36 +872,29 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
     );
     final frame = await codec.getNextFrame();
     final pngBytes =
-    (await frame.image.toByteData(format: ui.ImageByteFormat.png))!
-        .buffer
-        .asUint8List();
+    (await frame.image.toByteData(format: ui.ImageByteFormat.png))!.buffer.asUint8List();
 
     return BitmapDescriptor.fromBytes(pngBytes);
   }
 
-
   Future<void> _createDriverIcon() async {
     if (_driverIcon != null) return;
 
-    // ✅ 1) Try to use your real “Open Top View Car” PNG from assets
     try {
       _driverIcon = await _bitmapDescriptorFromAsset(
-        'assets/images/open_top_view_car.png', // <-- put your PNG here
+        'assets/images/open_top_view_car.png',
         targetWidth: 96,
       );
 
-      // ✅ Immediately repaint any already-fetched drivers with the real icon
       if (mounted) {
         _refreshDriverMarkers();
         setState(() {});
       }
       return;
-    } catch (_) {
-      // fall through to your existing vector fallback below
-    }
+    } catch (_) {}
 
-    // ✅ 2) Fallback: your original drawn marker (unchanged)
-    const w = 72.0, h = 72.0;
+    const w = 72.0;
+    const h = 72.0;
     final rec = ui.PictureRecorder();
     final c = Canvas(rec);
 
@@ -780,28 +911,30 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
     c.drawCircle(const Offset(46, 44), 5, Paint()..color = Colors.black87);
 
     final img = await rec.endRecording().toImage(w.toInt(), h.toInt());
-    final bytes =
-    (await img.toByteData(format: ui.ImageByteFormat.png))!.buffer.asUint8List();
+    final bytes = (await img.toByteData(format: ui.ImageByteFormat.png))!.buffer.asUint8List();
     _driverIcon = BitmapDescriptor.fromBytes(bytes);
 
-    // ✅ Immediately repaint any already-fetched drivers with fallback icon
     if (mounted) {
       _refreshDriverMarkers();
       setState(() {});
     }
   }
 
-  // ===== Markers =====
+  // =========================================================
+  // Markers
+  // =========================================================
   void _updateUserMarker(LatLng pos, {double? rotation}) {
     if (_userPinIcon == null) return;
     if (rotation != null) _userMarkerRotation = rotation;
 
     final last = _lastUserMarkerLL;
     final rotDiff = (_userMarkerRotation - _lastUserMarkerRot).abs();
+
     if (last != null) {
       final moved = _haversine(last, pos);
       if (moved < 0.9 && rotDiff < 0.9) return;
     }
+
     _lastUserMarkerLL = pos;
     _lastUserMarkerRot = _userMarkerRotation;
 
@@ -822,7 +955,9 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
     });
   }
 
-  // ===== Compass & heading =====
+  // =========================================================
+  // Compass & heading
+  // =========================================================
   void _startCompass() {
     _compassSub?.cancel();
     _compassSub = FlutterCompass.events?.listen((CompassEvent event) {
@@ -845,6 +980,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
 
     double? heading;
     final sp = _curPos?.speed ?? 0.0;
+
     if (sp >= kPedestrianSpeedThreshold &&
         _curPos != null &&
         _curPos!.heading.isFinite &&
@@ -855,18 +991,23 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
       heading = _compassDeg;
       _lastBearingSource = BearingSource.compass;
     }
+
     if (heading == null) return;
 
     final smooth = _smoothBearingWithJerkLimit(heading);
     final pos = _curPos != null ? LatLng(_curPos!.latitude, _curPos!.longitude) : null;
 
-    if (pos != null) _updateUserMarker(pos, rotation: smooth);
+    if (pos != null) {
+      _updateUserMarker(pos, rotation: smooth);
+    }
 
     if (_camMode == _CamMode.follow && _rotateWithHeading && _map != null && pos != null) {
       _moveCameraRealtime(
         target: _forwardBiasTarget(user: pos, bearingDeg: smooth),
         bearing: smooth,
-        zoom: (sp >= kVehicleSpeedThreshold) ? 17.5 : (sp >= kPedestrianSpeedThreshold ? 17.0 : 16.5),
+        zoom: (sp >= kVehicleSpeedThreshold)
+            ? 17.5
+            : (sp >= kPedestrianSpeedThreshold ? 17.0 : 16.5),
         tilt: Perf.I.tiltFor(sp),
       );
     }
@@ -896,23 +1037,31 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
     if (err.abs() < kBearingDeadbandDeg) return _bearingEma;
 
     final desiredVel = (err * 3.0).clamp(-kMaxBearingVel, kMaxBearingVel);
-    final accel = ((desiredVel - _lastBearingVel) / dt).clamp(-kMaxBearingAccel, kMaxBearingAccel);
+    final accel =
+    ((desiredVel - _lastBearingVel) / dt).clamp(-kMaxBearingAccel, kMaxBearingAccel);
     _lastBearingVel = (_lastBearingVel + accel * dt).clamp(-kMaxBearingVel, kMaxBearingVel);
 
     _bearingEma = _normalizeDeg(_bearingEma + _lastBearingVel * dt);
     return _bearingEma;
   }
 
-  // ===== Geo utils =====
+  // =========================================================
+  // Geo utils
+  // =========================================================
   static const double _earth = 6371000.0;
+
   double _deg2rad(double d) => d * (math.pi / 180.0);
+
   double _rad2deg(double r) => r * (180.0 / math.pi);
 
   double _bearingBetween(LatLng a, LatLng b) {
-    final lat1 = _deg2rad(a.latitude), lat2 = _deg2rad(b.latitude);
+    final lat1 = _deg2rad(a.latitude);
+    final lat2 = _deg2rad(b.latitude);
     final dLon = _deg2rad(b.longitude - a.longitude);
+
     final y = math.sin(dLon) * math.cos(lat2);
-    final x = math.cos(lat1) * math.sin(lat2) - math.sin(lat1) * math.cos(lat2) * math.cos(dLon);
+    final x =
+        math.cos(lat1) * math.sin(lat2) - math.sin(lat1) * math.cos(lat2) * math.cos(dLon);
     return _normalizeDeg(_rad2deg(math.atan2(y, x)));
   }
 
@@ -921,8 +1070,10 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
     final dLon = _deg2rad(b.longitude - a.longitude);
     final la1 = _deg2rad(a.latitude);
     final la2 = _deg2rad(b.latitude);
+
     final h = math.sin(dLat / 2) * math.sin(dLat / 2) +
         math.cos(la1) * math.cos(la2) * math.sin(dLon / 2) * math.sin(dLon / 2);
+
     return 2 * _earth * math.asin(math.min(1, math.sqrt(h)));
   }
 
@@ -935,6 +1086,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
     final lat2 = math.asin(
       math.sin(lat1) * math.cos(d) + math.cos(lat1) * math.sin(d) * math.cos(br),
     );
+
     final lon2 = lon1 +
         math.atan2(
           math.sin(br) * math.sin(d) * math.cos(lat1),
@@ -944,10 +1096,14 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
     return LatLng(_rad2deg(lat2), _rad2deg(lon2));
   }
 
-  // ======= VIEWPORT FIT =======
+  // =========================================================
+  // Viewport fit
+  // =========================================================
   LatLngBounds _boundsFromPoints(List<LatLng> pts) {
-    double minLat = pts.first.latitude, maxLat = pts.first.latitude;
-    double minLng = pts.first.longitude, maxLng = pts.first.longitude;
+    double minLat = pts.first.latitude;
+    double maxLat = pts.first.latitude;
+    double minLng = pts.first.longitude;
+    double maxLng = pts.first.longitude;
 
     for (final p in pts) {
       minLat = math.min(minLat, p.latitude);
@@ -972,26 +1128,23 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
   }
 
   double _effectiveBoundsPadding(double base) {
-    // Map padding is already in logical pixels; include it so bounds won't hide under UI.
     final extraV = math.max(_mapPadding.top, _mapPadding.bottom);
     final extraH = math.max(_mapPadding.left, _mapPadding.right);
     final extra = math.max(extraV, extraH);
 
-    // Add a small buffer so polylines don't touch edges.
     final p = base + extra + 14.0;
-
-    // Avoid crazy zoom-out on very tall sheets.
     return p.clamp(base, base + 520.0);
   }
 
-
-  Future<void> _animateBoundsSafe(LatLngBounds bounds, {double padding = 70}) async {
+  Future<void> _animateBoundsSafe(
+      LatLngBounds bounds, {
+        double padding = 70,
+      }) async {
     if (_map == null) return;
 
     _camMode = _CamMode.overview;
     _rotateWithHeading = false;
 
-    // NEW: compensate for header/sheets/bottom-nav padding already applied to the map.
     final pad = _effectiveBoundsPadding(padding);
 
     try {
@@ -1009,6 +1162,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
         (bounds.northeast.latitude + bounds.southwest.latitude) / 2,
         (bounds.northeast.longitude + bounds.southwest.longitude) / 2,
       );
+
       await _map!.animateCamera(
         CameraUpdate.newCameraPosition(
           CameraPosition(target: c, zoom: 13.5, tilt: 0, bearing: 0),
@@ -1036,10 +1190,13 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
     await _animateBoundsSafe(bounds, padding: 70);
   }
 
-  // ===== Spatial index for route snapping =====
+  // =========================================================
+  // Spatial index for route snapping
+  // =========================================================
   void _buildSpatialIndex() {
     _spatialIndex.clear();
     if (_routePts.isEmpty) return;
+
     for (int i = 0; i < _routePts.length; i++) {
       _spatialIndex.add(_SpatialNode(_routePts[i], i));
     }
@@ -1047,9 +1204,11 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
 
   int _nearestRouteIndex(LatLng p) {
     if (_spatialIndex.isEmpty) return -1;
+
     int bestIdx = -1;
     double bestDist = double.infinity;
     final step = math.max(1, _spatialIndex.length ~/ 100);
+
     for (int i = 0; i < _spatialIndex.length; i += step) {
       final node = _spatialIndex[i];
       final d = _haversine(p, node.point);
@@ -1058,6 +1217,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
         bestIdx = node.index;
       }
     }
+
     if (bestIdx >= 0) {
       final start = math.max(0, bestIdx - 20);
       final end = math.min(_spatialIndex.length - 1, bestIdx + 20);
@@ -1070,47 +1230,63 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
         }
       }
     }
+
     return bestIdx;
   }
 
   double? _routeAwareBearing(LatLng user) {
     if (_spatialIndex.isEmpty) return null;
+
     final idx = _nearestRouteIndex(user);
     if (idx < 0) return null;
+
     final near = _routePts[idx];
     final distToRoute = _haversine(user, near);
     if (distToRoute > kRouteDeviationThreshold) {
       _checkReroute(distToRoute);
       return null;
     }
+
     final speed = _curPos?.speed ?? 0.0;
     final lookAheadPoints = speed > kVehicleSpeedThreshold ? 10 : 5;
     final aheadIdx = (idx + lookAheadPoints).clamp(idx, _routePts.length - 1);
     if (idx == aheadIdx) return null;
+
     _lastSnapIndex = idx;
     return _bearingBetween(near, _routePts[aheadIdx]);
   }
 
   void _checkReroute(double deviation) {
     if (_isRerouting) return;
+
     final now = DateTime.now();
     if (now.difference(_lastRerouteCheck) < const Duration(seconds: 10)) return;
+
     _lastRerouteCheck = now;
     _isRerouting = true;
     _cachedRoute = null;
-    Future.delayed(const Duration(milliseconds: 500), () {
+
+    Future<void>.delayed(const Duration(milliseconds: 500), () async {
       if (mounted && _pts.first.latLng != null && _pts.last.latLng != null) {
-        _buildRoute();
+        await _buildRoute();
       }
       _isRerouting = false;
     });
   }
 
-  // ===== Follow/Overview Camera =====
-  LatLng _forwardBiasTarget({required LatLng user, required double bearingDeg}) {
+  // =========================================================
+  // Follow/Overview Camera
+  // =========================================================
+  LatLng _forwardBiasTarget({
+    required LatLng user,
+    required double bearingDeg,
+  }) {
     if (!_useForwardAnchor) return user;
+
     final sp = _curPos?.speed ?? 0.0;
-    final metersAhead = (_camMode == _CamMode.follow && sp > 0) ? (sp * 3.5).clamp(30.0, 180.0) : 0.0;
+    final metersAhead =
+    (_camMode == _CamMode.follow && sp > 0) ? (sp * 3.5).clamp(30.0, 180.0) : 0.0;
+
     return _offsetLatLng(user, metersAhead, bearingDeg);
   }
 
@@ -1121,6 +1297,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
     required double tilt,
   }) async {
     if (_map == null) return;
+
     final now = DateTime.now();
     final minGap = Perf.I.camMoveMin;
     if (now.difference(_lastCamMove) < minGap) return;
@@ -1128,9 +1305,15 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
 
     await _map!.moveCamera(
       CameraUpdate.newCameraPosition(
-        CameraPosition(target: target, zoom: zoom, tilt: tilt, bearing: bearing),
+        CameraPosition(
+          target: target,
+          zoom: zoom,
+          tilt: tilt,
+          bearing: bearing,
+        ),
       ),
     );
+
     _lastCamTarget = target;
   }
 
@@ -1142,7 +1325,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
       pts = _routePts;
     } else {
       if (!(_pts.length >= 2 && _pts.first.latLng != null && _pts.last.latLng != null)) return;
-      pts = [_pts.first.latLng!, _pts.last.latLng!];
+      pts = <LatLng>[_pts.first.latLng!, _pts.last.latLng!];
     }
 
     if (pts.length < 2) return;
@@ -1160,7 +1343,9 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
     _useForwardAnchor = true;
   }
 
-  // ===== Location settings (dynamic) =====
+  // =========================================================
+  // Location settings (dynamic)
+  // =========================================================
   LocationSettings _platformLocationSettings({required bool moving}) {
     final gp = Perf.I.gpsProfile(moving: moving);
     final accuracy = moving ? gp.accuracy : LocationAccuracy.high;
@@ -1168,7 +1353,6 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
     final int distanceFilter =
     (moving ? gp.distanceFilterM : math.max(12, gp.distanceFilterM)).toInt();
 
-    // Web must NOT touch AndroidSettings/AppleSettings behaviorally.
     if (kIsWeb) {
       return LocationSettings(
         accuracy: accuracy,
@@ -1206,7 +1390,9 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
     );
   }
 
-  // ===== Robust acquisition helpers =====
+  // =========================================================
+  // Robust location acquisition
+  // =========================================================
   bool _isGoodFix(Position p, double maxAccM) {
     if (!p.latitude.isFinite || !p.longitude.isFinite) return false;
     if (p.latitude == 0 && p.longitude == 0) return false;
@@ -1228,14 +1414,17 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
 
     sub = Geolocator.getPositionStream(
       locationSettings: _platformLocationSettings(moving: moving),
-    ).listen((p) {
-      if (_isGoodFix(p, maxAccM)) {
-        finish(p);
-        sub?.cancel();
-      }
-    }, onError: (_) {});
+    ).listen(
+          (p) {
+        if (_isGoodFix(p, maxAccM)) {
+          finish(p);
+          sub?.cancel();
+        }
+      },
+      onError: (_) {},
+    );
 
-    Future.delayed(deadline).then((_) async {
+    Future<void>.delayed(deadline).then((_) async {
       await sub?.cancel();
       finish(null);
     });
@@ -1251,6 +1440,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
       } catch (_) {}
       return;
     }
+
     _locInitCompleter = Completer<void>();
     try {
       await action();
@@ -1270,9 +1460,11 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
     _logLocationDiagnostic('Location services OFF');
     await _showLocationPromptModal(
       title: 'Turn On Location',
-      message: 'To find drivers and show accurate pickups, please turn on your device location.',
+      message:
+      'To find drivers and show accurate pickups, please turn on your device location.',
       isServiceIssue: true,
     );
+
     _toast('Location Services Off', 'Please turn on GPS / location services.');
     return false;
   }
@@ -1282,18 +1474,21 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
     if (perm == LocationPermission.denied) {
       perm = await Geolocator.requestPermission();
     }
+
     if (perm == LocationPermission.denied ||
         perm == LocationPermission.deniedForever ||
         perm == LocationPermission.unableToDetermine) {
       _logLocationDiagnostic('Permission denied: $perm');
       await _showLocationPromptModal(
         title: 'Allow Location Access',
-        message: 'We use your location to match you with nearby drivers and calculate accurate ETAs. '
+        message:
+        'We use your location to match you with nearby drivers and calculate accurate ETAs. '
             'Please allow location access in your device settings.',
         isServiceIssue: false,
       );
       _toast('Location Required', 'Please grant location access in Settings.');
     }
+
     return perm;
   }
 
@@ -1319,8 +1514,11 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
           desiredAccuracy: LocationAccuracy.bestForNavigation,
           timeLimit: const Duration(seconds: 10),
         );
+
         if (_isGoodFix(p, maxAcceptableAcc)) return p;
-        _logLocationDiagnostic('Fix too coarse (acc=${p.accuracy.toStringAsFixed(1)}m) — trying stream…');
+        _logLocationDiagnostic(
+          'Fix too coarse (acc=${p.accuracy.toStringAsFixed(1)}m) — trying stream…',
+        );
       } on TimeoutException {
         _logLocationDiagnostic('GPS timeout on attempt $attempt/$tries');
       } on LocationServiceDisabledException {
@@ -1338,6 +1536,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
         moving: true,
         maxAccM: maxAcceptableAcc * (attempt == tries ? 2 : 1),
       );
+
       if (sample != null) return sample;
     }
 
@@ -1370,33 +1569,40 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
 
     _gpsSub = Geolocator.getPositionStream(
       locationSettings: _platformLocationSettings(moving: true),
-    ).listen((p) {
-      try {
-        _lastStreamUpdate = DateTime.now();
-        _gpsStreamErrorCount = 0;
+    ).listen(
+          (p) {
+        try {
+          _lastStreamUpdate = DateTime.now();
+          _gpsStreamErrorCount = 0;
 
-        if (!_isGoodFix(p, 10000)) {
-          _logLocationDiagnostic('Discarded suspicious stream update (acc=${p.accuracy})');
-          return;
+          if (!_isGoodFix(p, 10000)) {
+            _logLocationDiagnostic('Discarded suspicious stream update (acc=${p.accuracy})');
+            return;
+          }
+
+          _onGpsUpdate(p);
+        } catch (e) {
+          _logLocationDiagnostic('Error processing stream update: $e');
         }
-        _onGpsUpdate(p);
-      } catch (e) {
-        _logLocationDiagnostic('Error processing stream update: $e');
-      }
-    }, onError: (err) {
-      _gpsStreamErrorCount++;
-      _logLocationDiagnostic('[GPS] stream error #$_gpsStreamErrorCount: $err');
-      if (_gpsStreamErrorCount >= 5) {
-        _logLocationDiagnostic('[GPS] Max stream errors; scheduling restart');
-        _gpsSub?.cancel();
-        _gpsStreamErrorCount = 0;
-        _restartLocationStreamWithBackoff();
-      }
-    }, cancelOnError: false);
+      },
+      onError: (err) {
+        _gpsStreamErrorCount++;
+        _logLocationDiagnostic('[GPS] stream error #$_gpsStreamErrorCount: $err');
+
+        if (_gpsStreamErrorCount >= 5) {
+          _logLocationDiagnostic('[GPS] Max stream errors; scheduling restart');
+          _gpsSub?.cancel();
+          _gpsStreamErrorCount = 0;
+          _restartLocationStreamWithBackoff();
+        }
+      },
+      cancelOnError: false,
+    );
 
     _gpsWatchdog?.cancel();
     _gpsWatchdog = Timer.periodic(const Duration(seconds: 27), (_) {
       if (_lastStreamUpdate == null) return;
+
       final gap = DateTime.now().difference(_lastStreamUpdate!);
       if (gap.inSeconds > 40) {
         _logLocationDiagnostic('[GPS] Watchdog: stalled ${gap.inSeconds}s — restarting');
@@ -1406,7 +1612,6 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
     });
   }
 
-  // ===== INIT LOCATION — single-flight robust =====
   Future<void> _initLocation({bool userTriggered = false}) async {
     if (!mounted) return;
 
@@ -1430,7 +1635,8 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
         if (userTriggered) {
           await _showLocationPromptModal(
             title: 'Location Unavailable',
-            message: 'We could not determine your current position. Move to open space, toggle GPS, then try again.',
+            message:
+            'We could not determine your current position. Move to open space, toggle GPS, then try again.',
             isServiceIssue: true,
           );
         }
@@ -1477,7 +1683,6 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
     });
   }
 
-  // ===== Stream restart with exponential backoff + jitter =====
   Future<void> _restartLocationStreamWithBackoff() async {
     if (!mounted) return;
 
@@ -1503,7 +1708,6 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
     await _initLocation(userTriggered: false);
   }
 
-  // ===== PREMIUM LOCATION PROMPT MODAL =====
   Future<void> _showLocationPromptModal({
     required String title,
     required String message,
@@ -1515,7 +1719,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
     final cs = theme.colorScheme;
     final isDark = theme.brightness == Brightness.dark;
 
-    await showModalBottomSheet(
+    await showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
@@ -1539,7 +1743,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
                     borderRadius: BorderRadius.circular(22),
                     color: surface,
                     border: Border.all(color: divider, width: 0.8),
-                    boxShadow: [
+                    boxShadow: <BoxShadow>[
                       BoxShadow(
                         color: Colors.black.withOpacity(isDark ? 0.40 : 0.18),
                         blurRadius: 26,
@@ -1551,7 +1755,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
                     padding: const EdgeInsets.fromLTRB(18, 12, 18, 18),
                     child: Column(
                       mainAxisSize: MainAxisSize.min,
-                      children: [
+                      children: <Widget>[
                         Container(
                           width: 52,
                           height: 4,
@@ -1569,12 +1773,12 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
                             gradient: LinearGradient(
                               begin: Alignment.topLeft,
                               end: Alignment.bottomRight,
-                              colors: [
+                              colors: <Color>[
                                 cs.primary.withOpacity(0.95),
                                 cs.primary.withOpacity(0.65),
                               ],
                             ),
-                            boxShadow: [
+                            boxShadow: <BoxShadow>[
                               BoxShadow(
                                 color: cs.primary.withOpacity(0.22),
                                 blurRadius: 16,
@@ -2746,18 +2950,23 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
     });
   }
 
-  void _stopRideMarket() {
+  void _stopRideMarket({bool restartNearbyPolling = true}) {
     _marketSub?.cancel();
     _marketSub = null;
 
-    setState(() {
-      _marketOpen = false;
-      _offersLoading = false;
-      _offers = const [];
-    });
+    if (mounted) {
+      setState(() {
+        _marketOpen = false;
+        _offersLoading = false;
+        _offers = const [];
+      });
+    }
 
     _syncSearchCircle();
-    _startNearbyDriversPolling();
+
+    if (restartNearbyPolling) {
+      _startNearbyDriversPolling();
+    }
   }
 
   void _refreshDriverMarkers() {
@@ -2789,75 +2998,84 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
 
 
   // ===== Booking adapter helpers =====
+  String? _lastBookingError;
+
   Future<String?> _startBooking({
     required String riderId,
+    required String driverId,
     required RideOffer offer,
     required LatLng pickup,
     required LatLng destination,
   }) async {
-    if (_booking == null) return null;
-    String? id;
+    if (_booking == null) {
+      _lastBookingError = 'BookingController is null';
+      _dbg('BOOKING_FAIL', _lastBookingError);
+      return null;
+    }
+
+    if (riderId.trim().isEmpty || riderId == 'guest') {
+      _lastBookingError = 'Invalid riderId: "$riderId"';
+      _dbg('BOOKING_FAIL', _lastBookingError);
+      return null;
+    }
+
+    if (driverId.trim().isEmpty) {
+      _lastBookingError = 'Missing driverId';
+      _dbg('BOOKING_FAIL', _lastBookingError);
+      return null;
+    }
+
+    if (offer.id.trim().isEmpty) {
+      _lastBookingError = 'Missing offer.id';
+      _dbg('BOOKING_FAIL', _lastBookingError);
+      return null;
+    }
+
+    _dbg('BOOKING_INPUT', {
+      'riderId': riderId,
+      'driverId': driverId,
+      'offerId': offer.id,
+      'provider': offer.provider,
+      'category': offer.category,
+      'pickup': '${pickup.latitude},${pickup.longitude}',
+      'destination': '${destination.latitude},${destination.longitude}',
+    });
 
     try {
-      id = await _booking.bookRide(
-        riderId: riderId,
+      final dropOffs = <LatLng>[
+        for (int i = 1; i < _pts.length - 1; i++)
+          if (_pts[i].latLng != null) _pts[i].latLng!,
+      ];
+
+      final ok = await _booking.createBooking(
         offer: offer,
         pickup: pickup,
         destination: destination,
+        pickupText: _pts.first.controller.text.trim(),
+        destinationText: _pts.last.controller.text.trim(),
+        stops: dropOffs,
+        payMethod: 'cash',
+        userId: riderId,
+        driverId: driverId,
       );
-    } catch (_) {}
-    if (id != null) return id;
 
-    try {
-      id = await _booking.startBooking(
-        riderId: riderId,
-        offer: offer,
-        pickup: pickup,
-        destination: destination,
-      );
-    } catch (_) {}
-    if (id != null) return id;
+      final id = (_booking.rideId ?? '').toString().trim();
 
-    try {
-      id = await _booking.createRide(
-        riderId: riderId,
-        offer: offer,
-        pickup: pickup,
-        destination: destination,
-      );
-    } catch (_) {}
-    if (id != null) return id;
+      if (ok && id.isNotEmpty) {
+        _lastBookingError = null;
+        _dbg('BOOKING_OK', {'rideId': id});
+        return id;
+      }
 
-    try {
-      id = await _booking.bookRide(riderId, offer, pickup, destination);
-    } catch (_) {}
-    if (id != null) return id;
-
-    try {
-      id = await _booking.startBooking(riderId, offer, pickup, destination);
-    } catch (_) {}
-    if (id != null) return id;
-
-    try {
-      id = await _booking.createRide(riderId, offer, pickup, destination);
-    } catch (_) {}
-    if (id != null) return id;
-
-    try {
-      id = await _booking.start(
-        riderId: riderId,
-        offer: offer,
-        pickup: pickup,
-        destination: destination,
-      );
-    } catch (_) {}
-    if (id != null) return id;
-
-    try {
-      id = await _booking.start(riderId, offer, pickup, destination);
-    } catch (_) {}
-
-    return id;
+      _lastBookingError = 'createBooking returned false or empty rideId';
+      _dbg('BOOKING_FAIL_FINAL', _lastBookingError);
+      return null;
+    } catch (e, st) {
+      _lastBookingError = e.toString();
+      _dbg('BOOKING_FAIL_FINAL', _lastBookingError);
+      _dbg('BOOKING_FAIL_ST', st);
+      return null;
+    }
   }
 
   Stream<dynamic>? _bookingUpdatesStream() {
@@ -3164,73 +3382,93 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
   }
 
   Future<void> _onBookDriverAndOffer(RideNearbyDriver driver, RideOffer offer) async {
-    _stopRideMarket();
+    _stopRideMarket(restartNearbyPolling: false);
 
     _selectedOffer = offer;
-    _didFitDriverLeg = false;
-    _didFitTripLeg = false;
 
-    _engagedDriverId = driver.id;
-    _engagedDriverLL = LatLng(driver.lat, driver.lng);
+    final riderId =
+        _prefs.getString('user_id') ??
+            _user?['id']?.toString() ??
+            _user?['user_id']?.toString() ??
+            'guest';
 
-    setState(() {
-      _tripPhase = TripPhase.driverToPickup;
-    });
-
-    final riderId = _prefs.getString('user_id') ?? 'guest';
     _bookingSub?.cancel();
     try {
       _booking?.dispose();
     } catch (_) {}
+
     _booking = BookingController(_api);
 
     final pickup = _pickupAnchorLL() ?? _pts.first.latLng!;
-    final dest = _destLL() ?? _pts.last.latLng!;
+    final destination = _destLL() ?? _pts.last.latLng!;
 
     final rideId = await _startBooking(
       riderId: riderId,
+      driverId: driver.id,
       offer: offer,
       pickup: pickup,
-      destination: dest,
+      destination: destination,
     );
 
-    if (rideId == null) {
-      _toast('Booking failed', 'Could not book this driver.');
-      _resetTripState();
+    if (rideId == null || rideId.trim().isEmpty) {
+      final reason = (_lastBookingError == null || _lastBookingError!.trim().isEmpty)
+          ? 'Could not book this driver.'
+          : _lastBookingError!;
+      _toast('Booking failed', reason);
       _startRideMarket();
       return;
     }
 
-    _startDriverToPickupTick();
+    if (!mounted) return;
 
-    final stream = _bookingUpdatesStream();
-    if (stream != null) {
-      _bookingSub = stream.listen((u) async {
-        if (!mounted) return;
+    _engagedDriverId = driver.id;
+    _engagedDriverLL = LatLng(driver.lat, driver.lng);
 
-        final drvLL = _coerceDriverLL(u);
-        final head = _coerceHeading(u);
+    final dropOffs = <LatLng>[
+      for (int i = 1; i < _pts.length - 1; i++)
+        if (_pts[i].latLng != null) _pts[i].latLng!,
+    ];
 
-        if (drvLL != null) {
-          _engagedDriverLL = drvLL;
-          _setEngagedDriverMarker(drvLL, head);
-        }
+    final dropOffTexts = <String>[
+      for (int i = 1; i < _pts.length - 1; i++)
+        if (_pts[i].latLng != null) _pts[i].controller.text.trim(),
+    ];
 
-        final ph = _coercePhase(u);
+    await Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => TripNavigationPage(
+          args: TripNavigationArgs(
+            userId: riderId,
+            driverId: driver.id,
+            tripId: rideId,
+            pickup: pickup,
+            destination: destination,
+            dropOffs: dropOffs,
+            originText: _pts.first.controller.text.trim(),
+            destinationText: _pts.last.controller.text.trim(),
+            dropOffTexts: dropOffTexts,
+            driverName: driver.name,
+            vehicleType: driver.vehicleType,
+            carPlate: driver.carPlate,
+            rating: driver.rating,
+            initialDriverLocation: LatLng(driver.lat, driver.lng),
+            bookingUpdates: _bookingUpdatesStream(),
+            onStartTrip: _bookingStartTrip,
+            onCancelTrip: _bookingCancelTrip,
+          ),
+        ),
+      ),
+    );
 
-        if (_isArrived(ph) && _tripPhase == TripPhase.driverToPickup) {
-          setState(() => _tripPhase = TripPhase.waitingPickup);
-        }
+    if (!mounted) return;
 
-        if (_isInRide(ph) && _tripPhase != TripPhase.enRoute) {
-          await _startTrip();
-        }
+    try {
+      _booking?.dispose();
+    } catch (_) {}
+    _booking = null;
 
-        if (_isCompleted(ph) || _isCanceled(ph)) {
-          _resetTripState();
-        }
-      }, onError: (_) {});
-    }
+    _resetTripState(keepRoute: true);
+    _startNearbyDriversPolling(force: true);
   }
 
   Future<void> _startTrip() async {
@@ -3470,9 +3708,10 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
     final stopFocus = FocusNode();
     final stopCtl = TextEditingController();
 
-    final idxForListener = insertAt;
     stopFocus.addListener(() {
-      if (stopFocus.hasFocus) _onFocused(idxForListener);
+      if (stopFocus.hasFocus) {
+        _onFocused(_indexOfFocus(stopFocus));
+      }
     });
 
     final stop = RoutePoint(
@@ -3506,21 +3745,51 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
 
     setState(() {
       _pts.removeAt(index);
-      _markers.removeWhere((m) => m.markerId.value == 'p_$index');
     });
 
     removed.controller.dispose();
     removed.focus.dispose();
 
-    for (int i = 0; i < _pts.length; i++) {
-      final ll = _pts[i].latLng;
-      if (ll != null) _putMarker(i, ll, _pts[i].controller.text);
-    }
+    _rebuildPointMarkers();
 
     if (_hasPickupAndDropoff) {
       _cachedRoute = null;
       _buildRoute();
     }
+  }
+
+  void _rebuildPointMarkers() {
+    if (!mounted) return;
+
+    setState(() {
+      _markers.removeWhere((m) => m.markerId.value.startsWith('p_'));
+
+      for (int i = 0; i < _pts.length; i++) {
+        final ll = _pts[i].latLng;
+        if (ll == null) continue;
+
+        final p = _pts[i];
+        final icon = p.type == PointType.pickup
+            ? (_pickupIcon ?? BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueAzure))
+            : p.type == PointType.destination
+            ? (_dropIcon ?? BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueGreen))
+            : BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueOrange);
+
+        _markers.add(
+          Marker(
+            markerId: MarkerId('p_$i'),
+            position: ll,
+            icon: icon,
+            anchor: const Offset(0.5, 0.5),
+            infoWindow: InfoWindow(
+              title: _pointLabel(p.type),
+              snippet: p.controller.text,
+            ),
+            consumeTapEvents: false,
+          ),
+        );
+      }
+    });
   }
 
   void _swap() {
@@ -3550,8 +3819,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
         ..isCurrent = isCur;
     });
 
-    if (a.latLng != null) _putMarker(0, a.latLng!, a.controller.text);
-    if (b.latLng != null) _putMarker(_pts.length - 1, b.latLng!, b.controller.text);
+    _rebuildPointMarkers();
 
     if (_hasPickupAndDropoff) {
       _cachedRoute = null;
@@ -3791,8 +4059,6 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
                     await _selectSug(sug);
                   },
                 )
-                    : (tripActive
-                    ? _tripControlSheet(bottomNavH)
                     : RideMarketSheet(
                   bottomNavHeight: bottomNavH,
                   originText: _pts.first.controller.text,
@@ -3803,8 +4069,27 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
                   loading: _offersLoading,
                   drivers: _drivers.values.toList(),
                   driversNearbyCount: _drivers.length,
+                  userLocation: _curPos == null
+                      ? null
+                      : GeoPoint(_curPos!.latitude, _curPos!.longitude),
+                  pickupLocation: _pickupAnchorLL() == null
+                      ? null
+                      : GeoPoint(_pickupAnchorLL()!.latitude, _pickupAnchorLL()!.longitude),
+                  dropLocation: _destLL() == null
+                      ? null
+                      : GeoPoint(_destLL()!.latitude, _destLL()!.longitude),
                   onRefresh: () => _startRideMarket(),
+
                   onCancel: () {
+                    _stopRideMarket();
+                    _resetTripState();
+                    setState(() {
+                      _marketOpen = false;
+                    });
+                    _syncSearchCircle();
+                  },
+
+                  /* onCancel: () {
                     _stopRideMarket();
                     _resetTripState();
                     setState(() {
@@ -3814,11 +4099,11 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
                       _marketOpen = false;
                     });
                     _syncSearchCircle();
-                  },
+                  } ,*/
                   onBook: (driver, offer) async {
                     await _onBookDriverAndOffer(driver, offer);
                   },
-                )),
+                ),
               ),
             ),
           ),

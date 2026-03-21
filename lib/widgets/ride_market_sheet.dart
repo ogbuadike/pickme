@@ -1,23 +1,14 @@
-// lib/widgets/ride_market_sheet.dart
-//
-// ✅ Dense “Bybit-like” UI (tiny scale, information-rich)
-// ✅ Stable list with freeze (prevents reload vibe)
-// ✅ NOW: initial driver list is ordered by Highest Rating + Rank (then ETA/dist as tie-breakers)
-// ✅ Organized into clear sections for long-term maintenance
-//
-// NOTE: Uses FontFeature -> requires dart:ui import.
-
 import 'dart:math' as math;
 import 'dart:ui' show FontFeature;
 
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart' as intl;
 
-import '../themes/app_theme.dart';
-import '../services/ride_market_service.dart';
-import 'driver_details_sheet.dart';
-
 import '../models/geo_point.dart';
+import '../services/ride_market_service.dart';
+import '../themes/app_theme.dart';
+import '../ui/ui_scale.dart';
+import 'driver_details_sheet.dart';
 
 class RideNearbyDriver {
   final String id;
@@ -53,7 +44,6 @@ class RideNearbyDriver {
   final double estimatedTotal;
   final double tripKm;
 
-
   const RideNearbyDriver({
     required this.id,
     required this.name,
@@ -87,9 +77,16 @@ class RideNearbyDriver {
   });
 
   String get initials {
-    final parts = name.trim().split(RegExp(r'\s+')).where((e) => e.isNotEmpty).toList();
+    final parts = name
+        .trim()
+        .split(RegExp(r'\s+'))
+        .where((e) => e.isNotEmpty)
+        .toList();
     if (parts.isEmpty) return 'D';
-    String first(String x) => x.isEmpty ? '' : String.fromCharCode(x.runes.first);
+
+    String first(String x) =>
+        x.isEmpty ? '' : String.fromCharCode(x.runes.first);
+
     final a = first(parts.first).toUpperCase();
     final b = parts.length > 1 ? first(parts.last).toUpperCase() : '';
     return (a + b).trim();
@@ -101,7 +98,9 @@ class RideNearbyDriver {
       final s = x.trim();
       if (s.isNotEmpty) out.add(s);
     }
-    if (out.isEmpty && carImageUrl.trim().isNotEmpty) out.add(carImageUrl.trim());
+    if (out.isEmpty && carImageUrl.trim().isNotEmpty) {
+      out.add(carImageUrl.trim());
+    }
     return out;
   }
 }
@@ -157,14 +156,16 @@ class _RideMarketSheetState extends State<RideMarketSheet> {
   final _moneyFmt = intl.NumberFormat.decimalPattern();
 
   final List<String> _stableIds = <String>[];
-  List<RideNearbyDriver> _stableDrivers = const [];
+  List<RideNearbyDriver> _stableDrivers = const <RideNearbyDriver>[];
   String? _selectedDriverId;
 
   bool _fullyFrozen = false;
   DateTime? _settleUntil;
 
   bool get _showNoDrivers =>
-      !widget.loading && _stableDrivers.isEmpty && (widget.drivers ?? const []).isEmpty;
+      !widget.loading &&
+          _stableDrivers.isEmpty &&
+          (widget.drivers ?? const []).isEmpty;
 
   double get _tripKm {
     if (widget.tripDistanceKm != null && widget.tripDistanceKm! > 0) {
@@ -216,13 +217,16 @@ class _RideMarketSheetState extends State<RideMarketSheet> {
   }
 
   static List<String> _strList(dynamic v) {
-    if (v == null) return const [];
+    if (v == null) return const <String>[];
     if (v is List) {
-      return v.map((e) => e.toString()).where((s) => s.trim().isNotEmpty).toList(growable: false);
+      return v
+          .map((e) => e.toString())
+          .where((s) => s.trim().isNotEmpty)
+          .toList(growable: false);
     }
 
     final s = v.toString().trim();
-    if (s.isEmpty) return const [];
+    if (s.isEmpty) return const <String>[];
     if (s.startsWith('[') && s.endsWith(']')) {
       final inner = s.substring(1, s.length - 1);
       return inner
@@ -306,7 +310,10 @@ class _RideMarketSheetState extends State<RideMarketSheet> {
 
       final estimatedTotal = (() {
         try {
-          return _num(d.estimatedTotal ?? d.estimated_total ?? d.price_total, 0).toDouble();
+          return _num(
+            d.estimatedTotal ?? d.estimated_total ?? d.price_total,
+            0,
+          ).toDouble();
         } catch (_) {
           return 0.0;
         }
@@ -320,7 +327,7 @@ class _RideMarketSheetState extends State<RideMarketSheet> {
         }
       })();
 
-      List<String> images = const [];
+      List<String> images = const <String>[];
       try {
         final v = d.vehicleImages ?? d.vehicle_images;
         images = _strList(v);
@@ -344,7 +351,10 @@ class _RideMarketSheetState extends State<RideMarketSheet> {
         etaMin: _num(d.etaMin ?? d.eta_min, 0).toInt(),
         vehicleType: vehicleType,
         seats: seats,
-        vehicleImages: images.map(_fixUrl).where((x) => x.isNotEmpty).toList(growable: false),
+        vehicleImages: images
+            .map(_fixUrl)
+            .where((x) => x.isNotEmpty)
+            .toList(growable: false),
         carImageUrl: _fixUrl(carImg),
         avatarUrl: _fixUrl(avatarUrl),
         rank: rank,
@@ -385,7 +395,8 @@ class _RideMarketSheetState extends State<RideMarketSheet> {
         currency: (m['currency'] ?? 'NGN').toString(),
         pricePerKm: _num(m['price_per_km'], 0).toDouble(),
         baseFare: _num(m['base_fare'], 0).toDouble(),
-        estimatedTotal: _num(m['estimated_total'] ?? m['price_total'], 0).toDouble(),
+        estimatedTotal:
+        _num(m['estimated_total'] ?? m['price_total'], 0).toDouble(),
         tripKm: _num(m['trip_km'], 0).toDouble(),
       );
     }
@@ -460,7 +471,7 @@ class _RideMarketSheetState extends State<RideMarketSheet> {
 
   void _resetStable({bool alsoClearSelection = false}) {
     _stableIds.clear();
-    _stableDrivers = const [];
+    _stableDrivers = const <RideNearbyDriver>[];
     _fullyFrozen = false;
     _settleUntil = null;
     if (alsoClearSelection) _selectedDriverId = null;
@@ -477,7 +488,7 @@ class _RideMarketSheetState extends State<RideMarketSheet> {
     }
     if (_fullyFrozen) return;
 
-    final incomingRaw = widget.drivers ?? const [];
+    final incomingRaw = widget.drivers ?? const <dynamic>[];
     if (incomingRaw.isEmpty) return;
 
     final incoming = <RideNearbyDriver>[];
@@ -502,7 +513,10 @@ class _RideMarketSheetState extends State<RideMarketSheet> {
       return;
     }
 
-    final oldById = <String, RideNearbyDriver>{for (final d in _stableDrivers) d.id: d};
+    final oldById = <String, RideNearbyDriver>{
+      for (final d in _stableDrivers) d.id: d,
+    };
+
     bool changed = false;
     final updated = <RideNearbyDriver>[];
 
@@ -519,7 +533,8 @@ class _RideMarketSheetState extends State<RideMarketSheet> {
       if (old != null && fresh != null) {
         final needPrice = !_hasPrice(old) && _hasPrice(fresh);
         final needImage = !_hasImage(old) && _hasImage(fresh);
-        final needRating = (_safeRating(old.rating) <= 0 && _safeRating(fresh.rating) > 0);
+        final needRating =
+        (_safeRating(old.rating) <= 0 && _safeRating(fresh.rating) > 0);
 
         if (needPrice || needImage || needRating) {
           updated.add(fresh);
@@ -557,16 +572,47 @@ class _RideMarketSheetState extends State<RideMarketSheet> {
     if (d.estimatedTotal > 0) return d.estimatedTotal;
 
     final km = (_tripKm > 0) ? _tripKm : (d.tripKm > 0 ? d.tripKm : 0);
-    if (km > 0 && d.pricePerKm > 0) return d.baseFare + d.pricePerKm * km;
-
+    if (km > 0 && d.pricePerKm > 0) {
+      return d.baseFare + d.pricePerKm * km;
+    }
     return 0;
+  }
+
+  double _sheetMaxHeight(MediaQueryData mq, UIScale ui) {
+    final h = mq.size.height;
+    double target;
+
+    if (ui.landscape) {
+      target = h * (ui.tablet ? 0.80 : 0.76);
+    } else if (ui.tiny) {
+      target = h * 0.60;
+    } else if (ui.compact) {
+      target = h * 0.56;
+    } else {
+      target = h * 0.52;
+    }
+
+    return target.clamp(
+      ui.landscape ? 220.0 : 250.0,
+      ui.landscape ? 520.0 : 560.0,
+    );
+  }
+
+  double _bottomInset(MediaQueryData mq, UIScale ui, double maxH) {
+    final raw = widget.bottomNavHeight + mq.padding.bottom + ui.gap(5);
+    final cap = ui.landscape
+        ? math.max(14.0, maxH * 0.12)
+        : math.max(18.0, maxH * 0.16);
+    return raw.clamp(8.0, cap);
   }
 
   @override
   Widget build(BuildContext context) {
     final mq = MediaQuery.of(context);
+    final ui = UIScale.of(context);
     final cs = Theme.of(context).colorScheme;
     final drivers = _stableDrivers;
+    final maxH = _sheetMaxHeight(mq, ui);
 
     return Align(
       alignment: Alignment.bottomCenter,
@@ -574,37 +620,61 @@ class _RideMarketSheetState extends State<RideMarketSheet> {
         color: Colors.transparent,
         child: Container(
           width: double.infinity,
-          constraints: BoxConstraints(maxHeight: mq.size.height * 0.56),
+          constraints: BoxConstraints(maxHeight: maxH),
           decoration: BoxDecoration(
             color: Theme.of(context).cardColor,
-            borderRadius: const BorderRadius.vertical(top: Radius.circular(22)),
+            borderRadius: BorderRadius.vertical(
+              top: Radius.circular(ui.radius(18)),
+            ),
             boxShadow: [
               BoxShadow(
-                color: Colors.black.withOpacity(0.20),
-                blurRadius: 20,
-                offset: const Offset(0, -10),
+                color: Colors.black.withOpacity(0.16),
+                blurRadius: ui.reduceFx ? 8 : 16,
+                offset: const Offset(0, -8),
               ),
             ],
           ),
-          child: Column(
-            children: [
-              const SizedBox(height: 10),
-              _handle(cs),
-              const SizedBox(height: 8),
-              _topBar(context),
-              Expanded(child: _content(context, drivers)),
-              _bottomBar(context, mq, drivers),
-            ],
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              final dense = constraints.maxHeight < 330;
+              final ultraDense = constraints.maxHeight < 285;
+
+              return Column(
+                children: [
+                  SizedBox(height: ui.gap(6)),
+                  _handle(cs, ui),
+                  SizedBox(height: ui.gap(4)),
+                  _topBar(context, ui, dense: dense),
+                  Expanded(
+                    child: _content(
+                      context,
+                      drivers,
+                      ui,
+                      dense: dense,
+                      ultraDense: ultraDense,
+                    ),
+                  ),
+                  _bottomBar(
+                    context,
+                    mq,
+                    drivers,
+                    ui,
+                    dense: dense,
+                    maxHeight: maxH,
+                  ),
+                ],
+              );
+            },
           ),
         ),
       ),
     );
   }
 
-  Widget _handle(ColorScheme cs) {
+  Widget _handle(ColorScheme cs, UIScale ui) {
     return Container(
-      width: 60,
-      height: 6,
+      width: ui.landscape ? 38 : 46,
+      height: 4,
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(999),
         color: cs.onSurface.withOpacity(0.16),
@@ -612,35 +682,51 @@ class _RideMarketSheetState extends State<RideMarketSheet> {
     );
   }
 
-  Widget _topBar(BuildContext context) {
+  Widget _topBar(BuildContext context, UIScale ui, {required bool dense}) {
     final cs = Theme.of(context).colorScheme;
+    final iconSize = ui.icon(dense ? 15 : 17);
+
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 6),
+      padding: EdgeInsets.symmetric(horizontal: ui.inset(4)),
       child: Row(
         children: [
           IconButton(
             onPressed: widget.onCancel,
-            icon: const Icon(Icons.close_rounded),
+            visualDensity: VisualDensity.compact,
+            padding: EdgeInsets.all(ui.inset(4)),
+            constraints: BoxConstraints.tightFor(
+              width: ui.gap(30),
+              height: ui.gap(30),
+            ),
+            icon: Icon(Icons.close_rounded, size: iconSize),
             tooltip: 'Close',
           ),
           Expanded(
             child: Column(
+              mainAxisSize: MainAxisSize.min,
               children: [
                 Text(
-                  'Select a driver',
+                  'Select driver',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
                   style: TextStyle(
                     fontWeight: FontWeight.w900,
                     color: cs.onSurface.withOpacity(0.92),
-                    fontSize: 14,
+                    fontSize: ui.font(dense ? 11.0 : 12.0),
+                    height: 1.0,
+                    letterSpacing: -0.18,
                   ),
                 ),
-                const SizedBox(height: 2),
+                SizedBox(height: ui.gap(1)),
                 Text(
-                  widget.loading ? 'Searching…' : 'Live availability',
+                  widget.loading ? 'Searching…' : 'Live',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
                   style: TextStyle(
                     fontWeight: FontWeight.w800,
                     color: cs.onSurface.withOpacity(0.55),
-                    fontSize: 11,
+                    fontSize: ui.font(dense ? 8.7 : 9.5),
+                    height: 1.0,
                   ),
                 ),
               ],
@@ -651,7 +737,13 @@ class _RideMarketSheetState extends State<RideMarketSheet> {
               setState(() => _resetStable(alsoClearSelection: true));
               widget.onRefresh();
             },
-            icon: const Icon(Icons.refresh_rounded),
+            visualDensity: VisualDensity.compact,
+            padding: EdgeInsets.all(ui.inset(4)),
+            constraints: BoxConstraints.tightFor(
+              width: ui.gap(30),
+              height: ui.gap(30),
+            ),
+            icon: Icon(Icons.refresh_rounded, size: iconSize),
             tooltip: 'Refresh',
           ),
         ],
@@ -659,53 +751,84 @@ class _RideMarketSheetState extends State<RideMarketSheet> {
     );
   }
 
-  Widget _content(BuildContext context, List<RideNearbyDriver> drivers) {
-    return ListView(
-      physics: const BouncingScrollPhysics(),
-      padding: const EdgeInsets.fromLTRB(12, 0, 12, 10),
-      children: [
-        _routeMini(context),
-        const SizedBox(height: 10),
-        if (_showNoDrivers)
-          _emptyState(context)
-        else ...[
-          const SizedBox(height: 10),
-          if (widget.loading && drivers.isEmpty) _loadingRow(context),
-          ...List.generate(drivers.length, (i) {
-            final d = drivers[i];
-            final selected = (_selectedDriverId == d.id);
-            return Padding(
-              padding: const EdgeInsets.only(bottom: 10),
-              child: KeyedSubtree(
-                key: ValueKey(d.id),
-                child: _driverCard(
-                  context,
-                  d,
-                  selected: selected,
-                  onTap: () => setState(() => _selectedDriverId = d.id),
+  Widget _content(
+      BuildContext context,
+      List<RideNearbyDriver> drivers,
+      UIScale ui, {
+        required bool dense,
+        required bool ultraDense,
+      }) {
+    return RepaintBoundary(
+      child: ListView(
+        physics: const BouncingScrollPhysics(),
+        padding: EdgeInsets.fromLTRB(
+          ui.inset(8),
+          0,
+          ui.inset(8),
+          ui.gap(6),
+        ),
+        children: [
+          _routeMini(context, ui, dense: dense),
+          SizedBox(height: ui.gap(6)),
+          if (_showNoDrivers)
+            _emptyState(context, ui)
+          else ...[
+            if (widget.loading && drivers.isEmpty) _loadingRow(context, ui),
+            ...List.generate(drivers.length, (i) {
+              final d = drivers[i];
+              final selected = (_selectedDriverId == d.id);
+
+              return Padding(
+                padding: EdgeInsets.only(bottom: ui.gap(6)),
+                child: KeyedSubtree(
+                  key: ValueKey(d.id),
+                  child: _driverCard(
+                    context,
+                    d,
+                    ui,
+                    dense: dense,
+                    ultraDense: ultraDense,
+                    selected: selected,
+                    onTap: () => setState(() => _selectedDriverId = d.id),
+                  ),
                 ),
-              ),
-            );
-          }),
+              );
+            }),
+          ],
         ],
-      ],
+      ),
     );
   }
 
-  Widget _routeMini(BuildContext context) {
+  Widget _routeMini(BuildContext context, UIScale ui, {required bool dense}) {
     final cs = Theme.of(context).colorScheme;
-    final origin = widget.originText.trim().isEmpty ? 'Pickup' : widget.originText.trim();
-    final dest = widget.destinationText.trim().isEmpty ? 'Destination' : widget.destinationText.trim();
+    final origin =
+    widget.originText.trim().isEmpty ? 'Pickup' : widget.originText.trim();
+    final dest = widget.destinationText.trim().isEmpty
+        ? 'Destination'
+        : widget.destinationText.trim();
     final count = math.max(widget.driversNearbyCount, _stableDrivers.length);
 
     return Container(
-      padding: const EdgeInsets.fromLTRB(12, 12, 12, 12),
+      padding: EdgeInsets.fromLTRB(
+        ui.inset(dense ? 8 : 10),
+        ui.inset(dense ? 8 : 9),
+        ui.inset(dense ? 8 : 10),
+        ui.inset(dense ? 8 : 9),
+      ),
       decoration: BoxDecoration(
         color: cs.surface,
-        borderRadius: BorderRadius.circular(16),
+        borderRadius: BorderRadius.circular(ui.radius(13)),
         border: Border.all(color: cs.onSurface.withOpacity(0.08)),
       ),
-      child: _FromToMini(origin: origin, dest: dest, count: count, cs: cs),
+      child: _FromToMini(
+        origin: origin,
+        dest: dest,
+        count: count,
+        cs: cs,
+        ui: ui,
+        dense: dense,
+      ),
     );
   }
 
@@ -735,7 +858,10 @@ class _RideMarketSheetState extends State<RideMarketSheet> {
 
   Widget _driverCard(
       BuildContext context,
-      RideNearbyDriver d, {
+      RideNearbyDriver d,
+      UIScale ui, {
+        required bool dense,
+        required bool ultraDense,
         required bool selected,
         required VoidCallback onTap,
       }) {
@@ -745,7 +871,8 @@ class _RideMarketSheetState extends State<RideMarketSheet> {
     final rc = _rankColor(rankText);
 
     final vt = d.vehicleType.trim().isEmpty ? 'car' : d.vehicleType.trim();
-    final seats = vt.toLowerCase().contains('bike') ? 1 : (d.seats <= 0 ? 4 : d.seats);
+    final seats =
+    vt.toLowerCase().contains('bike') ? 1 : (d.seats <= 0 ? 4 : d.seats);
 
     final etaText = d.etaMin <= 0 ? '1m' : '${d.etaMin}m';
     final distText = _fmtDistShort(d.distanceKm);
@@ -754,171 +881,208 @@ class _RideMarketSheetState extends State<RideMarketSheet> {
     final sym = _curSym(d.currency);
     final totalText = total > 0 ? '$sym${_moneyFmt.format(total.round())}' : '—';
 
-    final img = (d.imagesEffective.isNotEmpty) ? _fixUrl(d.imagesEffective.first) : '';
+    final img =
+    (d.imagesEffective.isNotEmpty) ? _fixUrl(d.imagesEffective.first) : '';
+
+    final avatarSize = ultraDense ? 28.0 : (dense ? 30.0 : 32.0);
+    final thumbSize = ultraDense ? 26.0 : (dense ? 28.0 : 30.0);
 
     return AnimatedContainer(
-      duration: const Duration(milliseconds: 140),
+      duration: const Duration(milliseconds: 120),
       curve: Curves.easeOut,
       decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(18),
+        borderRadius: BorderRadius.circular(ui.radius(14)),
         boxShadow: selected
             ? [
           BoxShadow(
-            color: AppColors.primary.withOpacity(0.16),
-            blurRadius: 18,
-            offset: const Offset(0, 10),
-          )
+            color: AppColors.primary.withOpacity(0.10),
+            blurRadius: ui.reduceFx ? 6 : 12,
+            offset: const Offset(0, 5),
+          ),
         ]
-            : [],
+            : null,
       ),
       child: InkWell(
         onTap: onTap,
-        borderRadius: BorderRadius.circular(16),
+        borderRadius: BorderRadius.circular(ui.radius(14)),
         child: AnimatedContainer(
-          duration: const Duration(milliseconds: 180),
+          duration: const Duration(milliseconds: 140),
           curve: Curves.easeOut,
-          padding: const EdgeInsets.fromLTRB(10, 9, 10, 9),
-          decoration: BoxDecoration(
-            color: selected ? AppColors.primary.withOpacity(0.10) : cs.surface,
-            borderRadius: BorderRadius.circular(16),
-            border: Border.all(
-              color: selected ? AppColors.primary.withOpacity(0.55) : cs.onSurface.withOpacity(0.08),
-              width: selected ? 1.6 : 1.0,
-            ),
-            boxShadow: selected
-                ? [
-              BoxShadow(
-                blurRadius: 18,
-                offset: const Offset(0, 10),
-                color: AppColors.primary.withOpacity(0.10),
-              ),
-              BoxShadow(
-                blurRadius: 10,
-                offset: const Offset(0, 4),
-                color: Colors.black.withOpacity(0.08),
-              ),
-            ]
-                : [
-              BoxShadow(
-                blurRadius: 10,
-                offset: const Offset(0, 6),
-                color: Colors.black.withOpacity(0.06),
-              ),
-            ],
+          padding: EdgeInsets.fromLTRB(
+            ui.inset(7),
+            ui.inset(6),
+            ui.inset(7),
+            ui.inset(6),
           ),
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              _avatarWithRank(context, d.avatarUrl, d.initials, rankText, rc, selected: selected),
-              const SizedBox(width: 10),
-              Expanded(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
+          decoration: BoxDecoration(
+            color: selected ? AppColors.primary.withOpacity(0.08) : cs.surface,
+            borderRadius: BorderRadius.circular(ui.radius(14)),
+            border: Border.all(
+              color: selected
+                  ? AppColors.primary.withOpacity(0.46)
+                  : cs.onSurface.withOpacity(0.08),
+              width: selected ? 1.35 : 1.0,
+            ),
+          ),
+          child: LayoutBuilder(
+            builder: (context, c) {
+              final veryNarrow = c.maxWidth < 340;
+
+              return Row(
+                crossAxisAlignment: CrossAxisAlignment.center,
+                children: [
+                  _avatarWithRank(
+                    context,
+                    ui,
+                    d.avatarUrl,
+                    d.initials,
+                    rankText,
+                    rc,
+                    size: avatarSize,
+                    selected: selected,
+                  ),
+                  SizedBox(width: ui.gap(6)),
+                  Expanded(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
                       children: [
-                        Expanded(
-                          child: Text(
-                            d.name,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: TextStyle(
-                              fontWeight: FontWeight.w900,
-                              color: cs.onSurface.withOpacity(0.92),
-                              fontSize: 12.2,
-                              height: 1.05,
-                              letterSpacing: -0.2,
+                        Row(
+                          children: [
+                            Expanded(
+                              child: Text(
+                                d.name,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                  fontWeight: FontWeight.w900,
+                                  color: cs.onSurface.withOpacity(0.92),
+                                  fontSize: ui.font(
+                                    ultraDense ? 10.0 : (dense ? 10.4 : 10.8),
+                                  ),
+                                  height: 1.0,
+                                  letterSpacing: -0.16,
+                                ),
+                              ),
                             ),
+                            SizedBox(width: ui.gap(4)),
+                            _ratingPill(context, ui, d.rating),
+                          ],
+                        ),
+                        SizedBox(height: ui.gap(4)),
+                        SizedBox(
+                          height: ultraDense ? 18 : 20,
+                          child: ListView(
+                            scrollDirection: Axis.horizontal,
+                            physics: const BouncingScrollPhysics(),
+                            padding: EdgeInsets.zero,
+                            children: [
+                              _chipNx(
+                                context,
+                                ui: ui,
+                                icon: _vehicleIconNx(vt),
+                                text: vt.toLowerCase().contains('bike')
+                                    ? 'Bike'
+                                    : 'Car',
+                                tone: AppColors.primary,
+                                strong: true,
+                              ),
+                              SizedBox(width: ui.gap(4)),
+                              _chipNx(
+                                context,
+                                ui: ui,
+                                icon: Icons.airline_seat_recline_normal_rounded,
+                                text: '$seats',
+                                tone: const Color(0xFF1A73E8),
+                              ),
+                              SizedBox(width: ui.gap(4)),
+                              _chipNx(
+                                context,
+                                ui: ui,
+                                icon: Icons.av_timer_rounded,
+                                text: etaText,
+                                tone: const Color(0xFFB8860B),
+                              ),
+                              SizedBox(width: ui.gap(4)),
+                              _chipNx(
+                                context,
+                                ui: ui,
+                                icon: Icons.route_rounded,
+                                text: distText,
+                                tone: const Color(0xFF1E8E3E),
+                              ),
+                              if (d.carPlate.trim().isNotEmpty) ...[
+                                SizedBox(width: ui.gap(4)),
+                                _chipNx(
+                                  context,
+                                  ui: ui,
+                                  icon: Icons.qr_code_rounded,
+                                  text: d.carPlate.trim(),
+                                  tone: const Color(0xFF6A5ACD),
+                                  mono: true,
+                                ),
+                              ],
+                              if (!veryNarrow && d.category.trim().isNotEmpty) ...[
+                                SizedBox(width: ui.gap(4)),
+                                _chipNx(
+                                  context,
+                                  ui: ui,
+                                  icon: Icons.bolt_rounded,
+                                  text: _shortCat(d.category),
+                                  tone: AppColors.primary,
+                                ),
+                              ],
+                            ],
                           ),
                         ),
-                        const SizedBox(width: 8),
-                        _starsBadge(context, d.rating),
                       ],
                     ),
-                    const SizedBox(height: 8),
-                    Wrap(
-                      spacing: 7,
-                      runSpacing: 7,
-                      children: [
-                        _chipNx(
-                          context,
-                          icon: _vehicleIconNx(vt),
-                          text: vt.toLowerCase().contains('bike') ? 'Bike' : 'Car',
-                          tone: AppColors.primary,
-                          strong: true,
-                        ),
-                        _chipNx(
-                          context,
-                          icon: Icons.airline_seat_recline_normal_rounded,
-                          text: '$seats seat',
-                          tone: const Color(0xFF1A73E8),
-                        ),
-                        if (d.carPlate.trim().isNotEmpty)
-                          _chipNx(
+                  ),
+                  SizedBox(width: ui.gap(6)),
+                  Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.end,
+                    children: [
+                      Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          _thumb(
                             context,
-                            icon: Icons.qr_code_rounded,
-                            text: d.carPlate.trim(),
-                            tone: const Color(0xFF6A5ACD),
-                            mono: true,
+                            ui,
+                            img,
+                            vt,
+                            size: thumbSize,
                           ),
-                        _chipNx(
-                          context,
-                          icon: Icons.av_timer_rounded,
-                          text: etaText,
-                          tone: const Color(0xFFB8860B),
-                        ),
-                        _chipNx(
-                          context,
-                          icon: Icons.route_rounded,
-                          text: distText,
-                          tone: const Color(0xFF1E8E3E),
-                        ),
-                        if (d.category.trim().isNotEmpty)
-                          _chipNx(
-                            context,
-                            icon: Icons.bolt_rounded,
-                            text: _shortCat(d.category),
-                            tone: AppColors.primary,
-                          ),
-                      ],
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(width: 10),
-              ConstrainedBox(
-                constraints: const BoxConstraints(minWidth: 82, maxWidth: 92),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.end,
-                  children: [
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.end,
-                      children: [
-                        _thumb(context, img, vt),
-                        if (selected) ...[
-                          const SizedBox(width: 6),
-                          Icon(Icons.verified_rounded, size: 18, color: AppColors.primary.withOpacity(0.95)),
+                          if (selected) ...[
+                            SizedBox(width: ui.gap(3)),
+                            Icon(
+                              Icons.check_circle_rounded,
+                              size: ui.icon(13),
+                              color: AppColors.primary,
+                            ),
+                          ],
                         ],
-                      ],
-                    ),
-                    const SizedBox(height: 8),
-                    Text(
-                      totalText,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        fontWeight: FontWeight.w900,
-                        color: cs.onSurface.withOpacity(0.92),
-                        fontSize: 12.2,
-                        height: 1.05,
-                        letterSpacing: -0.2,
                       ),
-                    ),
-                  ],
-                ),
-              ),
-            ],
+                      SizedBox(height: ui.gap(3)),
+                      Text(
+                        totalText,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontWeight: FontWeight.w900,
+                          color: cs.onSurface.withOpacity(0.92),
+                          fontSize: ui.font(
+                            ultraDense ? 10.0 : (dense ? 10.5 : 11.0),
+                          ),
+                          height: 1.0,
+                          letterSpacing: -0.16,
+                          fontFeatures: const [FontFeature.tabularFigures()],
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              );
+            },
           ),
         ),
       ),
@@ -927,8 +1091,8 @@ class _RideMarketSheetState extends State<RideMarketSheet> {
 
   String _shortCat(String s) {
     final x = s.trim();
-    if (x.length <= 10) return x;
-    return '${x.substring(0, 10)}…';
+    if (x.length <= 8) return x;
+    return '${x.substring(0, 8)}…';
   }
 
   String _fmtDistShort(double km) {
@@ -937,26 +1101,15 @@ class _RideMarketSheetState extends State<RideMarketSheet> {
     return '${km.toStringAsFixed(1)}km';
   }
 
-  Widget _starsBadge(BuildContext context, double rating) {
+  Widget _ratingPill(BuildContext context, UIScale ui, double rating) {
     final cs = Theme.of(context).colorScheme;
     final r = rating.clamp(0, 5).toDouble();
-    int full = r.floor();
-    final hasHalf = (r - full) >= 0.5;
-    if (full > 5) full = 5;
-
-    final icons = <Widget>[];
-    for (int i = 0; i < full; i++) {
-      icons.add(const Icon(Icons.star_rounded, size: 14, color: Color(0xFFFFD54F)));
-    }
-    if (hasHalf && full < 5) {
-      icons.add(const Icon(Icons.star_half_rounded, size: 14, color: Color(0xFFFFD54F)));
-    }
-    while (icons.length < 5) {
-      icons.add(Icon(Icons.star_outline_rounded, size: 14, color: cs.onSurface.withOpacity(0.25)));
-    }
 
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 6),
+      padding: EdgeInsets.symmetric(
+        horizontal: ui.inset(5),
+        vertical: ui.inset(3),
+      ),
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(999),
         color: const Color(0xFFFFD54F).withOpacity(0.14),
@@ -965,14 +1118,20 @@ class _RideMarketSheetState extends State<RideMarketSheet> {
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          ...icons,
-          const SizedBox(width: 6),
+          Icon(
+            Icons.star_rounded,
+            size: ui.icon(9.5),
+            color: const Color(0xFFFFD54F),
+          ),
+          SizedBox(width: ui.gap(2)),
           Text(
             r.toStringAsFixed(1),
             style: TextStyle(
               fontWeight: FontWeight.w900,
               color: cs.onSurface.withOpacity(0.82),
-              fontSize: 11,
+              fontSize: ui.font(8.6),
+              height: 1.0,
+              fontFeatures: const [FontFeature.tabularFigures()],
             ),
           ),
         ],
@@ -982,25 +1141,29 @@ class _RideMarketSheetState extends State<RideMarketSheet> {
 
   Widget _avatarWithRank(
       BuildContext context,
+      UIScale ui,
       String url,
       String initials,
       String rank,
       Color rc, {
+        required double size,
         required bool selected,
       }) {
     final cs = Theme.of(context).colorScheme;
-    final borderColor = selected ? AppColors.primary.withOpacity(0.45) : cs.onSurface.withOpacity(0.10);
+    final borderColor = selected
+        ? AppColors.primary.withOpacity(0.40)
+        : cs.onSurface.withOpacity(0.10);
     final bg = cs.onSurface.withOpacity(0.06);
     final u = _fixUrl(url);
 
     Widget avatarFallback() {
       return Container(
-        width: 44,
-        height: 44,
+        width: size,
+        height: size,
         decoration: BoxDecoration(
           shape: BoxShape.circle,
           color: bg,
-          border: Border.all(color: borderColor, width: 1.2),
+          border: Border.all(color: borderColor, width: 1.0),
         ),
         child: Center(
           child: Text(
@@ -1008,7 +1171,7 @@ class _RideMarketSheetState extends State<RideMarketSheet> {
             style: TextStyle(
               fontWeight: FontWeight.w900,
               color: cs.onSurface.withOpacity(0.78),
-              fontSize: 12,
+              fontSize: ui.font(9.2),
             ),
           ),
         ),
@@ -1019,29 +1182,32 @@ class _RideMarketSheetState extends State<RideMarketSheet> {
         ? avatarFallback()
         : ClipOval(
       child: Container(
-        width: 44,
-        height: 44,
+        width: size,
+        height: size,
         decoration: BoxDecoration(
           color: bg,
-          border: Border.all(color: borderColor, width: 1.2),
+          border: Border.all(color: borderColor, width: 1.0),
         ),
         child: Image.network(
           u,
           fit: BoxFit.cover,
-          cacheWidth: (44 * MediaQuery.of(context).devicePixelRatio).round(),
+          cacheWidth:
+          (size * MediaQuery.of(context).devicePixelRatio).round(),
           filterQuality: FilterQuality.low,
           errorBuilder: (_, __, ___) => avatarFallback(),
           loadingBuilder: (c, w, p) {
             if (p == null) return w;
             return Container(
               color: bg,
-              child: const Center(
+              child: Center(
                 child: SizedBox(
-                  width: 16,
-                  height: 16,
-                  child: CircularProgressIndicator(
-                    strokeWidth: 2.2,
-                    valueColor: AlwaysStoppedAnimation<Color>(AppColors.primary),
+                  width: ui.gap(10),
+                  height: ui.gap(10),
+                  child: const CircularProgressIndicator(
+                    strokeWidth: 1.8,
+                    valueColor: AlwaysStoppedAnimation<Color>(
+                      AppColors.primary,
+                    ),
                   ),
                 ),
               ),
@@ -1052,8 +1218,8 @@ class _RideMarketSheetState extends State<RideMarketSheet> {
     );
 
     return SizedBox(
-      width: 46,
-      height: 46,
+      width: size + 2,
+      height: size + 2,
       child: Stack(
         clipBehavior: Clip.none,
         children: [
@@ -1062,20 +1228,17 @@ class _RideMarketSheetState extends State<RideMarketSheet> {
             right: -1,
             top: -1,
             child: Container(
-              padding: const EdgeInsets.all(5),
+              padding: EdgeInsets.all(ui.inset(2)),
               decoration: BoxDecoration(
                 color: Theme.of(context).cardColor,
                 borderRadius: BorderRadius.circular(999),
                 border: Border.all(color: cs.onSurface.withOpacity(0.10)),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withOpacity(0.10),
-                    blurRadius: 10,
-                    offset: const Offset(0, 6),
-                  ),
-                ],
               ),
-              child: Icon(_rankIcon(rank), size: 14, color: rc),
+              child: Icon(
+                _rankIcon(rank),
+                size: ui.icon(9),
+                color: rc,
+              ),
             ),
           ),
         ],
@@ -1083,20 +1246,30 @@ class _RideMarketSheetState extends State<RideMarketSheet> {
     );
   }
 
-  Widget _thumb(BuildContext context, String url, String vehicleType) {
+  Widget _thumb(
+      BuildContext context,
+      UIScale ui,
+      String url,
+      String vehicleType, {
+        required double size,
+      }) {
     final cs = Theme.of(context).colorScheme;
 
     Widget fallback() {
       return Container(
-        width: 54,
-        height: 54,
+        width: size,
+        height: size,
         decoration: BoxDecoration(
           color: cs.onSurface.withOpacity(0.06),
-          borderRadius: BorderRadius.circular(16),
+          borderRadius: BorderRadius.circular(ui.radius(10)),
           border: Border.all(color: cs.onSurface.withOpacity(0.10)),
         ),
         child: Center(
-          child: Icon(_vehicleIcon(vehicleType), color: cs.onSurface.withOpacity(0.55), size: 22),
+          child: Icon(
+            _vehicleIcon(vehicleType),
+            color: cs.onSurface.withOpacity(0.55),
+            size: ui.icon(14),
+          ),
         ),
       );
     }
@@ -1105,13 +1278,13 @@ class _RideMarketSheetState extends State<RideMarketSheet> {
     if (u.isEmpty) return fallback();
 
     final dpr = MediaQuery.of(context).devicePixelRatio;
-    final cacheW = (54 * dpr).round();
+    final cacheW = (size * dpr).round();
 
     return ClipRRect(
-      borderRadius: BorderRadius.circular(16),
+      borderRadius: BorderRadius.circular(ui.radius(10)),
       child: SizedBox(
-        width: 54,
-        height: 54,
+        width: size,
+        height: size,
         child: Image.network(
           u,
           fit: BoxFit.cover,
@@ -1122,13 +1295,15 @@ class _RideMarketSheetState extends State<RideMarketSheet> {
             if (p == null) return w;
             return Container(
               color: cs.onSurface.withOpacity(0.06),
-              child: const Center(
+              child: Center(
                 child: SizedBox(
-                  width: 16,
-                  height: 16,
-                  child: CircularProgressIndicator(
-                    strokeWidth: 2.2,
-                    valueColor: AlwaysStoppedAnimation<Color>(AppColors.primary),
+                  width: ui.gap(10),
+                  height: ui.gap(10),
+                  child: const CircularProgressIndicator(
+                    strokeWidth: 1.8,
+                    valueColor: AlwaysStoppedAnimation<Color>(
+                      AppColors.primary,
+                    ),
                   ),
                 ),
               ),
@@ -1139,33 +1314,39 @@ class _RideMarketSheetState extends State<RideMarketSheet> {
     );
   }
 
-  Widget _loadingRow(BuildContext context) {
+  Widget _loadingRow(BuildContext context, UIScale ui) {
     final cs = Theme.of(context).colorScheme;
     return Container(
-      margin: const EdgeInsets.only(bottom: 10),
-      padding: const EdgeInsets.fromLTRB(12, 12, 12, 12),
+      margin: EdgeInsets.only(bottom: ui.gap(6)),
+      padding: EdgeInsets.fromLTRB(
+        ui.inset(10),
+        ui.inset(8),
+        ui.inset(10),
+        ui.inset(8),
+      ),
       decoration: BoxDecoration(
         color: cs.surface,
-        borderRadius: BorderRadius.circular(16),
+        borderRadius: BorderRadius.circular(ui.radius(13)),
         border: Border.all(color: cs.onSurface.withOpacity(0.08)),
       ),
       child: Row(
         children: [
-          const SizedBox(
-            width: 18,
-            height: 18,
-            child: CircularProgressIndicator(
-              strokeWidth: 2.4,
+          SizedBox(
+            width: ui.gap(13),
+            height: ui.gap(13),
+            child: const CircularProgressIndicator(
+              strokeWidth: 2.0,
               valueColor: AlwaysStoppedAnimation<Color>(AppColors.primary),
             ),
           ),
-          const SizedBox(width: 10),
+          SizedBox(width: ui.gap(8)),
           Expanded(
             child: Text(
               'Searching…',
               style: TextStyle(
                 fontWeight: FontWeight.w900,
                 color: cs.onSurface.withOpacity(0.78),
+                fontSize: ui.font(10.2),
               ),
             ),
           ),
@@ -1174,38 +1355,50 @@ class _RideMarketSheetState extends State<RideMarketSheet> {
     );
   }
 
-  Widget _emptyState(BuildContext context) {
+  Widget _emptyState(BuildContext context, UIScale ui) {
     final cs = Theme.of(context).colorScheme;
+
     return Container(
-      padding: const EdgeInsets.fromLTRB(14, 16, 14, 16),
+      padding: EdgeInsets.fromLTRB(
+        ui.inset(12),
+        ui.inset(12),
+        ui.inset(12),
+        ui.inset(12),
+      ),
       decoration: BoxDecoration(
         color: cs.surface,
-        borderRadius: BorderRadius.circular(18),
+        borderRadius: BorderRadius.circular(ui.radius(14)),
         border: Border.all(color: cs.onSurface.withOpacity(0.08)),
       ),
       child: Column(
         children: [
-          Icon(Icons.directions_car_filled_rounded, color: cs.onSurface.withOpacity(0.55), size: 36),
-          const SizedBox(height: 10),
+          Icon(
+            Icons.directions_car_filled_rounded,
+            color: cs.onSurface.withOpacity(0.55),
+            size: ui.icon(24),
+          ),
+          SizedBox(height: ui.gap(6)),
           Text(
             'No drivers nearby',
             style: TextStyle(
               fontWeight: FontWeight.w900,
               color: cs.onSurface.withOpacity(0.84),
+              fontSize: ui.font(10.8),
             ),
           ),
-          const SizedBox(height: 6),
+          SizedBox(height: ui.gap(4)),
           Text(
             'Try refresh in a moment.',
             style: TextStyle(
               fontWeight: FontWeight.w700,
               color: cs.onSurface.withOpacity(0.60),
+              fontSize: ui.font(9.0),
             ),
           ),
-          const SizedBox(height: 12),
+          SizedBox(height: ui.gap(8)),
           SizedBox(
             width: double.infinity,
-            height: 48,
+            height: ui.gap(36),
             child: ElevatedButton(
               onPressed: () {
                 setState(() => _resetStable(alsoClearSelection: true));
@@ -1214,10 +1407,19 @@ class _RideMarketSheetState extends State<RideMarketSheet> {
               style: ElevatedButton.styleFrom(
                 backgroundColor: AppColors.primary,
                 foregroundColor: Colors.white,
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(ui.radius(12)),
+                ),
                 elevation: 0,
+                padding: EdgeInsets.zero,
               ),
-              child: const Text('Refresh', style: TextStyle(fontWeight: FontWeight.w900)),
+              child: Text(
+                'Refresh',
+                style: TextStyle(
+                  fontWeight: FontWeight.w900,
+                  fontSize: ui.font(10.2),
+                ),
+              ),
             ),
           ),
         ],
@@ -1225,26 +1427,43 @@ class _RideMarketSheetState extends State<RideMarketSheet> {
     );
   }
 
-  Widget _bottomBar(BuildContext context, MediaQueryData mq, List<RideNearbyDriver> drivers) {
+  Widget _bottomBar(
+      BuildContext context,
+      MediaQueryData mq,
+      List<RideNearbyDriver> drivers,
+      UIScale ui, {
+        required bool dense,
+        required double maxHeight,
+      }) {
     final cs = Theme.of(context).colorScheme;
 
     final selected = (_selectedDriverId != null)
-        ? drivers.where((x) => x.id == _selectedDriverId).toList(growable: false)
+        ? drivers
+        .where((x) => x.id == _selectedDriverId)
+        .toList(growable: false)
         : const <RideNearbyDriver>[];
 
     final driverSelected = selected.isNotEmpty;
+    final bottomInset = _bottomInset(mq, ui, maxHeight);
 
     return SafeArea(
       top: false,
       child: Container(
-        padding: EdgeInsets.fromLTRB(12, 10, 12, 10 + mq.padding.bottom + widget.bottomNavHeight),
+        padding: EdgeInsets.fromLTRB(
+          ui.inset(8),
+          ui.inset(6),
+          ui.inset(8),
+          bottomInset,
+        ),
         decoration: BoxDecoration(
           color: Theme.of(context).cardColor,
-          border: Border(top: BorderSide(color: cs.onSurface.withOpacity(0.08))),
+          border: Border(
+            top: BorderSide(color: cs.onSurface.withOpacity(0.08)),
+          ),
         ),
         child: SizedBox(
           width: double.infinity,
-          height: 54,
+          height: ui.gap(dense ? 36 : 40),
           child: ElevatedButton(
             onPressed: driverSelected
                 ? () async {
@@ -1255,7 +1474,8 @@ class _RideMarketSheetState extends State<RideMarketSheet> {
               final driverMap = _driverToMap(d);
               final offerMap = _offerMapFromDriver(d);
 
-              final payload = await showModalBottomSheet<Map<String, dynamic>>(
+              final payload =
+              await showModalBottomSheet<Map<String, dynamic>>(
                 context: context,
                 isScrollControlled: true,
                 backgroundColor: Colors.transparent,
@@ -1282,7 +1502,9 @@ class _RideMarketSheetState extends State<RideMarketSheet> {
                 provider: 'PickMe',
                 category: d.category.isNotEmpty
                     ? d.category
-                    : (d.vehicleType.toLowerCase().contains('bike') ? 'Bike' : 'Car'),
+                    : (d.vehicleType.toLowerCase().contains('bike')
+                    ? 'Bike'
+                    : 'Car'),
                 etaToPickupMin: d.etaMin,
                 price: _driverTotal(d).round(),
                 surge: false,
@@ -1305,10 +1527,19 @@ class _RideMarketSheetState extends State<RideMarketSheet> {
               foregroundColor: Colors.white,
               disabledBackgroundColor: cs.onSurface.withOpacity(0.10),
               disabledForegroundColor: cs.onSurface.withOpacity(0.40),
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(ui.radius(14)),
+              ),
               elevation: 0,
+              padding: EdgeInsets.zero,
             ),
-            child: const Text('Select a driver', style: TextStyle(fontWeight: FontWeight.w900)),
+            child: Text(
+              'Select driver',
+              style: TextStyle(
+                fontWeight: FontWeight.w900,
+                fontSize: ui.font(dense ? 10.2 : 10.8),
+              ),
+            ),
           ),
         ),
       ),
@@ -1373,46 +1604,73 @@ class _FromToMini extends StatelessWidget {
   final String dest;
   final int count;
   final ColorScheme cs;
+  final UIScale ui;
+  final bool dense;
 
   const _FromToMini({
     required this.origin,
     required this.dest,
     required this.count,
     required this.cs,
+    required this.ui,
+    required this.dense,
   });
-
-  static const double _h = 48;
-  static const double _treeW = 18;
-  static const double _gap = 10;
 
   @override
   Widget build(BuildContext context) {
+    final h = dense ? 38.0 : 42.0;
+    final treeW = dense ? 14.0 : 16.0;
+    final gap = dense ? 6.0 : 8.0;
+    final countW = ui.landscape ? 82.0 : 92.0;
+
     return SizedBox(
-      height: _h,
+      height: h,
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          _RouteTreeAligned(cs: cs, height: _h, width: _treeW),
-          const SizedBox(width: _gap),
+          _RouteTreeAligned(
+            cs: cs,
+            ui: ui,
+            height: h,
+            width: treeW,
+            dense: dense,
+          ),
+          SizedBox(width: gap),
           Expanded(
             child: Stack(
               clipBehavior: Clip.none,
               children: [
                 Padding(
-                  padding: const EdgeInsets.only(right: 110),
+                  padding: EdgeInsets.only(right: countW),
                   child: Column(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      _LabeledLine(label: 'FROM', value: origin, cs: cs, strong: true),
-                      _LabeledLine(label: 'TO', value: dest, cs: cs, strong: false),
+                      _LabeledLine(
+                        label: 'FROM',
+                        value: origin,
+                        cs: cs,
+                        ui: ui,
+                        strong: true,
+                      ),
+                      _LabeledLine(
+                        label: 'TO',
+                        value: dest,
+                        cs: cs,
+                        ui: ui,
+                        strong: false,
+                      ),
                     ],
                   ),
                 ),
                 Positioned(
                   right: 0,
-                  top: -1,
-                  child: _NearbyPillMini(count: count, cs: cs),
+                  top: 0,
+                  child: _NearbyPillMini(
+                    count: count,
+                    cs: cs,
+                    ui: ui,
+                  ),
                 ),
               ],
             ),
@@ -1425,13 +1683,17 @@ class _FromToMini extends StatelessWidget {
 
 class _RouteTreeAligned extends StatelessWidget {
   final ColorScheme cs;
+  final UIScale ui;
   final double height;
   final double width;
+  final bool dense;
 
   const _RouteTreeAligned({
     required this.cs,
+    required this.ui,
     required this.height,
     required this.width,
+    required this.dense,
   });
 
   @override
@@ -1445,16 +1707,26 @@ class _RouteTreeAligned extends StatelessWidget {
       child: Column(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          const _ProNode(color: start, glyph: Icons.my_location_rounded),
+          _ProNode(
+            color: start,
+            glyph: Icons.my_location_rounded,
+            size: dense ? 9.0 : 10.0,
+            iconSize: dense ? 6.0 : 7.0,
+          ),
           Expanded(
             child: Padding(
-              padding: const EdgeInsets.symmetric(vertical: 3),
+              padding: const EdgeInsets.symmetric(vertical: 2),
               child: CustomPaint(
                 painter: _DottedStemPainter(color: cs.onSurface.withOpacity(0.22)),
               ),
             ),
           ),
-          const _ProNode(color: end, glyph: Icons.place_rounded),
+          _ProNode(
+            color: end,
+            glyph: Icons.place_rounded,
+            size: dense ? 9.0 : 10.0,
+            iconSize: dense ? 6.0 : 7.0,
+          ),
         ],
       ),
     );
@@ -1464,30 +1736,31 @@ class _RouteTreeAligned extends StatelessWidget {
 class _ProNode extends StatelessWidget {
   final Color color;
   final IconData glyph;
+  final double size;
+  final double iconSize;
 
-  const _ProNode({required this.color, required this.glyph});
+  const _ProNode({
+    required this.color,
+    required this.glyph,
+    required this.size,
+    required this.iconSize,
+  });
 
   @override
   Widget build(BuildContext context) {
+    final inner = size - 2;
+
     return Container(
-      width: 12,
-      height: 12,
+      width: size,
+      height: size,
       decoration: BoxDecoration(
         shape: BoxShape.circle,
         color: color.withOpacity(0.16),
-        border: Border.all(color: Colors.white.withOpacity(0.10), width: 0.6),
-        boxShadow: [
-          BoxShadow(
-            blurRadius: 10,
-            offset: const Offset(0, 3),
-            color: color.withOpacity(0.20),
-          ),
-        ],
       ),
       child: Center(
         child: Container(
-          width: 10,
-          height: 10,
+          width: inner,
+          height: inner,
           decoration: BoxDecoration(
             shape: BoxShape.circle,
             gradient: RadialGradient(
@@ -1500,7 +1773,11 @@ class _ProNode extends StatelessWidget {
             ),
           ),
           child: Center(
-            child: Icon(glyph, size: 9, color: Colors.white.withOpacity(0.95)),
+            child: Icon(
+              glyph,
+              size: iconSize,
+              color: Colors.white.withOpacity(0.95),
+            ),
           ),
         ),
       ),
@@ -1510,12 +1787,13 @@ class _ProNode extends StatelessWidget {
 
 class _DottedStemPainter extends CustomPainter {
   final Color color;
+
   const _DottedStemPainter({required this.color});
 
   @override
   void paint(Canvas canvas, Size size) {
     final p = Paint()..color = color;
-    const dashH = 3.0;
+    const dashH = 2.0;
     const gap = 2.0;
 
     final x = size.width / 2;
@@ -1524,7 +1802,7 @@ class _DottedStemPainter extends CustomPainter {
     while (y < size.height) {
       final h = (y + dashH <= size.height) ? dashH : (size.height - y);
       final rect = RRect.fromRectAndRadius(
-        Rect.fromCenter(center: Offset(x, y + h / 2), width: 1.8, height: h),
+        Rect.fromCenter(center: Offset(x, y + h / 2), width: 1.6, height: h),
         const Radius.circular(99),
       );
       canvas.drawRRect(rect, p);
@@ -1533,19 +1811,23 @@ class _DottedStemPainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(covariant _DottedStemPainter oldDelegate) => oldDelegate.color != color;
+  bool shouldRepaint(covariant _DottedStemPainter oldDelegate) {
+    return oldDelegate.color != color;
+  }
 }
 
 class _LabeledLine extends StatelessWidget {
   final String label;
   final String value;
   final ColorScheme cs;
+  final UIScale ui;
   final bool strong;
 
   const _LabeledLine({
     required this.label,
     required this.value,
     required this.cs,
+    required this.ui,
     required this.strong,
   });
 
@@ -1555,30 +1837,30 @@ class _LabeledLine extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.center,
       children: [
         SizedBox(
-          width: 34,
+          width: 27,
           child: Text(
             label,
             maxLines: 1,
             overflow: TextOverflow.clip,
             style: TextStyle(
-              fontSize: 9.2,
+              fontSize: ui.font(7.8),
               height: 1.0,
               fontWeight: FontWeight.w900,
-              letterSpacing: 0.4,
+              letterSpacing: 0.30,
               color: cs.onSurface.withOpacity(0.42),
             ),
           ),
         ),
-        const SizedBox(width: 6),
+        const SizedBox(width: 4),
         Expanded(
           child: Text(
             value,
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
             style: TextStyle(
-              fontSize: strong ? 12.2 : 11.2,
+              fontSize: ui.font(strong ? 9.8 : 9.2),
               height: 1.0,
-              letterSpacing: -0.2,
+              letterSpacing: -0.12,
               fontWeight: strong ? FontWeight.w900 : FontWeight.w800,
               color: cs.onSurface.withOpacity(strong ? 0.92 : 0.66),
             ),
@@ -1592,39 +1874,48 @@ class _LabeledLine extends StatelessWidget {
 class _NearbyPillMini extends StatelessWidget {
   final int count;
   final ColorScheme cs;
+  final UIScale ui;
 
-  const _NearbyPillMini({required this.count, required this.cs});
+  const _NearbyPillMini({
+    required this.count,
+    required this.cs,
+    required this.ui,
+  });
 
   @override
   Widget build(BuildContext context) {
     return DecoratedBox(
       decoration: BoxDecoration(
-        color: cs.surfaceContainerHighest.withOpacity(0.60),
+        color: cs.surface.withOpacity(0.88),
         borderRadius: BorderRadius.circular(999),
-        border: Border.all(color: AppColors.primary.withOpacity(0.25), width: 1),
-        boxShadow: [
-          BoxShadow(
-            blurRadius: 14,
-            offset: const Offset(0, 6),
-            color: Colors.black.withOpacity(0.18),
-          ),
-        ],
+        border: Border.all(
+          color: AppColors.primary.withOpacity(0.22),
+          width: 1,
+        ),
       ),
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+        padding: EdgeInsets.symmetric(
+          horizontal: ui.inset(6),
+          vertical: ui.inset(3),
+        ),
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Icon(Icons.near_me_rounded, size: 12, color: AppColors.primary),
-            const SizedBox(width: 5),
+            Icon(
+              Icons.near_me_rounded,
+              size: ui.icon(9),
+              color: AppColors.primary,
+            ),
+            SizedBox(width: ui.gap(3)),
             Text(
-              '$count nearby',
+              '$count',
               style: TextStyle(
-                fontSize: 10.4,
+                fontSize: ui.font(8.4),
                 height: 1.0,
                 fontWeight: FontWeight.w900,
-                letterSpacing: -0.15,
+                letterSpacing: -0.08,
                 color: cs.onSurface.withOpacity(0.88),
+                fontFeatures: const [FontFeature.tabularFigures()],
               ),
             ),
           ],
@@ -1636,14 +1927,21 @@ class _NearbyPillMini extends StatelessWidget {
 
 IconData _vehicleIconNx(String vt) {
   final v = vt.toLowerCase();
-  if (v.contains('bike') || v.contains('moto')) return Icons.two_wheeler_rounded;
-  if (v.contains('bus') || v.contains('van')) return Icons.airport_shuttle_rounded;
-  if (v.contains('lux') || v.contains('vip')) return Icons.workspace_premium_rounded;
+  if (v.contains('bike') || v.contains('moto')) {
+    return Icons.two_wheeler_rounded;
+  }
+  if (v.contains('bus') || v.contains('van')) {
+    return Icons.airport_shuttle_rounded;
+  }
+  if (v.contains('lux') || v.contains('vip')) {
+    return Icons.workspace_premium_rounded;
+  }
   return Icons.directions_car_filled_rounded;
 }
 
 Widget _chipNx(
     BuildContext context, {
+      required UIScale ui,
       required IconData icon,
       required String text,
       required Color tone,
@@ -1656,42 +1954,22 @@ Widget _chipNx(
     decoration: BoxDecoration(
       color: tone.withOpacity(0.10),
       borderRadius: BorderRadius.circular(999),
-      border: Border.all(color: tone.withOpacity(0.22), width: 1),
-      boxShadow: [
-        BoxShadow(
-          blurRadius: 12,
-          offset: const Offset(0, 6),
-          color: tone.withOpacity(0.07),
-        ),
-      ],
+      border: Border.all(color: tone.withOpacity(0.20), width: 1),
     ),
     child: Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+      padding: EdgeInsets.symmetric(
+        horizontal: ui.inset(5),
+        vertical: ui.inset(2.5),
+      ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Stack(
-            alignment: Alignment.center,
-            children: [
-              Container(
-                width: 16,
-                height: 16,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  gradient: RadialGradient(
-                    center: const Alignment(-0.2, -0.2),
-                    radius: 0.9,
-                    colors: [
-                      tone.withOpacity(0.40),
-                      tone.withOpacity(0.08),
-                    ],
-                  ),
-                ),
-              ),
-              Icon(icon, size: 12.5, color: tone.withOpacity(0.95)),
-            ],
+          Icon(
+            icon,
+            size: ui.icon(8.8),
+            color: tone.withOpacity(0.95),
           ),
-          const SizedBox(width: 6),
+          SizedBox(width: ui.gap(3)),
           Text(
             text,
             maxLines: 1,
@@ -1699,9 +1977,9 @@ Widget _chipNx(
             style: TextStyle(
               fontWeight: strong ? FontWeight.w900 : FontWeight.w800,
               color: cs.onSurface.withOpacity(0.86),
-              fontSize: 10.4,
+              fontSize: ui.font(7.8),
               height: 1.0,
-              letterSpacing: -0.1,
+              letterSpacing: -0.05,
               fontFeatures: mono ? const [FontFeature.tabularFigures()] : null,
             ),
           ),

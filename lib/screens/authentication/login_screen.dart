@@ -1,39 +1,42 @@
-// lib/screens/login.dart
 import 'dart:convert';
-import 'dart:ui';
 import 'dart:math' as math;
+import 'dart:ui';
+
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_svg/flutter_svg.dart';
-import 'package:firebase_auth/firebase_auth.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
-import '../../routes/routes.dart';
-import '../../themes/app_theme.dart';
 import '../../api/api_client.dart';
 import '../../api/url.dart';
+import '../../routes/routes.dart';
+import '../../themes/app_theme.dart';
 import '../../utility/notification.dart';
 import '../../widgets/inner_background.dart';
+import '../../ui/ui_scale.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
+
   @override
   State<LoginScreen> createState() => _LoginScreenState();
 }
 
-class _LoginScreenState extends State<LoginScreen> with TickerProviderStateMixin {
+class _LoginScreenState extends State<LoginScreen>
+    with TickerProviderStateMixin {
   final _email = TextEditingController();
   final _pass = TextEditingController();
   final _formKey = GlobalKey<FormState>();
   final _auth = FirebaseAuth.instance;
 
-  late ApiClient _api;
+  late final ApiClient _api;
+
   bool _busy = false;
   bool _showPass = false;
 
-  // Animations
   late final AnimationController _logoController;
   late final AnimationController _fadeController;
   late final AnimationController _slideController;
@@ -47,7 +50,6 @@ class _LoginScreenState extends State<LoginScreen> with TickerProviderStateMixin
     super.initState();
     _api = ApiClient(http.Client(), context);
 
-    // Setup animations
     _logoController = AnimationController(
       duration: const Duration(seconds: 20),
       vsync: this,
@@ -63,29 +65,20 @@ class _LoginScreenState extends State<LoginScreen> with TickerProviderStateMixin
       vsync: this,
     )..forward();
 
-    _logoRotation = Tween<double>(
-      begin: 0,
-      end: 2 * math.pi,
-    ).animate(CurvedAnimation(
-      parent: _logoController,
-      curve: Curves.linear,
-    ));
+    _logoRotation = Tween<double>(begin: 0, end: 2 * math.pi).animate(
+      CurvedAnimation(parent: _logoController, curve: Curves.linear),
+    );
 
-    _fadeIn = Tween<double>(
-      begin: 0.0,
-      end: 1.0,
-    ).animate(CurvedAnimation(
-      parent: _fadeController,
-      curve: Curves.easeOut,
-    ));
+    _fadeIn = Tween<double>(begin: 0, end: 1).animate(
+      CurvedAnimation(parent: _fadeController, curve: Curves.easeOut),
+    );
 
     _slideUp = Tween<Offset>(
-      begin: const Offset(0, 0.1),
+      begin: const Offset(0, 0.08),
       end: Offset.zero,
-    ).animate(CurvedAnimation(
-      parent: _slideController,
-      curve: Curves.easeOutBack,
-    ));
+    ).animate(
+      CurvedAnimation(parent: _slideController, curve: Curves.easeOutBack),
+    );
   }
 
   @override
@@ -98,16 +91,16 @@ class _LoginScreenState extends State<LoginScreen> with TickerProviderStateMixin
     super.dispose();
   }
 
-  // ── Google Sign-In (Firebase) ──────────────────────────────────────────
   Future<void> _google() async {
     setState(() => _busy = true);
     try {
       final googleSignIn = GoogleSignIn();
       final account = await googleSignIn.signIn();
       if (account == null) {
-        setState(() => _busy = false);
+        if (mounted) setState(() => _busy = false);
         return;
       }
+
       final auth = await account.authentication;
       final cred = GoogleAuthProvider.credential(
         accessToken: auth.accessToken,
@@ -130,9 +123,9 @@ class _LoginScreenState extends State<LoginScreen> with TickerProviderStateMixin
         message: 'Signed in as ${user?.displayName ?? 'User'}',
         isSuccess: true,
       );
-
       Navigator.of(context).pushReplacementNamed(AppRoutes.set_user_pin);
-    } catch (e) {
+    } catch (_) {
+      if (!mounted) return;
       showToastNotification(
         context: context,
         title: 'Sign-In Failed',
@@ -144,17 +137,18 @@ class _LoginScreenState extends State<LoginScreen> with TickerProviderStateMixin
     }
   }
 
-  // ── Email/Password login ──────────────────────────────────────────────
   Future<void> _login() async {
     if (!(_formKey.currentState?.validate() ?? false)) return;
 
     setState(() => _busy = true);
     try {
-      final data = {'email': _email.text.trim(), 'password': _pass.text.trim()};
       final res = await _api.request(
         ApiConstants.logInEndpoint,
         method: 'POST',
-        data: data,
+        data: {
+          'email': _email.text.trim(),
+          'password': _pass.text.trim(),
+        },
       );
 
       final body = jsonDecode(res.body);
@@ -162,29 +156,41 @@ class _LoginScreenState extends State<LoginScreen> with TickerProviderStateMixin
         showToastNotification(
           context: context,
           title: 'Success',
-          message: body['login_msg']['title_msg_body'] ?? 'Welcome back!',
+          message: body['login_msg']?['title_msg_body'] ?? 'Welcome back!',
           isSuccess: true,
         );
 
-        final p = await SharedPreferences.getInstance();
-        await p.setString('user_id', body['login_msg']['uid'] ?? '');
-        await p.setString('user_name', body['login_msg']['fname'] ?? '');
-        await p.setString('user_account_name', body['login_msg']['accountname'] ?? '');
-        await p.setString('user_account_number', body['login_msg']['accountnumber'] ?? '');
-        await p.setString('user_account_bank', body['login_msg']['bankname'] ?? '');
-        await p.setString('user_pin', '');
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setString('user_id', body['login_msg']?['uid'] ?? '');
+        await prefs.setString('user_name', body['login_msg']?['fname'] ?? '');
+        await prefs.setString(
+          'user_account_name',
+          body['login_msg']?['accountname'] ?? '',
+        );
+        await prefs.setString(
+          'user_account_number',
+          body['login_msg']?['accountnumber'] ?? '',
+        );
+        await prefs.setString(
+          'user_account_bank',
+          body['login_msg']?['bankname'] ?? '',
+        );
+        await prefs.setString('user_pin', '');
 
         if (!mounted) return;
         Navigator.of(context).pushReplacementNamed(AppRoutes.set_user_pin);
       } else {
+        if (!mounted) return;
         showBannerNotification(
           context: context,
           title: body['login_msg']?['title_msg'] ?? 'Login Failed',
-          message: body['login_msg']?['title_msg_body'] ?? 'Please check your credentials',
+          message: body['login_msg']?['title_msg_body'] ??
+              'Please check your credentials',
           isSuccess: false,
         );
       }
-    } catch (e) {
+    } catch (_) {
+      if (!mounted) return;
       showToastNotification(
         context: context,
         title: 'Connection Error',
@@ -198,29 +204,23 @@ class _LoginScreenState extends State<LoginScreen> with TickerProviderStateMixin
 
   @override
   Widget build(BuildContext context) {
-    final size = MediaQuery.of(context).size;
-    final isLandscape = size.width > size.height;
-    final isTablet = size.shortestSide > 600;
-    final isSmallPhone = size.width < 360;
+    final ui = UIScale.of(context);
 
     return Scaffold(
       backgroundColor: Theme.of(context).colorScheme.background,
       body: Stack(
         children: [
-          // Premium holographic background
           const BackgroundWidget(
             style: HoloStyle.vapor,
             animate: true,
             intensity: 0.8,
           ),
-
-          // Main content
           SafeArea(
             child: FadeTransition(
               opacity: _fadeIn,
-              child: isLandscape
-                  ? _buildLandscapeLayout(size, isTablet)
-                  : _buildPortraitLayout(size, isTablet, isSmallPhone),
+              child: ui.useSplitAuth
+                  ? _buildSplitLayout(ui)
+                  : _buildCompactLayout(ui),
             ),
           ),
         ],
@@ -228,101 +228,104 @@ class _LoginScreenState extends State<LoginScreen> with TickerProviderStateMixin
     );
   }
 
-  Widget _buildPortraitLayout(Size size, bool isTablet, bool isSmallPhone) {
+  Widget _buildCompactLayout(UIScale ui) {
     return Center(
       child: SingleChildScrollView(
-        padding: EdgeInsets.symmetric(
-          horizontal: isTablet ? 64 : (isSmallPhone ? 20 : 32),
-          vertical: 24,
+        keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+        padding: ui.screenPadding.copyWith(
+          bottom: ui.screenPadding.bottom + ui.viewInsets.bottom,
         ),
         child: SlideTransition(
           position: _slideUp,
           child: ConstrainedBox(
+            constraints: BoxConstraints(maxWidth: ui.authCardMaxWidth),
+            child: _buildLoginCard(ui, isLandscape: false),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSplitLayout(UIScale ui) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        return SingleChildScrollView(
+          keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+          padding: ui.screenPadding.copyWith(
+            bottom: ui.screenPadding.bottom + ui.viewInsets.bottom,
+          ),
+          child: ConstrainedBox(
             constraints: BoxConstraints(
-              maxWidth: isTablet ? 520 : 420,
+              minHeight: constraints.maxHeight - ui.safePadding.vertical,
             ),
-            child: _buildLoginCard(isTablet, isSmallPhone, false),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                Expanded(
+                  flex: 11,
+                  child: Align(
+                    alignment: Alignment.center,
+                    child: ConstrainedBox(
+                      constraints: BoxConstraints(
+                        maxWidth: ui.tablet ? 500 : 380,
+                      ),
+                      child: Padding(
+                        padding: EdgeInsets.symmetric(vertical: ui.gap(10)),
+                        child: _buildBrandingSection(ui),
+                      ),
+                    ),
+                  ),
+                ),
+                SizedBox(width: ui.gap(24)),
+                Expanded(
+                  flex: 10,
+                  child: Align(
+                    alignment: Alignment.center,
+                    child: ConstrainedBox(
+                      constraints: BoxConstraints(maxWidth: ui.authCardMaxWidth),
+                      child: _buildLoginCard(ui, isLandscape: true),
+                    ),
+                  ),
+                ),
+              ],
+            ),
           ),
-        ),
-      ),
+        );
+      },
     );
   }
 
-  Widget _buildLandscapeLayout(Size size, bool isTablet) {
-    return Center(
-      child: SingleChildScrollView(
-        scrollDirection: Axis.horizontal,
-        child: Container(
-          width: math.max(size.width, 900),
-          padding: EdgeInsets.symmetric(
-            horizontal: isTablet ? 64 : 32,
-            vertical: 24,
-          ),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              // LEFT: Branding (now scrollable to avoid vertical overflow)
-              Flexible(
-                flex: 5,
-                child: Align(
-                  alignment: Alignment.center,
-                  child: SingleChildScrollView(
-                    padding: const EdgeInsets.symmetric(vertical: 12),
-                    child: _buildBrandingSection(isTablet),
-                  ),
-                ),
-              ),
-
-              const SizedBox(width: 48),
-
-              // RIGHT: Login (already scrollable)
-              Flexible(
-                flex: 5,
-                child: ConstrainedBox(
-                  constraints: const BoxConstraints(maxWidth: 520),
-                  child: SingleChildScrollView(
-                    child: _buildLoginCard(isTablet, false, true),
-                  ),
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildBrandingSection(bool isTablet) {
-    const double featureIconSize = 20;
+  Widget _buildBrandingSection(UIScale ui) {
+    final featureIconSize = ui.icon(18);
 
     return Column(
-      mainAxisSize: MainAxisSize.min, // <- keeps height to content
+      mainAxisSize: MainAxisSize.min,
       children: [
-        _buildAnimatedLogo(isTablet ? 140 : 120),
-        const SizedBox(height: 20),
+        _buildAnimatedLogo(ui.heroLogoSize),
+        SizedBox(height: ui.gap(18)),
         Text(
           'Pick Me',
           textAlign: TextAlign.center,
           style: TextStyle(
-            fontSize: isTablet ? 42 : 36,
+            fontSize: ui.font(ui.tablet ? 42 : 34),
             fontWeight: FontWeight.w900,
             color: AppColors.textPrimary,
             letterSpacing: -1,
           ),
         ),
-        const SizedBox(height: 10),
+        SizedBox(height: ui.gap(8)),
         Text(
           'Your Smart Ride & Delivery Solution',
           textAlign: TextAlign.center,
           style: TextStyle(
-            fontSize: isTablet ? 18 : 16,
+            fontSize: ui.font(15),
             color: AppColors.textSecondary,
-            letterSpacing: 0.5,
+            letterSpacing: 0.3,
           ),
         ),
-        const SizedBox(height: 22),
+        SizedBox(height: ui.gap(20)),
         Container(
-          padding: const EdgeInsets.all(18),
+          padding: EdgeInsets.all(ui.inset(ui.compact ? 14 : 18)),
           decoration: BoxDecoration(
             gradient: LinearGradient(
               colors: [
@@ -330,7 +333,7 @@ class _LoginScreenState extends State<LoginScreen> with TickerProviderStateMixin
                 AppColors.secondary.withOpacity(0.08),
               ],
             ),
-            borderRadius: BorderRadius.circular(16),
+            borderRadius: BorderRadius.circular(ui.radius(16)),
             border: Border.all(
               color: AppColors.mintBgLight.withOpacity(0.35),
               width: 1,
@@ -339,7 +342,6 @@ class _LoginScreenState extends State<LoginScreen> with TickerProviderStateMixin
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              // SVG Street Ride
               _buildFeatureItemWidget(
                 SizedBox(
                   width: featureIconSize,
@@ -347,35 +349,49 @@ class _LoginScreenState extends State<LoginScreen> with TickerProviderStateMixin
                   child: SvgPicture.asset(
                     'assets/icons/street_ride.svg',
                     fit: BoxFit.contain,
-                    colorFilter: const ColorFilter.mode(AppColors.primary, BlendMode.srcIn),
+                    colorFilter: const ColorFilter.mode(
+                      AppColors.primary,
+                      BlendMode.srcIn,
+                    ),
                   ),
                 ),
                 'Street Rides',
+                ui,
               ),
-              const SizedBox(height: 10),
+              SizedBox(height: ui.gap(10)),
               _buildFeatureItemWidget(
-                  SizedBox(
-                    width: featureIconSize,
-                    height: featureIconSize,
-                    child: SvgPicture.asset(
-                      'assets/icons/campus_ride_monochrome.svg',
-                      fit: BoxFit.contain,
-                      colorFilter: const ColorFilter.mode(AppColors.primary, BlendMode.srcIn),
+                SizedBox(
+                  width: featureIconSize,
+                  height: featureIconSize,
+                  child: SvgPicture.asset(
+                    'assets/icons/campus_ride_monochrome.svg',
+                    fit: BoxFit.contain,
+                    colorFilter: const ColorFilter.mode(
+                      AppColors.primary,
+                      BlendMode.srcIn,
                     ),
                   ),
-                  'Campus Rides'),
-              const SizedBox(height: 10),
+                ),
+                'Campus Rides',
+                ui,
+              ),
+              SizedBox(height: ui.gap(10)),
               _buildFeatureItemWidget(
-                  SizedBox(
-                    width: featureIconSize,
-                    height: featureIconSize,
-                    child: SvgPicture.asset(
-                      'assets/icons/dispatch.svg',
-                      fit: BoxFit.contain,
-                      colorFilter: const ColorFilter.mode(AppColors.primary, BlendMode.srcIn),
+                SizedBox(
+                  width: featureIconSize,
+                  height: featureIconSize,
+                  child: SvgPicture.asset(
+                    'assets/icons/dispatch.svg',
+                    fit: BoxFit.contain,
+                    colorFilter: const ColorFilter.mode(
+                      AppColors.primary,
+                      BlendMode.srcIn,
                     ),
                   ),
-                  'Package Dispatch'),
+                ),
+                'Package Dispatch',
+                ui,
+              ),
             ],
           ),
         ),
@@ -383,54 +399,31 @@ class _LoginScreenState extends State<LoginScreen> with TickerProviderStateMixin
     );
   }
 
-  Widget _buildFeatureItem(IconData icon, String label) {
+  Widget _buildFeatureItemWidget(
+      Widget icon,
+      String label,
+      UIScale ui,
+      ) {
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
         Container(
-          padding: const EdgeInsets.all(8),
+          padding: EdgeInsets.all(ui.inset(8)),
           decoration: BoxDecoration(
             color: AppColors.surface.withOpacity(0.85),
             shape: BoxShape.circle,
           ),
-          child: Icon(icon, size: 20, color: AppColors.primary),
+          child: SizedBox(width: ui.icon(20), height: ui.icon(20), child: icon),
         ),
-        const SizedBox(width: 10),
+        SizedBox(width: ui.gap(10)),
         Flexible(
           child: Text(
             label,
             overflow: TextOverflow.ellipsis,
-            style: const TextStyle(
+            style: TextStyle(
               color: AppColors.textPrimary,
               fontWeight: FontWeight.w600,
-            ),
-          ),
-        ),
-      ],
-    );
-  }
-
-  // Helper that allows any widget (e.g., SVG) as the icon
-  Widget _buildFeatureItemWidget(Widget icon, String label) {
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Container(
-          padding: const EdgeInsets.all(8),
-          decoration: BoxDecoration(
-            color: AppColors.surface.withOpacity(0.85),
-            shape: BoxShape.circle,
-          ),
-          child: SizedBox(width: 20, height: 20, child: icon),
-        ),
-        const SizedBox(width: 10),
-        Flexible(
-          child: Text(
-            label,
-            overflow: TextOverflow.ellipsis,
-            style: const TextStyle(
-              color: AppColors.textPrimary,
-              fontWeight: FontWeight.w600,
+              fontSize: ui.font(14),
             ),
           ),
         ),
@@ -458,21 +451,21 @@ class _LoginScreenState extends State<LoginScreen> with TickerProviderStateMixin
             ),
             boxShadow: [
               BoxShadow(
-                color: AppColors.primary.withOpacity(0.3),
-                blurRadius: 30,
-                spreadRadius: 5,
+                color: AppColors.primary.withOpacity(0.28),
+                blurRadius: 24,
+                spreadRadius: 2,
               ),
               BoxShadow(
-                color: AppColors.secondary.withOpacity(0.2),
-                blurRadius: 20,
-                spreadRadius: 2,
+                color: AppColors.secondary.withOpacity(0.18),
+                blurRadius: 18,
+                spreadRadius: 1,
               ),
             ],
           ),
           child: Padding(
-            padding: EdgeInsets.all(size * 0.25),
+            padding: EdgeInsets.all(size * 0.24),
             child: Image.asset(
-              'image/pickme.png', // keep your original path
+              'image/pickme.png',
               fit: BoxFit.contain,
             ),
           ),
@@ -481,80 +474,87 @@ class _LoginScreenState extends State<LoginScreen> with TickerProviderStateMixin
     );
   }
 
-  Widget _buildLoginCard(bool isTablet, bool isSmallPhone, bool isLandscape) {
+  Widget _buildLoginCard(UIScale ui, {required bool isLandscape}) {
     return ClipRRect(
-      borderRadius: BorderRadius.circular(24),
+      borderRadius: BorderRadius.circular(ui.cardRadius),
       child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
+        filter: ImageFilter.blur(
+          sigmaX: ui.blur(20),
+          sigmaY: ui.blur(20),
+        ),
         child: Container(
-          padding: EdgeInsets.all(isTablet ? 40 : (isSmallPhone ? 24 : 32)),
+          padding: EdgeInsets.all(ui.compact ? ui.inset(18) : ui.inset(28)),
           decoration: BoxDecoration(
             gradient: LinearGradient(
               begin: Alignment.topLeft,
               end: Alignment.bottomRight,
               colors: [
-                AppColors.surface.withOpacity(0.9),
-                AppColors.mintBgLight.withOpacity(0.3),
+                AppColors.surface.withOpacity(0.92),
+                AppColors.mintBgLight.withOpacity(0.28),
               ],
             ),
-            borderRadius: BorderRadius.circular(24),
+            borderRadius: BorderRadius.circular(ui.cardRadius),
             border: Border.all(
-              color: AppColors.mintBgLight.withOpacity(0.5),
+              color: AppColors.mintBgLight.withOpacity(0.45),
               width: 1,
             ),
             boxShadow: [
               BoxShadow(
-                color: AppColors.deep.withOpacity(0.1),
-                blurRadius: 20,
-                offset: const Offset(0, 10),
+                color: AppColors.deep.withOpacity(ui.reduceFx ? 0.05 : 0.10),
+                blurRadius: ui.reduceFx ? 12 : 20,
+                offset: const Offset(0, 8),
               ),
             ],
           ),
-          // Prevent inner overflow on short screens
           child: LayoutBuilder(
-            builder: (ctx, constraints) {
+            builder: (context, constraints) {
               return SingleChildScrollView(
                 physics: const ClampingScrollPhysics(),
-                child: Form(
-                  key: _formKey,
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      if (!isLandscape) ...[
-                        _buildCompactLogo(),
-                        const SizedBox(height: 24),
+                child: ConstrainedBox(
+                  constraints: BoxConstraints(minHeight: 0, maxWidth: constraints.maxWidth),
+                  child: Form(
+                    key: _formKey,
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        if (!isLandscape) ...[
+                          _buildCompactLogo(ui),
+                          SizedBox(height: ui.gap(16)),
+                        ],
+                        Text(
+                          isLandscape ? 'Sign In' : 'Welcome Back',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                            fontSize: ui.font(ui.compact ? 22 : 28),
+                            fontWeight: FontWeight.w800,
+                            color: AppColors.textPrimary,
+                          ),
+                        ),
+                        SizedBox(height: ui.gap(6)),
+                        Text(
+                          'Sign in to continue',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                            fontSize: ui.font(13),
+                            color: AppColors.textSecondary,
+                          ),
+                        ),
+                        SizedBox(height: ui.gap(18)),
+                        _buildEmailField(ui),
+                        SizedBox(height: ui.gap(12)),
+                        _buildPasswordField(ui),
+                        SizedBox(height: ui.gap(10)),
+                        _buildOptionsRow(ui),
+                        SizedBox(height: ui.gap(16)),
+                        _buildLoginButton(ui),
+                        SizedBox(height: ui.gap(14)),
+                        _buildDivider(ui),
+                        SizedBox(height: ui.gap(14)),
+                        _buildGoogleButton(ui),
+                        SizedBox(height: ui.gap(12)),
+                        _buildRegisterLink(ui),
                       ],
-                      Text(
-                        isLandscape ? 'Sign In' : 'Welcome Back',
-                        style: TextStyle(
-                          fontSize: isTablet ? 32 : (isSmallPhone ? 24 : 28),
-                          fontWeight: FontWeight.w800,
-                          color: AppColors.textPrimary,
-                        ),
-                      ),
-                      const SizedBox(height: 8),
-                      Text(
-                        'Sign in to continue',
-                        style: TextStyle(
-                          fontSize: isTablet ? 16 : 14,
-                          color: AppColors.textSecondary,
-                        ),
-                      ),
-                      const SizedBox(height: 28),
-                      _buildEmailField(isTablet),
-                      SizedBox(height: isSmallPhone ? 14 : 18),
-                      _buildPasswordField(isTablet),
-                      const SizedBox(height: 12),
-                      _buildOptionsRow(),
-                      const SizedBox(height: 20),
-                      _buildLoginButton(isTablet),
-                      const SizedBox(height: 18),
-                      _buildDivider(),
-                      const SizedBox(height: 18),
-                      _buildGoogleButton(isTablet),
-                      const SizedBox(height: 18),
-                      _buildRegisterLink(),
-                    ],
+                    ),
                   ),
                 ),
               );
@@ -565,10 +565,11 @@ class _LoginScreenState extends State<LoginScreen> with TickerProviderStateMixin
     );
   }
 
-  Widget _buildCompactLogo() {
+  Widget _buildCompactLogo(UIScale ui) {
+    final size = ui.compactLogoSize;
     return Container(
-      width: 84,
-      height: 84,
+      width: size,
+      height: size,
       decoration: BoxDecoration(
         shape: BoxShape.circle,
         gradient: const LinearGradient(
@@ -576,14 +577,14 @@ class _LoginScreenState extends State<LoginScreen> with TickerProviderStateMixin
         ),
         boxShadow: [
           BoxShadow(
-            color: AppColors.primary.withOpacity(0.3),
-            blurRadius: 20,
-            spreadRadius: 2,
+            color: AppColors.primary.withOpacity(0.22),
+            blurRadius: ui.reduceFx ? 10 : 20,
+            spreadRadius: 1,
           ),
         ],
       ),
       child: Padding(
-        padding: const EdgeInsets.all(16),
+        padding: EdgeInsets.all(ui.inset(14)),
         child: Image.asset(
           'image/pickme.png',
           fit: BoxFit.contain,
@@ -593,14 +594,14 @@ class _LoginScreenState extends State<LoginScreen> with TickerProviderStateMixin
     );
   }
 
-  Widget _buildEmailField(bool isTablet) {
+  Widget _buildEmailField(UIScale ui) {
     return Container(
       decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(16),
+        borderRadius: BorderRadius.circular(ui.radius(16)),
         boxShadow: [
           BoxShadow(
             color: AppColors.deep.withOpacity(0.05),
-            blurRadius: 10,
+            blurRadius: ui.reduceFx ? 6 : 10,
             offset: const Offset(0, 4),
           ),
         ],
@@ -610,45 +611,49 @@ class _LoginScreenState extends State<LoginScreen> with TickerProviderStateMixin
         textInputAction: TextInputAction.next,
         keyboardType: TextInputType.emailAddress,
         autofillHints: const [AutofillHints.username, AutofillHints.email],
-        style: TextStyle(fontSize: isTablet ? 16 : 14),
+        style: TextStyle(fontSize: ui.font(14)),
         decoration: InputDecoration(
+          isDense: ui.compact,
           labelText: 'Email Address',
           hintText: 'your@email.com',
-          prefixIcon: Container(
-            margin: const EdgeInsets.all(12),
-            padding: const EdgeInsets.all(8),
-            decoration: BoxDecoration(
-              color: AppColors.primary.withOpacity(0.1),
-              shape: BoxShape.circle,
+          contentPadding: EdgeInsets.symmetric(
+            horizontal: ui.inset(14),
+            vertical: ui.inputVerticalPadding,
+          ),
+          prefixIcon: Padding(
+            padding: EdgeInsets.all(ui.inset(8)),
+            child: Container(
+              decoration: BoxDecoration(
+                color: AppColors.primary.withOpacity(0.10),
+                shape: BoxShape.circle,
+              ),
+              child: Icon(
+                Icons.email_rounded,
+                size: ui.icon(18),
+                color: AppColors.primary,
+              ),
             ),
-            child: const Icon(Icons.email_rounded, size: 20, color: AppColors.primary),
           ),
           filled: true,
           fillColor: AppColors.surface,
           border: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(16),
+            borderRadius: BorderRadius.circular(ui.radius(16)),
             borderSide: BorderSide.none,
           ),
           enabledBorder: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(16),
+            borderRadius: BorderRadius.circular(ui.radius(16)),
             borderSide: BorderSide(
-              color: AppColors.mintBgLight.withOpacity(0.3),
+              color: AppColors.mintBgLight.withOpacity(0.30),
               width: 1,
             ),
           ),
           focusedBorder: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(16),
-            borderSide: const BorderSide(
-              color: AppColors.primary,
-              width: 2,
-            ),
+            borderRadius: BorderRadius.circular(ui.radius(16)),
+            borderSide: const BorderSide(color: AppColors.primary, width: 2),
           ),
           errorBorder: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(16),
-            borderSide: const BorderSide(
-              color: AppColors.error,
-              width: 1,
-            ),
+            borderRadius: BorderRadius.circular(ui.radius(16)),
+            borderSide: const BorderSide(color: AppColors.error, width: 1),
           ),
         ),
         validator: (v) {
@@ -661,14 +666,14 @@ class _LoginScreenState extends State<LoginScreen> with TickerProviderStateMixin
     );
   }
 
-  Widget _buildPasswordField(bool isTablet) {
+  Widget _buildPasswordField(UIScale ui) {
     return Container(
       decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(16),
+        borderRadius: BorderRadius.circular(ui.radius(16)),
         boxShadow: [
           BoxShadow(
             color: AppColors.deep.withOpacity(0.05),
-            blurRadius: 10,
+            blurRadius: ui.reduceFx ? 6 : 10,
             offset: const Offset(0, 4),
           ),
         ],
@@ -678,52 +683,58 @@ class _LoginScreenState extends State<LoginScreen> with TickerProviderStateMixin
         textInputAction: TextInputAction.done,
         obscureText: !_showPass,
         autofillHints: const [AutofillHints.password],
-        style: TextStyle(fontSize: isTablet ? 16 : 14),
+        style: TextStyle(fontSize: ui.font(14)),
         decoration: InputDecoration(
+          isDense: ui.compact,
           labelText: 'Password',
           hintText: '••••••••',
-          prefixIcon: Container(
-            margin: const EdgeInsets.all(12),
-            padding: const EdgeInsets.all(8),
-            decoration: BoxDecoration(
-              color: AppColors.primary.withOpacity(0.1),
-              shape: BoxShape.circle,
+          contentPadding: EdgeInsets.symmetric(
+            horizontal: ui.inset(14),
+            vertical: ui.inputVerticalPadding,
+          ),
+          prefixIcon: Padding(
+            padding: EdgeInsets.all(ui.inset(8)),
+            child: Container(
+              decoration: BoxDecoration(
+                color: AppColors.primary.withOpacity(0.10),
+                shape: BoxShape.circle,
+              ),
+              child: Icon(
+                Icons.lock_rounded,
+                size: ui.icon(18),
+                color: AppColors.primary,
+              ),
             ),
-            child: const Icon(Icons.lock_rounded, size: 20, color: AppColors.primary),
           ),
           suffixIcon: IconButton(
             onPressed: () => setState(() => _showPass = !_showPass),
             icon: Icon(
-              _showPass ? Icons.visibility_rounded : Icons.visibility_off_rounded,
+              _showPass
+                  ? Icons.visibility_rounded
+                  : Icons.visibility_off_rounded,
               color: AppColors.textSecondary,
             ),
           ),
           filled: true,
           fillColor: AppColors.surface,
           border: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(16),
+            borderRadius: BorderRadius.circular(ui.radius(16)),
             borderSide: BorderSide.none,
           ),
           enabledBorder: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(16),
+            borderRadius: BorderRadius.circular(ui.radius(16)),
             borderSide: BorderSide(
-              color: AppColors.mintBgLight.withOpacity(0.3),
+              color: AppColors.mintBgLight.withOpacity(0.30),
               width: 1,
             ),
           ),
           focusedBorder: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(16),
-            borderSide: const BorderSide(
-              color: AppColors.primary,
-              width: 2,
-            ),
+            borderRadius: BorderRadius.circular(ui.radius(16)),
+            borderSide: const BorderSide(color: AppColors.primary, width: 2),
           ),
           errorBorder: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(16),
-            borderSide: const BorderSide(
-              color: AppColors.error,
-              width: 1,
-            ),
+            borderRadius: BorderRadius.circular(ui.radius(16)),
+            borderSide: const BorderSide(color: AppColors.error, width: 1),
           ),
         ),
         validator: (v) => (v == null || v.isEmpty) ? 'Password is required' : null,
@@ -732,61 +743,100 @@ class _LoginScreenState extends State<LoginScreen> with TickerProviderStateMixin
     );
   }
 
-  Widget _buildOptionsRow() {
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-      children: [
-        TextButton(
-          onPressed: () => Navigator.pushNamed(context, AppRoutes.forgot_password),
+  Widget _buildOptionsRow(UIScale ui) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final inline = constraints.maxWidth >= 340;
+
+        final forgot = TextButton(
+          onPressed: () =>
+              Navigator.pushNamed(context, AppRoutes.forgot_password),
           style: TextButton.styleFrom(
             foregroundColor: AppColors.primary,
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            padding: EdgeInsets.symmetric(
+              horizontal: ui.inset(10),
+              vertical: ui.inset(6),
+            ),
+            minimumSize: Size.zero,
+            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
           ),
-          child: const Text('Forgot Password?'),
-        ),
-        Row(
+          child: Text(
+            'Forgot Password?',
+            style: TextStyle(fontSize: ui.font(12.5)),
+          ),
+        );
+
+        final toggle = Row(
+          mainAxisSize: MainAxisSize.min,
           children: [
-            const Text(
+            Text(
               'Show Password',
               style: TextStyle(
                 color: AppColors.textSecondary,
-                fontSize: 13,
+                fontSize: ui.font(12),
               ),
             ),
-            const SizedBox(width: 8),
+            SizedBox(width: ui.gap(6)),
             Transform.scale(
-              scale: 0.9,
+              scale: ui.compact ? 0.78 : 0.88,
               child: Switch(
                 value: _showPass,
                 onChanged: (v) => setState(() => _showPass = v),
                 activeColor: AppColors.primary,
+                materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
               ),
             ),
           ],
-        ),
-      ],
+        );
+
+        if (inline) {
+          return Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              forgot,
+              Flexible(
+                child: Align(
+                  alignment: Alignment.centerRight,
+                  child: toggle,
+                ),
+              ),
+            ],
+          );
+        }
+
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            forgot,
+            SizedBox(height: ui.gap(6)),
+            toggle,
+          ],
+        );
+      },
     );
   }
 
-  Widget _buildLoginButton(bool isTablet) {
+  Widget _buildLoginButton(UIScale ui) {
     return Container(
       width: double.infinity,
-      height: isTablet ? 56 : 52,
+      height: ui.buttonHeight,
       decoration: BoxDecoration(
         gradient: const LinearGradient(
           colors: [AppColors.primary, AppColors.secondary],
         ),
-        borderRadius: BorderRadius.circular(30),
+        borderRadius: BorderRadius.circular(ui.radius(30)),
         boxShadow: [
           BoxShadow(
-            color: AppColors.primary.withOpacity(0.3),
-            blurRadius: 20,
-            offset: const Offset(0, 10),
+            color: AppColors.primary.withOpacity(ui.reduceFx ? 0.18 : 0.30),
+            blurRadius: ui.reduceFx ? 12 : 20,
+            offset: const Offset(0, 8),
           ),
         ],
       ),
       child: ElevatedButton(
-        onPressed: _busy ? null : () {
+        onPressed: _busy
+            ? null
+            : () {
           HapticFeedback.lightImpact();
           _login();
         },
@@ -794,12 +844,13 @@ class _LoginScreenState extends State<LoginScreen> with TickerProviderStateMixin
           backgroundColor: Colors.transparent,
           shadowColor: Colors.transparent,
           shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(30),
+            borderRadius: BorderRadius.circular(ui.radius(30)),
           ),
         ),
         child: _busy
             ? const SizedBox(
-          height: 20, width: 20,
+          height: 20,
+          width: 20,
           child: CircularProgressIndicator(
             strokeWidth: 2,
             valueColor: AlwaysStoppedAnimation<Color>(AppColors.surface),
@@ -808,7 +859,7 @@ class _LoginScreenState extends State<LoginScreen> with TickerProviderStateMixin
             : Text(
           'Sign In',
           style: TextStyle(
-            fontSize: isTablet ? 18 : 16,
+            fontSize: ui.font(15.5),
             fontWeight: FontWeight.w700,
             color: AppColors.surface,
           ),
@@ -817,7 +868,7 @@ class _LoginScreenState extends State<LoginScreen> with TickerProviderStateMixin
     );
   }
 
-  Widget _buildDivider() {
+  Widget _buildDivider(UIScale ui) {
     return Row(
       children: [
         Expanded(
@@ -833,13 +884,14 @@ class _LoginScreenState extends State<LoginScreen> with TickerProviderStateMixin
             ),
           ),
         ),
-        const Padding(
-          padding: EdgeInsets.symmetric(horizontal: 16),
+        Padding(
+          padding: EdgeInsets.symmetric(horizontal: ui.inset(14)),
           child: Text(
             'OR',
             style: TextStyle(
               color: AppColors.textSecondary,
               fontWeight: FontWeight.w500,
+              fontSize: ui.font(12),
             ),
           ),
         ),
@@ -860,74 +912,83 @@ class _LoginScreenState extends State<LoginScreen> with TickerProviderStateMixin
     );
   }
 
-  Widget _buildGoogleButton(bool isTablet) {
+  Widget _buildGoogleButton(UIScale ui) {
     return Container(
       width: double.infinity,
-      height: isTablet ? 56 : 52,
+      height: ui.buttonHeight,
       decoration: BoxDecoration(
         color: AppColors.surface,
-        borderRadius: BorderRadius.circular(30),
-        border: Border.all(
-          color: AppColors.mintBgLight,
-          width: 1,
-        ),
+        borderRadius: BorderRadius.circular(ui.radius(30)),
+        border: Border.all(color: AppColors.mintBgLight, width: 1),
         boxShadow: [
           BoxShadow(
             color: AppColors.deep.withOpacity(0.05),
-            blurRadius: 10,
+            blurRadius: ui.reduceFx ? 6 : 10,
             offset: const Offset(0, 4),
           ),
         ],
       ),
       child: OutlinedButton.icon(
-        onPressed: _busy ? null : () {
+        onPressed: _busy
+            ? null
+            : () {
           HapticFeedback.lightImpact();
           _google();
         },
         style: OutlinedButton.styleFrom(
           side: BorderSide.none,
           shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(30),
+            borderRadius: BorderRadius.circular(ui.radius(30)),
           ),
         ),
         icon: Image.asset(
-          'image/google.png', // optional logo; falls back below
-          width: 24,
-          height: 24,
-          errorBuilder: (_, __, ___) => const Icon(
+          'image/google.png',
+          width: ui.icon(22),
+          height: ui.icon(22),
+          errorBuilder: (_, __, ___) => Icon(
             Icons.g_mobiledata_rounded,
-            size: 28,
+            size: ui.icon(26),
             color: AppColors.primary,
           ),
         ),
-        label: Text(
-          'Continue with Google',
-          style: TextStyle(
-            fontSize: isTablet ? 16 : 14,
-            fontWeight: FontWeight.w600,
-            color: AppColors.textPrimary,
+        label: FittedBox(
+          fit: BoxFit.scaleDown,
+          child: Text(
+            'Continue with Google',
+            style: TextStyle(
+              fontSize: ui.font(13.5),
+              fontWeight: FontWeight.w600,
+              color: AppColors.textPrimary,
+            ),
           ),
         ),
       ),
     );
   }
 
-  Widget _buildRegisterLink() {
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.center,
+  Widget _buildRegisterLink(UIScale ui) {
+    return Wrap(
+      alignment: WrapAlignment.center,
+      crossAxisAlignment: WrapCrossAlignment.center,
+      spacing: 2,
       children: [
-        const Text(
+        Text(
           "Don't have an account?",
-          style: TextStyle(color: AppColors.textSecondary),
+          style: TextStyle(
+            color: AppColors.textSecondary,
+            fontSize: ui.font(13),
+          ),
         ),
         TextButton(
-          onPressed: () => Navigator.pushNamed(context, AppRoutes.registration),
-          style: TextButton.styleFrom(
-            foregroundColor: AppColors.primary,
-          ),
-          child: const Text(
+          onPressed: () =>
+              Navigator.pushNamed(context, AppRoutes.registration),
+          style: TextButton.styleFrom(foregroundColor: AppColors.primary),
+          child: Text(
             'Sign Up',
-            style: TextStyle(fontWeight: FontWeight.w700),
+            style: TextStyle(
+              fontWeight: FontWeight.w700,
+              fontSize: ui.font(13.5),
+            ),
           ),
         ),
       ],

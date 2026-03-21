@@ -1,10 +1,12 @@
-// lib/screens/onboarding_screen.dart
-import 'dart:ui';
 import 'dart:math' as math;
+import 'dart:ui';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+
 import '../../themes/app_theme.dart';
 import '../../widgets/inner_background.dart';
+import '../../ui/ui_scale.dart';
 
 class OnboardingScreen extends StatefulWidget {
   const OnboardingScreen({super.key});
@@ -15,7 +17,7 @@ class OnboardingScreen extends StatefulWidget {
 
 class _OnboardingScreenState extends State<OnboardingScreen>
     with TickerProviderStateMixin {
-  final PageController _pageController = PageController(viewportFraction: 0.88);
+  final PageController _pageController = PageController(viewportFraction: 0.92);
   int _currentPage = 0;
 
   late final AnimationController _mainController;
@@ -37,37 +39,62 @@ class _OnboardingScreenState extends State<OnboardingScreen>
     OnboardingData(
       title: 'Book Rides, Instantly',
       subtitle: 'Your Journey, Perfected',
-      description: 'Street Rides • Campus Rides\nOrder for yourself or a friend—get from A to B, smarter.',
+      description:
+      'Street Rides • Campus Rides\nOrder for yourself or a friend—get from A to B, smarter.',
       icon: Icons.directions_car_rounded,
       gradient: [AppColors.primary, AppColors.secondary],
-      features: ['Real-time tracking & reliable ETAs', 'Safe, trained & principled drivers', 'Fair pricing', 'Book for friends'],
+      features: const [
+        'Real-time tracking & reliable ETAs',
+        'Safe, trained & principled drivers',
+        'Fair pricing',
+        'Book for friends',
+      ],
       imagePath: 'image/ride_illustration.jpg',
     ),
     OnboardingData(
       title: 'Send Packages with Care',
-      subtitle: 'Fast, secure Package Dispatch for your documents and parcels.',
-      description: 'Send packages anywhere with our trained dispatch riders. Track your items from pickup to delivery with complete peace of mind.',
+      subtitle:
+      'Fast, secure Package Dispatch for your documents and parcels.',
+      description:
+      'Send packages anywhere with our trained dispatch riders. Track your items from pickup to delivery with complete peace of mind.',
       icon: Icons.local_shipping_rounded,
       gradient: [AppColors.secondary, AppColors.primary],
-      features: ['Live updates from pickup to drop-off', 'Insured & verified dispatch riders', 'Door-to-door convenience', 'Trained riders'],
+      features: const [
+        'Live updates from pickup to drop-off',
+        'Insured & verified dispatch riders',
+        'Door-to-door convenience',
+        'Trained riders',
+      ],
       imagePath: 'image/dispatch.jpg',
     ),
     OnboardingData(
       title: 'Move Smarter with “Send Me”',
       subtitle: 'Connect & Transact',
-      description: 'Your in-app hub to send, receive and get tasks done.\nRun errands, support your business—get more done.',
+      description:
+      'Your in-app hub to send, receive and get tasks done.\nRun errands, support your business—get more done.',
       icon: Icons.hub_rounded,
       gradient: [AppColors.primary, AppColors.mintBg],
-      features: ['Post requests and get help fast', 'For individuals and small businesses', 'Quick service', 'Built into Pick Me—no extra apps'],
+      features: const [
+        'Post requests and get help fast',
+        'For individuals and small businesses',
+        'Quick service',
+        'Built into Pick Me—no extra apps',
+      ],
       imagePath: 'image/send_me1.jpg',
     ),
     OnboardingData(
       title: 'Safety • Respect • Kindness',
       subtitle: 'Your Security Matters',
-      description: 'Every ride and delivery is protected. Our drivers and riders are well-trained, principled professionals committed to your safety.',
+      description:
+      'Every ride and delivery is protected. Our drivers and riders are well-trained, principled professionals committed to your safety.',
       icon: Icons.shield_rounded,
       gradient: [AppColors.success, AppColors.primary],
-      features: ['Emergency button', '24/7 support', 'Trip sharing', 'Background checks'],
+      features: const [
+        'Emergency button',
+        '24/7 support',
+        'Trip sharing',
+        'Background checks',
+      ],
       imagePath: 'image/safety.jpg',
       isSafety: true,
     ),
@@ -106,31 +133,37 @@ class _OnboardingScreenState extends State<OnboardingScreen>
       vsync: this,
     );
 
-    _fadeAnimation = Tween<double>(begin: 0.0, end: 1.0).animate(
-      CurvedAnimation(parent: _mainController, curve: const Interval(0.0, 0.5, curve: Curves.easeOut)),
+    _fadeAnimation = Tween<double>(begin: 0, end: 1).animate(
+      CurvedAnimation(
+        parent: _mainController,
+        curve: const Interval(0.0, 0.5, curve: Curves.easeOut),
+      ),
     );
 
-    _scaleAnimation = Tween<double>(begin: 0.85, end: 1.0).animate(
+    _scaleAnimation = Tween<double>(begin: 0.88, end: 1).animate(
       CurvedAnimation(parent: _mainController, curve: Curves.elasticOut),
     );
 
-    _slideAnimation = Tween<double>(begin: 50.0, end: 0.0).animate(
-      CurvedAnimation(parent: _mainController, curve: const Interval(0.2, 0.8, curve: Curves.easeOutCubic)),
+    _slideAnimation = Tween<double>(begin: 42, end: 0).animate(
+      CurvedAnimation(
+        parent: _mainController,
+        curve: const Interval(0.2, 0.8, curve: Curves.easeOutCubic),
+      ),
     );
 
-    _rotateAnimation = Tween<double>(begin: -0.08, end: 0.0).animate(
+    _rotateAnimation = Tween<double>(begin: -0.07, end: 0).animate(
       CurvedAnimation(parent: _mainController, curve: Curves.easeOutBack),
     );
 
-    _particleAnimation = Tween<double>(begin: 0.0, end: 1.0).animate(_particleController);
+    _particleAnimation = Tween<double>(begin: 0, end: 1).animate(_particleController);
 
-    _pulseAnimation = Tween<double>(begin: 1.0, end: 1.12).animate(
+    _pulseAnimation = Tween<double>(begin: 1, end: 1.08).animate(
       CurvedAnimation(parent: _pulseController, curve: Curves.easeInOut),
     );
 
-    _waveAnimation = Tween<double>(begin: 0.0, end: 2 * math.pi).animate(_waveController);
+    _waveAnimation = Tween<double>(begin: 0, end: 2 * math.pi).animate(_waveController);
 
-    _shimmerAnimation = Tween<double>(begin: -2.0, end: 2.0).animate(
+    _shimmerAnimation = Tween<double>(begin: -2, end: 2).animate(
       CurvedAnimation(parent: _shimmerController, curve: Curves.easeInOut),
     );
   }
@@ -180,9 +213,7 @@ class _OnboardingScreenState extends State<OnboardingScreen>
 
   @override
   Widget build(BuildContext context) {
-    final size = MediaQuery.of(context).size;
-    final isTablet = size.shortestSide > 600;
-    final isLandscape = size.width > size.height;
+    final ui = UIScale.of(context);
 
     return Scaffold(
       backgroundColor: AppColors.backgroundColor,
@@ -193,39 +224,42 @@ class _OnboardingScreenState extends State<OnboardingScreen>
             animate: true,
             intensity: 0.5,
           ),
-
-          AnimatedBuilder(
-            animation: _particleAnimation,
-            builder: (context, _) => CustomPaint(
-              painter: AdvancedParticlePainter(
-                progress: _particleAnimation.value,
-                color: AppColors.primary,
+          if (!ui.reduceFx)
+            RepaintBoundary(
+              child: AnimatedBuilder(
+                animation: _particleAnimation,
+                builder: (context, _) => CustomPaint(
+                  painter: AdvancedParticlePainter(
+                    progress: _particleAnimation.value,
+                    color: AppColors.primary,
+                  ),
+                  size: Size.infinite,
+                ),
               ),
-              size: Size.infinite,
             ),
-          ),
-
-          AnimatedBuilder(
-            animation: _waveAnimation,
-            builder: (context, _) => CustomPaint(
-              painter: WavePainter(
-                progress: _waveAnimation.value,
-                color: AppColors.secondary.withOpacity(0.1),
+          if (!ui.reduceFx)
+            RepaintBoundary(
+              child: AnimatedBuilder(
+                animation: _waveAnimation,
+                builder: (context, _) => CustomPaint(
+                  painter: WavePainter(
+                    progress: _waveAnimation.value,
+                    color: AppColors.secondary.withOpacity(0.08),
+                  ),
+                  size: Size.infinite,
+                ),
               ),
-              size: Size.infinite,
             ),
-          ),
-
           SafeArea(
             child: Column(
               children: [
-                _buildHeader(context, isTablet),
+                _buildHeader(ui),
                 Expanded(
-                  child: isLandscape
-                      ? _buildLandscapeLayout(isTablet)
-                      : _buildPortraitLayout(isTablet),
+                  child: ui.useSplitOnboarding
+                      ? _buildLandscapeLayout(ui)
+                      : _buildPortraitLayout(ui),
                 ),
-                _buildFooter(context, isTablet),
+                _buildFooter(ui),
               ],
             ),
           ),
@@ -234,15 +268,15 @@ class _OnboardingScreenState extends State<OnboardingScreen>
     );
   }
 
-  Widget _buildHeader(BuildContext context, bool isTablet) {
+  Widget _buildHeader(UIScale ui) {
     return AnimatedBuilder(
       animation: _fadeAnimation,
       builder: (context, child) => Opacity(
         opacity: _fadeAnimation.value,
-        child: Container(
+        child: Padding(
           padding: EdgeInsets.symmetric(
-            horizontal: isTablet ? 32 : 24,
-            vertical: isTablet ? 20 : 16,
+            horizontal: ui.inset(ui.tablet ? 28 : 18),
+            vertical: ui.inset(ui.compact ? 10 : 14),
           ),
           child: Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -250,67 +284,51 @@ class _OnboardingScreenState extends State<OnboardingScreen>
               AnimatedBuilder(
                 animation: _pulseAnimation,
                 builder: (context, _) => Transform.scale(
-                  scale: _pulseAnimation.value,
+                  scale: ui.reduceFx ? 1 : _pulseAnimation.value,
                   child: Container(
-                    width: isTablet ? 56 : 50,
-                    height: isTablet ? 56 : 50,
+                    width: ui.compact ? 44 : 52,
+                    height: ui.compact ? 44 : 52,
                     decoration: BoxDecoration(
                       shape: BoxShape.circle,
-                      gradient: LinearGradient(
+                      gradient: const LinearGradient(
                         colors: [AppColors.primary, AppColors.secondary],
-                        begin: Alignment.topLeft,
-                        end: Alignment.bottomRight,
                       ),
                       boxShadow: [
                         BoxShadow(
-                          color: AppColors.primary.withOpacity(0.5),
-                          blurRadius: 24,
-                          spreadRadius: 4,
+                          color: AppColors.primary.withOpacity(
+                            ui.reduceFx ? 0.16 : 0.28,
+                          ),
+                          blurRadius: ui.reduceFx ? 10 : 18,
+                          offset: const Offset(0, 6),
                         ),
                       ],
                     ),
-                    child: Center(
+                    child: Padding(
+                      padding: EdgeInsets.all(ui.inset(10)),
                       child: Image.asset(
                         'image/pickme.png',
-                        width: isTablet ? 32 : 28,
-                        height: isTablet ? 32 : 28,
-                        color: Colors.white,
                         fit: BoxFit.contain,
+                        color: Colors.white,
                       ),
                     ),
                   ),
                 ),
               ),
-
               TextButton(
                 onPressed: () => Navigator.pushReplacementNamed(context, '/login'),
                 style: TextButton.styleFrom(
+                  foregroundColor: AppColors.primary,
                   padding: EdgeInsets.symmetric(
-                    horizontal: isTablet ? 24 : 20,
-                    vertical: isTablet ? 14 : 12,
-                  ),
-                  backgroundColor: AppColors.surface.withOpacity(0.9),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(30),
+                    horizontal: ui.inset(12),
+                    vertical: ui.inset(8),
                   ),
                 ),
-                child: Row(
-                  children: [
-                    Text(
-                      'Skip',
-                      style: TextStyle(
-                        color: AppColors.textSecondary,
-                        fontWeight: FontWeight.w700,
-                        fontSize: isTablet ? 16 : 14,
-                      ),
-                    ),
-                    SizedBox(width: isTablet ? 6 : 4),
-                    Icon(
-                      Icons.arrow_forward_rounded,
-                      size: isTablet ? 20 : 18,
-                      color: AppColors.textSecondary,
-                    ),
-                  ],
+                child: Text(
+                  'Skip',
+                  style: TextStyle(
+                    fontSize: ui.font(14),
+                    fontWeight: FontWeight.w700,
+                  ),
                 ),
               ),
             ],
@@ -320,66 +338,77 @@ class _OnboardingScreenState extends State<OnboardingScreen>
     );
   }
 
-  Widget _buildPortraitLayout(bool isTablet) {
-    return PageView.builder(
-      controller: _pageController,
-      onPageChanged: (index) {
-        setState(() => _currentPage = index);
-        _mainController.reset();
-        _mainController.forward();
-        HapticFeedback.lightImpact();
-      },
-      itemCount: _pages.length,
-      itemBuilder: (context, index) {
-        return AnimatedBuilder(
-          animation: _pageController,
-          builder: (context, child) {
-            double value = 1.0;
-            if (_pageController.position.haveDimensions) {
-              value = (_pageController.page ?? 0) - index;
-              value = (1 - (value.abs() * 0.4)).clamp(0.0, 1.0);
-            }
-
-            return Transform(
-              alignment: Alignment.center,
-              transform: Matrix4.identity()
-                ..setEntry(3, 2, 0.002)
-                ..rotateY(value * 0.1)
-                ..scale(0.85 + (value * 0.15)),
-              child: Opacity(
-                opacity: 0.3 + (value * 0.7),
-                child: child,
-              ),
-            );
-          },
-          child: _buildCard(_pages[index], isTablet),
-        );
-      },
+  Widget _buildPortraitLayout(UIScale ui) {
+    return Padding(
+      padding: EdgeInsets.symmetric(
+        horizontal: ui.inset(ui.tiny ? 6 : 10),
+        vertical: ui.inset(6),
+      ),
+      child: PageView.builder(
+        controller: _pageController,
+        padEnds: false,
+        onPageChanged: (index) {
+          setState(() => _currentPage = index);
+          _mainController
+            ..reset()
+            ..forward();
+          HapticFeedback.lightImpact();
+        },
+        itemCount: _pages.length,
+        itemBuilder: (context, index) {
+          return AnimatedBuilder(
+            animation: _pageController,
+            builder: (context, child) {
+              double value = 1;
+              if (_pageController.position.haveDimensions) {
+                final page = _pageController.page ?? _currentPage.toDouble();
+                value = page - index.toDouble();
+                value = (1 - (value.abs() * 0.18)).clamp(0.86, 1.0);
+              }
+              return Transform.scale(
+                scale: value,
+                child: Opacity(
+                  opacity: (0.55 + (value * 0.45)).clamp(0.0, 1.0),
+                  child: child,
+                ),
+              );
+            },
+            child: _buildCard(_pages[index], ui),
+          );
+        },
+      ),
     );
   }
 
-  Widget _buildLandscapeLayout(bool isTablet) {
+  Widget _buildLandscapeLayout(UIScale ui) {
     final data = _pages[_currentPage];
-    return Row(
-      children: [
-        Expanded(
-          flex: 5,
-          child: Center(
-            child: SizedBox(
-              height: 450,
-              width: 380,
-              child: _buildCard(data, isTablet),
+    return Padding(
+      padding: ui.screenPadding.copyWith(top: ui.gap(4), bottom: ui.gap(4)),
+      child: Row(
+        children: [
+          Expanded(
+            flex: 11,
+            child: Center(
+              child: ConstrainedBox(
+                constraints: BoxConstraints(
+                  maxWidth: ui.compact ? 360 : 460,
+                  maxHeight: ui.height * 0.76,
+                ),
+                child: _buildCard(data, ui),
+              ),
             ),
           ),
-        ),
-        Expanded(
-          flex: 5,
-          child: AnimatedBuilder(
-            animation: _fadeAnimation,
-            builder: (context, child) => Opacity(
-              opacity: _fadeAnimation.value,
-              child: Padding(
-                padding: EdgeInsets.all(isTablet ? 48 : 32),
+          SizedBox(width: ui.gap(20)),
+          Expanded(
+            flex: 10,
+            child: SingleChildScrollView(
+              padding: EdgeInsets.all(ui.inset(ui.compact ? 10 : 18)),
+              child: AnimatedBuilder(
+                animation: _fadeAnimation,
+                builder: (context, child) => Opacity(
+                  opacity: _fadeAnimation.value,
+                  child: child,
+                ),
                 child: Column(
                   mainAxisAlignment: MainAxisAlignment.center,
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -387,238 +416,257 @@ class _OnboardingScreenState extends State<OnboardingScreen>
                     Text(
                       data.title,
                       style: TextStyle(
-                        fontSize: isTablet ? 48 : 36,
+                        fontSize: ui.font(ui.compact ? 26 : 36),
                         fontWeight: FontWeight.w900,
                         color: AppColors.textPrimary,
-                        height: 1.1,
-                        letterSpacing: -1,
+                        height: 1.08,
+                        letterSpacing: -0.8,
                       ),
                     ),
-                    SizedBox(height: isTablet ? 12 : 8),
+                    SizedBox(height: ui.gap(8)),
                     Text(
                       data.subtitle,
                       style: TextStyle(
-                        fontSize: isTablet ? 28 : 22,
+                        fontSize: ui.font(ui.compact ? 16 : 22),
                         color: AppColors.primary,
                         fontWeight: FontWeight.w700,
                       ),
                     ),
-                    SizedBox(height: isTablet ? 32 : 24),
+                    SizedBox(height: ui.gap(16)),
                     Text(
                       data.description,
                       style: TextStyle(
-                        fontSize: isTablet ? 20 : 18,
+                        fontSize: ui.font(ui.compact ? 13.5 : 16),
                         color: AppColors.textSecondary,
-                        height: 1.6,
+                        height: 1.45,
                       ),
                     ),
-                    SizedBox(height: isTablet ? 40 : 32),
-                    ...data.features.map((f) => _buildFeatureBullet(f, isTablet)),
+                    SizedBox(height: ui.gap(18)),
+                    ...data.features.map((f) => _buildFeatureBullet(f, ui)),
                   ],
                 ),
               ),
             ),
           ),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildCard(OnboardingData data, bool isTablet) {
-    return AnimatedBuilder(
-      animation: Listenable.merge([_scaleAnimation, _slideAnimation, _rotateAnimation]),
-      builder: (context, _) => Transform.translate(
-        offset: Offset(0, _slideAnimation.value),
-        child: Transform(
-          alignment: Alignment.center,
-          transform: Matrix4.identity()
-            ..setEntry(3, 2, 0.001)
-            ..rotateZ(_rotateAnimation.value * 0.5)
-            ..scale(_scaleAnimation.value),
-          child: Container(
-            margin: EdgeInsets.symmetric(
-              horizontal: isTablet ? 12 : 8,
-              vertical: isTablet ? 32 : 24,
-            ),
-            child: Stack(
-              children: [
-                Positioned.fill(
-                  child: AnimatedBuilder(
-                    animation: _shimmerAnimation,
-                    builder: (context, child) => Container(
-                      decoration: BoxDecoration(
-                        borderRadius: BorderRadius.circular(36),
-                        gradient: LinearGradient(
-                          begin: Alignment(-1 + _shimmerAnimation.value, -1),
-                          end: Alignment(1 + _shimmerAnimation.value, 1),
-                          colors: [
-                            data.gradient.first.withOpacity(0.3),
-                            data.gradient.last.withOpacity(0.1),
-                            data.gradient.first.withOpacity(0.3),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-
-                ClipRRect(
-                  borderRadius: BorderRadius.circular(36),
-                  child: BackdropFilter(
-                    filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
-                    child: Container(
-                      decoration: BoxDecoration(
-                        gradient: LinearGradient(
-                          begin: Alignment.topLeft,
-                          end: Alignment.bottomRight,
-                          colors: [
-                            data.gradient.first.withOpacity(0.9),
-                            data.gradient.last.withOpacity(0.75),
-                          ],
-                        ),
-                        borderRadius: BorderRadius.circular(36),
-                        border: Border.all(
-                          color: Colors.white.withOpacity(0.25),
-                          width: 2,
-                        ),
-                        boxShadow: [
-                          BoxShadow(
-                            color: data.gradient.first.withOpacity(0.4),
-                            blurRadius: 40,
-                            offset: const Offset(0, 20),
-                          ),
-                          BoxShadow(
-                            color: data.gradient.last.withOpacity(0.3),
-                            blurRadius: 60,
-                            offset: const Offset(0, 30),
-                          ),
-                        ],
-                      ),
-                      padding: EdgeInsets.all(isTablet ? 48 : 36),
-                      child: Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          ClipRRect(
-                            borderRadius: BorderRadius.circular(20),
-                            child: Container(
-                              width: double.infinity,
-                              height: isTablet ? 180 : 150,
-                              decoration: BoxDecoration(
-                                color: Colors.white.withOpacity(0.1),
-                                borderRadius: BorderRadius.circular(20),
-                              ),
-                              child: Image.asset(
-                                data.imagePath,
-                                fit: BoxFit.cover,
-                                errorBuilder: (context, error, stackTrace) => Container(
-                                  color: Colors.white.withOpacity(0.1),
-                                  child: Icon(
-                                    data.icon,
-                                    size: isTablet ? 80 : 70,
-                                    color: Colors.white.withOpacity(0.6),
-                                  ),
-                                ),
-                              ),
-                            ),
-                          ),
-
-                          SizedBox(height: isTablet ? 32 : 28),
-
-                          Text(
-                            data.title,
-                            style: TextStyle(
-                              fontSize: isTablet ? 38 : 32,
-                              fontWeight: FontWeight.w900,
-                              color: Colors.white,
-                              letterSpacing: -0.5,
-                              height: 1.1,
-                            ),
-                            textAlign: TextAlign.center,
-                          ),
-
-                          SizedBox(height: isTablet ? 12 : 10),
-
-                          Text(
-                            data.subtitle,
-                            style: TextStyle(
-                              fontSize: isTablet ? 22 : 20,
-                              fontWeight: FontWeight.w700,
-                              color: Colors.white.withOpacity(0.95),
-                            ),
-                            textAlign: TextAlign.center,
-                          ),
-
-                          SizedBox(height: isTablet ? 24 : 20),
-
-                          Text(
-                            data.description,
-                            style: TextStyle(
-                              fontSize: isTablet ? 17 : 15,
-                              fontWeight: FontWeight.w600,
-                              color: Colors.white,
-                              height: 1.6,
-                            ),
-                            textAlign: TextAlign.center,
-                          ),
-
-                          SizedBox(height: isTablet ? 28 : 24),
-
-                          Wrap(
-                            alignment: WrapAlignment.center,
-                            spacing: isTablet ? 12 : 10,
-                            runSpacing: isTablet ? 12 : 10,
-                            children: data.features.map((feature) {
-                              return Container(
-                                padding: EdgeInsets.symmetric(
-                                  horizontal: isTablet ? 18 : 16,
-                                  vertical: isTablet ? 10 : 9,
-                                ),
-                                decoration: BoxDecoration(
-                                  color: Colors.white.withOpacity(0.2),
-                                  borderRadius: BorderRadius.circular(24),
-                                  border: Border.all(
-                                    color: Colors.white.withOpacity(0.4),
-                                    width: 1.5,
-                                  ),
-                                ),
-                                child: Text(
-                                  feature,
-                                  style: TextStyle(
-                                    fontSize: isTablet ? 14 : 13,
-                                    color: Colors.white,
-                                    fontWeight: FontWeight.w800,
-                                  ),
-                                ),
-                              );
-                            }).toList(),
-                          ),
-
-                          if (data.isSafety) ...[
-                            SizedBox(height: isTablet ? 36 : 32),
-                            _buildSafetyCard(isTablet),
-                          ],
-                        ],
-                      ),
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
+        ],
       ),
     );
   }
 
-  Widget _buildSafetyCard(bool isTablet) {
+  Widget _buildCard(OnboardingData data, UIScale ui) {
+    final borderRadius = ui.compact ? ui.radius(24) : ui.radius(36);
+
+    return AnimatedBuilder(
+      animation: Listenable.merge([
+        _scaleAnimation,
+        _slideAnimation,
+        _rotateAnimation,
+      ]),
+      builder: (context, _) {
+        final double translateY = ui.reduceFx ? 0.0 : _slideAnimation.value;
+        final double perspective = ui.reduceFx ? 0.0 : 0.001;
+        final double rotationZ = ui.reduceFx ? 0.0 : (_rotateAnimation.value * 0.5);
+        final double scale = ui.reduceFx ? 1.0 : _scaleAnimation.value;
+
+        return Transform.translate(
+          offset: Offset(0, translateY),
+          child: Transform(
+            alignment: Alignment.center,
+            transform: Matrix4.identity()
+              ..setEntry(3, 2, perspective)
+              ..rotateZ(rotationZ)
+              ..scale(scale, scale, 1.0),
+            child: Container(
+              margin: EdgeInsets.symmetric(
+                horizontal: ui.gap(4),
+                vertical: ui.gap(8),
+              ),
+              child: Stack(
+                children: [
+                  if (!ui.reduceFx)
+                    Positioned.fill(
+                      child: AnimatedBuilder(
+                        animation: _shimmerAnimation,
+                        builder: (context, child) => DecoratedBox(
+                          decoration: BoxDecoration(
+                            borderRadius: BorderRadius.circular(borderRadius),
+                            gradient: LinearGradient(
+                              begin: Alignment(-1 + _shimmerAnimation.value, -1),
+                              end: Alignment(1 + _shimmerAnimation.value, 1),
+                              colors: [
+                                data.gradient.first.withOpacity(0.22),
+                                data.gradient.last.withOpacity(0.08),
+                                data.gradient.first.withOpacity(0.22),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(borderRadius),
+                    child: BackdropFilter(
+                      filter: ImageFilter.blur(
+                        sigmaX: ui.blur(20),
+                        sigmaY: ui.blur(20),
+                      ),
+                      child: Container(
+                        decoration: BoxDecoration(
+                          gradient: LinearGradient(
+                            begin: Alignment.topLeft,
+                            end: Alignment.bottomRight,
+                            colors: [
+                              data.gradient.first.withOpacity(0.92),
+                              data.gradient.last.withOpacity(0.78),
+                            ],
+                          ),
+                          borderRadius: BorderRadius.circular(borderRadius),
+                          border: Border.all(
+                            color: Colors.white.withOpacity(0.22),
+                            width: 1.5,
+                          ),
+                          boxShadow: [
+                            BoxShadow(
+                              color: data.gradient.first.withOpacity(
+                                ui.reduceFx ? 0.16 : 0.35,
+                              ),
+                              blurRadius: ui.reduceFx ? 14 : 32,
+                              offset: const Offset(0, 12),
+                            ),
+                          ],
+                        ),
+                        child: LayoutBuilder(
+                          builder: (context, constraints) {
+                            final imageHeight = math.max(
+                              110.0,
+                              math.min(
+                                constraints.maxHeight * 0.26,
+                                ui.compact ? 132.0 : 180.0,
+                              ),
+                            );
+
+                            return SingleChildScrollView(
+                              physics: const ClampingScrollPhysics(),
+                              padding: EdgeInsets.all(
+                                ui.inset(ui.compact ? 18 : 28),
+                              ),
+                              child: Column(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  ClipRRect(
+                                    borderRadius: BorderRadius.circular(ui.radius(18)),
+                                    child: SizedBox(
+                                      width: double.infinity,
+                                      height: imageHeight,
+                                      child: Image.asset(
+                                        data.imagePath,
+                                        fit: BoxFit.cover,
+                                        errorBuilder: (_, __, ___) => Container(
+                                          color: Colors.white.withOpacity(0.10),
+                                          child: Icon(
+                                            data.icon,
+                                            size: ui.icon(ui.compact ? 56 : 72),
+                                            color: Colors.white.withOpacity(0.65),
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                  SizedBox(height: ui.gap(18)),
+                                  Text(
+                                    data.title,
+                                    textAlign: TextAlign.center,
+                                    style: TextStyle(
+                                      fontSize: ui.font(ui.compact ? 24 : 32),
+                                      fontWeight: FontWeight.w900,
+                                      color: Colors.white,
+                                      height: 1.08,
+                                      letterSpacing: -0.4,
+                                    ),
+                                  ),
+                                  SizedBox(height: ui.gap(8)),
+                                  Text(
+                                    data.subtitle,
+                                    textAlign: TextAlign.center,
+                                    style: TextStyle(
+                                      fontSize: ui.font(ui.compact ? 15.5 : 20),
+                                      fontWeight: FontWeight.w700,
+                                      color: Colors.white.withOpacity(0.95),
+                                    ),
+                                  ),
+                                  SizedBox(height: ui.gap(14)),
+                                  Text(
+                                    data.description,
+                                    textAlign: TextAlign.center,
+                                    style: TextStyle(
+                                      fontSize: ui.font(ui.compact ? 13 : 15),
+                                      fontWeight: FontWeight.w600,
+                                      color: Colors.white,
+                                      height: 1.45,
+                                    ),
+                                  ),
+                                  SizedBox(height: ui.gap(16)),
+                                  Wrap(
+                                    alignment: WrapAlignment.center,
+                                    spacing: ui.gap(8),
+                                    runSpacing: ui.gap(8),
+                                    children: data.features.map((feature) {
+                                      return Container(
+                                        padding: EdgeInsets.symmetric(
+                                          horizontal: ui.inset(12),
+                                          vertical: ui.inset(7),
+                                        ),
+                                        decoration: BoxDecoration(
+                                          color: Colors.white.withOpacity(0.18),
+                                          borderRadius: BorderRadius.circular(
+                                            ui.radius(20),
+                                          ),
+                                          border: Border.all(
+                                            color: Colors.white.withOpacity(0.35),
+                                            width: 1,
+                                          ),
+                                        ),
+                                        child: Text(
+                                          feature,
+                                          style: TextStyle(
+                                            fontSize: ui.font(12),
+                                            color: Colors.white,
+                                            fontWeight: FontWeight.w800,
+                                          ),
+                                        ),
+                                      );
+                                    }).toList(),
+                                  ),
+                                  if (data.isSafety) ...[
+                                    SizedBox(height: ui.gap(18)),
+                                    _buildSafetyCard(ui),
+                                  ],
+                                ],
+                              ),
+                            );
+                          },
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildSafetyCard(UIScale ui) {
     return Container(
-      padding: EdgeInsets.all(isTablet ? 24 : 20),
+      padding: EdgeInsets.all(ui.inset(ui.compact ? 16 : 20)),
       decoration: BoxDecoration(
         color: Colors.white.withOpacity(0.15),
-        borderRadius: BorderRadius.circular(20),
+        borderRadius: BorderRadius.circular(ui.radius(18)),
         border: Border.all(
-          color: Colors.white.withOpacity(0.3),
-          width: 2,
+          color: Colors.white.withOpacity(0.30),
+          width: 1.5,
         ),
       ),
       child: Column(
@@ -629,84 +677,86 @@ class _OnboardingScreenState extends State<OnboardingScreen>
               Icon(
                 Icons.favorite_rounded,
                 color: Colors.white,
-                size: isTablet ? 26 : 22,
+                size: ui.icon(ui.compact ? 20 : 22),
               ),
-              SizedBox(width: isTablet ? 12 : 10),
+              SizedBox(width: ui.gap(10)),
               Text(
                 'Our Commitment to You',
                 style: TextStyle(
                   color: Colors.white,
                   fontWeight: FontWeight.w800,
-                  fontSize: isTablet ? 18 : 16,
+                  fontSize: ui.font(ui.compact ? 15 : 16),
                 ),
               ),
             ],
           ),
-          SizedBox(height: isTablet ? 18 : 16),
-          ...[
+          SizedBox(height: ui.gap(14)),
+          ...const [
             'Treat everyone with kindness & respect',
             'Help keep one another safe; follow local laws',
             'Report any abuse or misconduct immediately',
-          ].map((text) => Padding(
-            padding: EdgeInsets.only(bottom: isTablet ? 10 : 8),
-            child: Row(
-              children: [
-                Container(
-                  width: isTablet ? 8 : 7,
-                  height: isTablet ? 8 : 7,
-                  decoration: const BoxDecoration(
-                    color: Colors.white,
-                    shape: BoxShape.circle,
-                  ),
-                ),
-                SizedBox(width: isTablet ? 14 : 12),
-                Expanded(
-                  child: Text(
-                    text,
-                    style: TextStyle(
-                      fontSize: isTablet ? 15 : 14,
-                      color: Colors.white.withOpacity(0.95),
-                      height: 1.4,
+          ].map(
+                (text) => Padding(
+              padding: EdgeInsets.only(bottom: ui.gap(8)),
+              child: Row(
+                children: [
+                  Container(
+                    width: ui.icon(7),
+                    height: ui.icon(7),
+                    decoration: const BoxDecoration(
+                      color: Colors.white,
+                      shape: BoxShape.circle,
                     ),
                   ),
-                ),
-              ],
+                  SizedBox(width: ui.gap(12)),
+                  Expanded(
+                    child: Text(
+                      text,
+                      style: TextStyle(
+                        fontSize: ui.font(13),
+                        color: Colors.white.withOpacity(0.95),
+                        height: 1.4,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
             ),
-          )),
+          ),
         ],
       ),
     );
   }
 
-  Widget _buildFeatureBullet(String feature, bool isTablet) {
+  Widget _buildFeatureBullet(String feature, UIScale ui) {
     return Padding(
-      padding: EdgeInsets.only(bottom: isTablet ? 16 : 12),
+      padding: EdgeInsets.only(bottom: ui.gap(12)),
       child: Row(
         children: [
           Container(
-            width: isTablet ? 12 : 10,
-            height: isTablet ? 12 : 10,
+            width: ui.icon(ui.compact ? 9 : 10),
+            height: ui.icon(ui.compact ? 9 : 10),
             decoration: BoxDecoration(
-              gradient: LinearGradient(
+              gradient: const LinearGradient(
                 colors: [AppColors.primary, AppColors.secondary],
               ),
               shape: BoxShape.circle,
               boxShadow: [
                 BoxShadow(
-                  color: AppColors.primary.withOpacity(0.4),
+                  color: AppColors.primary.withOpacity(0.35),
                   blurRadius: 8,
-                  spreadRadius: 2,
+                  spreadRadius: 1,
                 ),
               ],
             ),
           ),
-          SizedBox(width: isTablet ? 16 : 14),
+          SizedBox(width: ui.gap(12)),
           Expanded(
             child: Text(
               feature,
               style: TextStyle(
                 color: AppColors.textPrimary,
-                fontSize: isTablet ? 18 : 17,
+                fontSize: ui.font(ui.compact ? 14 : 16),
                 fontWeight: FontWeight.w600,
               ),
             ),
@@ -716,15 +766,15 @@ class _OnboardingScreenState extends State<OnboardingScreen>
     );
   }
 
-  Widget _buildFooter(BuildContext context, bool isTablet) {
+  Widget _buildFooter(UIScale ui) {
     return AnimatedBuilder(
       animation: _fadeAnimation,
       builder: (context, child) => Opacity(
         opacity: _fadeAnimation.value,
-        child: Container(
+        child: Padding(
           padding: EdgeInsets.symmetric(
-            horizontal: isTablet ? 32 : 24,
-            vertical: isTablet ? 40 : 32,
+            horizontal: ui.inset(ui.tablet ? 28 : 18),
+            vertical: ui.inset(ui.compact ? 16 : 22),
           ),
           child: Column(
             children: [
@@ -742,24 +792,27 @@ class _OnboardingScreenState extends State<OnboardingScreen>
                       );
                     },
                     child: AnimatedContainer(
-                      duration: const Duration(milliseconds: 400),
+                      duration: const Duration(milliseconds: 300),
                       curve: Curves.easeOutCubic,
-                      margin: EdgeInsets.symmetric(horizontal: isTablet ? 6 : 5),
-                      width: isActive ? (isTablet ? 48 : 40) : (isTablet ? 12 : 10),
-                      height: isTablet ? 12 : 10,
+                      margin: EdgeInsets.symmetric(horizontal: ui.gap(4)),
+                      width: isActive ? ui.inset(34) : ui.inset(10),
+                      height: ui.inset(9),
                       decoration: BoxDecoration(
                         gradient: isActive
-                            ? LinearGradient(
-                          colors: [AppColors.primary, AppColors.secondary],
+                            ? const LinearGradient(
+                          colors: [
+                            AppColors.primary,
+                            AppColors.secondary,
+                          ],
                         )
                             : null,
                         color: isActive ? null : AppColors.mintBgLight,
-                        borderRadius: BorderRadius.circular(8),
+                        borderRadius: BorderRadius.circular(ui.radius(8)),
                         boxShadow: isActive
                             ? [
                           BoxShadow(
-                            color: AppColors.primary.withOpacity(0.5),
-                            blurRadius: 12,
+                            color: AppColors.primary.withOpacity(0.35),
+                            blurRadius: 10,
                             offset: const Offset(0, 4),
                           ),
                         ]
@@ -769,67 +822,33 @@ class _OnboardingScreenState extends State<OnboardingScreen>
                   );
                 }),
               ),
+              SizedBox(height: ui.gap(18)),
+              LayoutBuilder(
+                builder: (context, constraints) {
+                  final wide = constraints.maxWidth >= 320;
 
-              SizedBox(height: isTablet ? 40 : 32),
-
-              Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  if (_currentPage > 0)
-                    GestureDetector(
-                      onTap: _previousPage,
-                      child: Container(
-                        width: isTablet ? 60 : 56,
-                        height: isTablet ? 60 : 56,
-                        margin: EdgeInsets.only(right: isTablet ? 20 : 16),
-                        decoration: BoxDecoration(
-                          color: AppColors.surface,
-                          shape: BoxShape.circle,
-                          border: Border.all(
-                            color: AppColors.mintBgLight,
-                            width: 2,
-                          ),
-                          boxShadow: [
-                            BoxShadow(
-                              color: Colors.black.withOpacity(0.08),
-                              blurRadius: 20,
-                              offset: const Offset(0, 8),
-                            ),
-                          ],
-                        ),
-                        child: Icon(
-                          Icons.arrow_back_rounded,
-                          color: AppColors.primary,
-                          size: isTablet ? 28 : 24,
-                        ),
-                      ),
-                    ),
-
-                  GestureDetector(
+                  final nextButton = GestureDetector(
                     onTap: _nextPage,
                     child: AnimatedContainer(
-                      duration: const Duration(milliseconds: 300),
+                      duration: const Duration(milliseconds: 250),
                       width: _currentPage == _pages.length - 1
-                          ? (isTablet ? 220 : 200)
-                          : (isTablet ? 200 : 180),
-                      height: isTablet ? 66 : 60,
+                          ? (wide ? ui.inset(180) : double.infinity)
+                          : (wide ? ui.inset(160) : double.infinity),
+                      height: ui.compact ? 52 : 58,
                       decoration: BoxDecoration(
-                        gradient: LinearGradient(
+                        gradient: const LinearGradient(
                           colors: [AppColors.primary, AppColors.secondary],
                           begin: Alignment.centerLeft,
                           end: Alignment.centerRight,
                         ),
-                        borderRadius: BorderRadius.circular(35),
+                        borderRadius: BorderRadius.circular(ui.radius(32)),
                         boxShadow: [
                           BoxShadow(
-                            color: AppColors.primary.withOpacity(0.5),
-                            blurRadius: 24,
-                            offset: const Offset(0, 12),
-                          ),
-                          BoxShadow(
-                            color: AppColors.secondary.withOpacity(0.3),
-                            blurRadius: 32,
-                            offset: const Offset(0, 16),
+                            color: AppColors.primary.withOpacity(
+                              ui.reduceFx ? 0.20 : 0.40,
+                            ),
+                            blurRadius: ui.reduceFx ? 14 : 24,
+                            offset: const Offset(0, 10),
                           ),
                         ],
                       ),
@@ -837,25 +856,96 @@ class _OnboardingScreenState extends State<OnboardingScreen>
                         mainAxisAlignment: MainAxisAlignment.center,
                         children: [
                           Text(
-                            _currentPage == _pages.length - 1 ? 'Get Started' : 'Next',
+                            _currentPage == _pages.length - 1
+                                ? 'Get Started'
+                                : 'Next',
                             style: TextStyle(
                               color: Colors.white,
-                              fontSize: isTablet ? 20 : 18,
+                              fontSize: ui.font(16),
                               fontWeight: FontWeight.w800,
-                              letterSpacing: 0.5,
+                              letterSpacing: 0.4,
                             ),
                           ),
-                          SizedBox(width: isTablet ? 10 : 8),
+                          SizedBox(width: ui.gap(8)),
                           Icon(
                             Icons.arrow_forward_rounded,
                             color: Colors.white,
-                            size: isTablet ? 26 : 24,
+                            size: ui.icon(22),
                           ),
                         ],
                       ),
                     ),
-                  ),
-                ],
+                  );
+
+                  if (wide) {
+                    return Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        if (_currentPage > 0)
+                          GestureDetector(
+                            onTap: _previousPage,
+                            child: Container(
+                              width: ui.compact ? 48 : 54,
+                              height: ui.compact ? 48 : 54,
+                              margin: EdgeInsets.only(right: ui.gap(14)),
+                              decoration: BoxDecoration(
+                                color: AppColors.surface,
+                                shape: BoxShape.circle,
+                                border: Border.all(
+                                  color: AppColors.mintBgLight,
+                                  width: 1.5,
+                                ),
+                                boxShadow: [
+                                  BoxShadow(
+                                    color: Colors.black.withOpacity(0.06),
+                                    blurRadius: 16,
+                                    offset: const Offset(0, 8),
+                                  ),
+                                ],
+                              ),
+                              child: Icon(
+                                Icons.arrow_back_rounded,
+                                color: AppColors.primary,
+                                size: ui.icon(22),
+                              ),
+                            ),
+                          ),
+                        nextButton,
+                      ],
+                    );
+                  }
+
+                  return Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      if (_currentPage > 0)
+                        Padding(
+                          padding: EdgeInsets.only(bottom: ui.gap(10)),
+                          child: GestureDetector(
+                            onTap: _previousPage,
+                            child: Container(
+                              width: ui.compact ? 46 : 50,
+                              height: ui.compact ? 46 : 50,
+                              decoration: BoxDecoration(
+                                color: AppColors.surface,
+                                shape: BoxShape.circle,
+                                border: Border.all(
+                                  color: AppColors.mintBgLight,
+                                  width: 1.5,
+                                ),
+                              ),
+                              child: Icon(
+                                Icons.arrow_back_rounded,
+                                color: AppColors.primary,
+                                size: ui.icon(22),
+                              ),
+                            ),
+                          ),
+                        ),
+                      SizedBox(width: double.infinity, child: nextButton),
+                    ],
+                  );
+                },
               ),
             ],
           ),
@@ -875,7 +965,7 @@ class OnboardingData {
   final String imagePath;
   final bool isSafety;
 
-  OnboardingData({
+  const OnboardingData({
     required this.title,
     required this.subtitle,
     required this.description,
@@ -911,7 +1001,9 @@ class AdvancedParticlePainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(AdvancedParticlePainter old) => old.progress != progress;
+  bool shouldRepaint(covariant AdvancedParticlePainter oldDelegate) {
+    return oldDelegate.progress != progress || oldDelegate.color != color;
+  }
 }
 
 class WavePainter extends CustomPainter {
@@ -946,5 +1038,7 @@ class WavePainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(WavePainter old) => old.progress != progress;
+  bool shouldRepaint(covariant WavePainter oldDelegate) {
+    return oldDelegate.progress != progress || oldDelegate.color != color;
+  }
 }

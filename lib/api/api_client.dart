@@ -218,7 +218,7 @@ class ApiClient {
         Map<String, String>? data,
         Map<String, String>? headers,
         Map<String, File>? files, // Add support for file uploads
-        int retryCount = 3,
+        int retryCount = 1,
       }) async {
     final uri = Uri.parse('${ApiConstants.baseUrl}$endpoint');
     final requestHeaders = {
@@ -323,12 +323,20 @@ class ApiClient {
         errorMessage = 'Not Found: ${response.body}';
         break;
       default:
-        errorMessage = 'Server error: ${response.statusCode}';
+        errorMessage = '${response.body}';
     }
     _logError(errorMessage);
-    showRetryNotification(_context, errorMessage, onRetry: () {
-      request(endpoint, method: method, data: data, headers: headers, retryCount: retryCount - 1);
-    });
+    //showRetryNotification(_context, errorMessage, onRetry: () {
+    //  request(endpoint, method: method, data: data, headers: headers, retryCount: retryCount - 1);
+    //});
+
+    showToastNotification(
+      context: _context,
+      title: 'Error',
+      message: errorMessage,
+      isSuccess: false,
+    );
+
   }
 
   Future<bool> _hasInternetConnection() async {

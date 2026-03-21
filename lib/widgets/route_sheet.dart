@@ -1,36 +1,25 @@
 import 'dart:math' as math;
-import 'dart:ui';
+import 'dart:ui' show ImageFilter;
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../../../themes/app_theme.dart';
+import '../../../ui/ui_scale.dart';
 import '../screens/state/home_models.dart';
 
-/// Premium, compact, responsive bottom sheet.
-/// - Fixed height, orientation-aware
-/// - CTA tap is always reliable (parent can refresh with [ctaKey])
-/// - Portrait: list; Landscape/Foldables: smart grid
+/// Premium, ultra-compact, production-safe route sheet.
+/// - Uses UIScale everywhere
+/// - Never relies on a rigid top-level Column in low-height states
+/// - Micro mode for very short screens / landscape / foldables
+/// - Preserves functionality exactly
 class RouteSheet extends StatefulWidget {
-  /// Height of the app bottom navigation bar (used to pad sheet bottom)
   final double bottomNavHeight;
-
-  /// Recent destinations to render
   final List<Suggestion> recentDestinations;
-
-  /// Fired when user taps the CTA pill
   final VoidCallback onSearchTap;
-
-  /// Fired when user taps a recent item
   final void Function(Suggestion) onRecentTap;
-
-  /// Optional fresh key for the CTA button; parent can replace this key
-  /// (e.g. after overlay closes) to guarantee a fresh gesture arena.
   final Key? ctaKey;
-
-  /// Optional dynamic label for the CTA (e.g. "Set destination", "Add stop")
   final String? ctaLabel;
-
-  /// Optional: show an auxiliary action in empty state (e.g. Use current location)
   final bool hasGps;
   final VoidCallback? onUseCurrentPickup;
 
@@ -56,25 +45,29 @@ class _RouteSheetState extends State<RouteSheet>
   late final Animation<double> _fade;
   late final Animation<Offset> _slide;
 
-  double _s(BuildContext c) {
-    final sz = MediaQuery.of(c).size;
-    final shortest = math.min(sz.width, sz.height);
-    return (shortest / 390.0).clamp(0.75, 1.0);
-  }
-
-  bool _isLandscape(BuildContext c) =>
-      MediaQuery.of(c).orientation == Orientation.landscape;
-
   @override
   void initState() {
     super.initState();
+
     _ctrl = AnimationController(
-      duration: const Duration(milliseconds: 280),
+      duration: const Duration(milliseconds: 240),
       vsync: this,
     );
-    _fade = CurvedAnimation(parent: _ctrl, curve: Curves.easeOutCubic);
-    _slide = Tween<Offset>(begin: const Offset(0, 0.08), end: Offset.zero)
-        .animate(CurvedAnimation(parent: _ctrl, curve: Curves.easeOutCubic));
+
+    _fade = CurvedAnimation(
+      parent: _ctrl,
+      curve: Curves.easeOutCubic,
+    );
+
+    _slide = Tween<Offset>(
+      begin: const Offset(0, 0.05),
+      end: Offset.zero,
+    ).animate(
+      CurvedAnimation(
+        parent: _ctrl,
+        curve: Curves.easeOutCubic,
+      ),
+    );
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) _ctrl.forward();
@@ -87,63 +80,165 @@ class _RouteSheetState extends State<RouteSheet>
     super.dispose();
   }
 
+  double _sheetHeight(MediaQueryData mq, UIScale ui) {
+    final keyboard = mq.viewInsets.bottom;
+    final h = mq.size.height;
+
+    double target;
+    if (ui.landscape) {
+      target = h * (ui.tablet ? 0.80 : 0.72);
+    } else if (ui.tiny) {
+      target = h * 0.36;
+    } else if (ui.compact) {
+      target = h * 0.39;
+    } else {
+      target = h * 0.42;
+    }
+
+    if (keyboard > 0) {
+      target -= ui.gap(6);
+    }
+
+    return target.clamp(
+      ui.landscape ? 170.0 : 220.0,
+      ui.landscape ? 420.0 : 500.0,
+    );
+  }
+
+  EdgeInsets _hingePadding(MediaQueryData mq, UIScale ui) {
+    if (mq.displayFeatures.isEmpty) return EdgeInsets.zero;
+    return EdgeInsets.all(ui.gap(4));
+  }
+
+  double _reservedBottomInset(MediaQueryData mq, UIScale ui, double sheetHeight) {
+    final raw = widget.bottomNavHeight + mq.padding.bottom + ui.gap(8);
+
+    final upperBound = ui.landscape
+        ? math.max(14.0, sheetHeight * 0.18)
+        : math.max(18.0, sheetHeight * 0.22);
+
+    return raw.clamp(12.0, upperBound);
+  }
+
+  Widget _optionalGpsAction() {
+    if (!widget.hasGps || widget.onUseCurrentPickup == null) {
+      return const SizedBox.shrink();
+    }
+
+    return TextButton.icon(
+      onPressed: widget.onUseCurrentPickup,
+      icon: const Icon(Icons.my_location_rounded, size: 16),
+      label: const Text('Use current location'),
+      style: TextButton.styleFrom(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+        minimumSize: Size.zero,
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final mq = MediaQuery.of(context);
-    final s = _s(context);
-    final isLand = _isLandscape(context);
-    final bg = Theme.of(context).scaffoldBackgroundColor;
-    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final ui = UIScale.of(context);
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
 
-    // Keyboard-aware & foldable-friendly sizing
-    final kb = mq.viewInsets.bottom; // > 0 when keyboard visible
-    final baseH = isLand
-        ? (mq.size.height * 0.70).clamp(180.0, 380.0)
-        : (mq.size.height * 0.40).clamp(240.0, 480.0);
-    final h = (baseH - (kb > 0 ? 8.0 * s : 0.0)).clamp(180.0, 480.0);
-
-    // Small hinge padding for foldables
-    final hingePad = mq.displayFeatures.isEmpty ? EdgeInsets.zero : EdgeInsets.all(6 * s);
+    final sheetHeight = _sheetHeight(mq, ui);
+    final reservedBottom = _reservedBottomInset(mq, ui, sheetHeight);
 
     return FadeTransition(
       opacity: _fade,
       child: SlideTransition(
         position: _slide,
         child: SizedBox(
-          height: h,
           width: mq.size.width,
+          height: sheetHeight,
           child: ClipRRect(
-            borderRadius: BorderRadius.vertical(top: Radius.circular(20 * s)),
+            borderRadius: BorderRadius.vertical(
+              top: Radius.circular(ui.radius(ui.landscape ? 18 : 20)),
+            ),
             child: BackdropFilter(
-              filter: ImageFilter.blur(sigmaX: 16 * s, sigmaY: 16 * s),
+              filter: ImageFilter.blur(
+                sigmaX: ui.reduceFx ? 8 : 16,
+                sigmaY: ui.reduceFx ? 8 : 16,
+              ),
               child: DecoratedBox(
                 decoration: BoxDecoration(
-                  color: isDark ? bg.withOpacity(.95) : Colors.white.withOpacity(.97),
+                  color: isDark
+                      ? theme.scaffoldBackgroundColor.withOpacity(0.95)
+                      : Colors.white.withOpacity(0.97),
                   border: Border(
                     top: BorderSide(
-                      color: AppColors.mintBgLight.withOpacity(.30),
+                      color: AppColors.mintBgLight.withOpacity(0.30),
                       width: 1,
                     ),
                   ),
                   boxShadow: [
                     BoxShadow(
-                      color: Colors.black.withOpacity(isDark ? .25 : .10),
-                      blurRadius: 24 * s,
-                      offset: Offset(0, -8 * s),
+                      color: Colors.black.withOpacity(isDark ? 0.24 : 0.10),
+                      blurRadius: ui.reduceFx ? 12 : 22,
+                      offset: const Offset(0, -8),
                     ),
                   ],
                 ),
                 child: Padding(
-                  // Map should handle its own padding; we keep sheet compact.
                   padding: EdgeInsets.fromLTRB(
-                    16 * s,
-                    12 * s,
-                    16 * s,
-                    widget.bottomNavHeight + mq.padding.bottom + 12,
-                  ).add(hingePad),
-                  child: isLand
-                      ? _buildLandscape(s, context)
-                      : _buildPortrait(s, context),
+                    ui.inset(ui.tiny ? 10 : 14),
+                    ui.inset(ui.tiny ? 8 : 10),
+                    ui.inset(ui.tiny ? 10 : 14),
+                    reservedBottom,
+                  ).add(_hingePadding(mq, ui)),
+                  child: LayoutBuilder(
+                    builder: (context, constraints) {
+                      final maxH = constraints.maxHeight;
+                      final maxW = constraints.maxWidth;
+
+                      final useMicro = maxH < 150;
+                      final useSplitLandscape = !useMicro &&
+                          ui.landscape &&
+                          maxW >= 640 &&
+                          maxH >= 190;
+
+                      if (useMicro) {
+                        return _MicroLayout(
+                          ui: ui,
+                          theme: theme,
+                          ctaKey: widget.ctaKey,
+                          ctaLabel: widget.ctaLabel ?? 'Set destination',
+                          recentDestinations: widget.recentDestinations,
+                          onSearchTap: widget.onSearchTap,
+                          onRecentTap: widget.onRecentTap,
+                          gpsAction: _optionalGpsAction(),
+                        );
+                      }
+
+                      if (useSplitLandscape) {
+                        return _LandscapeLayout(
+                          ui: ui,
+                          theme: theme,
+                          ctaKey: widget.ctaKey,
+                          ctaLabel: widget.ctaLabel ?? 'Set destination',
+                          recentDestinations: widget.recentDestinations,
+                          onSearchTap: widget.onSearchTap,
+                          onRecentTap: widget.onRecentTap,
+                          gpsAction: _optionalGpsAction(),
+                        );
+                      }
+
+                      return _PortraitLayout(
+                        ui: ui,
+                        theme: theme,
+                        compact: maxH < 210,
+                        ctaKey: widget.ctaKey,
+                        ctaLabel: widget.ctaLabel ?? 'Set destination',
+                        recentDestinations: widget.recentDestinations,
+                        onSearchTap: widget.onSearchTap,
+                        onRecentTap: widget.onRecentTap,
+                        gpsAction: _optionalGpsAction(),
+                      );
+                    },
+                  ),
                 ),
               ),
             ),
@@ -152,101 +247,67 @@ class _RouteSheetState extends State<RouteSheet>
       ),
     );
   }
+}
 
-  Widget _buildPortrait(double s, BuildContext ctx) {
+class _PortraitLayout extends StatelessWidget {
+  final UIScale ui;
+  final ThemeData theme;
+  final bool compact;
+  final Key? ctaKey;
+  final String ctaLabel;
+  final List<Suggestion> recentDestinations;
+  final VoidCallback onSearchTap;
+  final void Function(Suggestion) onRecentTap;
+  final Widget gpsAction;
+
+  const _PortraitLayout({
+    required this.ui,
+    required this.theme,
+    required this.compact,
+    required this.ctaKey,
+    required this.ctaLabel,
+    required this.recentDestinations,
+    required this.onSearchTap,
+    required this.onRecentTap,
+    required this.gpsAction,
+  });
+
+  @override
+  Widget build(BuildContext context) {
     return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Padding(
-          padding: EdgeInsets.only(bottom: 12 * s),
+        _SheetHandle(ui: ui),
+        SizedBox(height: ui.gap(compact ? 4 : 6)),
+        Align(
+          alignment: Alignment.centerLeft,
           child: Text(
             'Street ride',
-            style: Theme.of(ctx).textTheme.titleSmall?.copyWith(
-              fontSize: 14 * s,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: theme.textTheme.titleSmall?.copyWith(
+              fontSize: ui.font(compact ? 12.5 : 13.5),
               fontWeight: FontWeight.w900,
-              letterSpacing: -0.5,
+              letterSpacing: -0.25,
             ),
           ),
         ),
+        SizedBox(height: ui.gap(compact ? 8 : 10)),
         _TapableTile(
-          key: widget.ctaKey, // <— fresh key can be injected by parent
-          s: s,
-          label: widget.ctaLabel ?? 'Set destination',
+          key: ctaKey,
+          ui: ui,
+          label: ctaLabel,
           icon: Icons.search_rounded,
-          onTap: widget.onSearchTap,
           badge: 'Now',
+          onTap: onSearchTap,
         ),
-        SizedBox(height: 14 * s),
+        SizedBox(height: ui.gap(compact ? 8 : 12)),
         Expanded(
           child: _RecentsList(
-            s: s,
-            items: widget.recentDestinations,
-            onTap: widget.onRecentTap,
-            isDark: Theme.of(ctx).brightness == Brightness.dark,
-            emptyTrailing: (widget.hasGps && widget.onUseCurrentPickup != null)
-                ? TextButton.icon(
-              onPressed: widget.onUseCurrentPickup,
-              icon: const Icon(Icons.my_location_rounded, size: 16),
-              label: const Text('Use current location'),
-            )
-                : null,
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildLandscape(double s, BuildContext ctx) {
-    final w = MediaQuery.of(ctx).size.width;
-    final crossAxisCount = (w / (220 * s)).clamp(2, 3).toInt();
-
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        Expanded(
-          flex: 45,
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Padding(
-                padding: EdgeInsets.only(bottom: 10 * s),
-                child: Text(
-                  'Choose your\nadventure.',
-                  style: Theme.of(ctx).textTheme.titleSmall?.copyWith(
-                    fontSize: 13 * s,
-                    fontWeight: FontWeight.w900,
-                    letterSpacing: -0.3,
-                    height: 1.1,
-                  ),
-                ),
-              ),
-              _TapableTile(
-                key: widget.ctaKey,
-                s: s,
-                label: widget.ctaLabel ?? 'Set destination',
-                icon: Icons.search_rounded,
-                onTap: widget.onSearchTap,
-                badge: 'Now',
-              ),
-            ],
-          ),
-        ),
-        SizedBox(width: 16 * s),
-        Expanded(
-          flex: 55,
-          child: _RecentsGrid(
-            s: s,
-            items: widget.recentDestinations,
-            onTap: widget.onRecentTap,
-            isDark: Theme.of(ctx).brightness == Brightness.dark,
-            crossAxisCount: crossAxisCount,
-            emptyTrailing: (widget.hasGps && widget.onUseCurrentPickup != null)
-                ? TextButton.icon(
-              onPressed: widget.onUseCurrentPickup,
-              icon: const Icon(Icons.my_location_rounded, size: 16),
-              label: const Text('Use current location'),
-            )
-                : null,
+            ui: ui,
+            items: recentDestinations,
+            onTap: onRecentTap,
+            isDark: theme.brightness == Brightness.dark,
+            emptyTrailing: gpsAction,
           ),
         ),
       ],
@@ -254,8 +315,185 @@ class _RouteSheetState extends State<RouteSheet>
   }
 }
 
+class _LandscapeLayout extends StatelessWidget {
+  final UIScale ui;
+  final ThemeData theme;
+  final Key? ctaKey;
+  final String ctaLabel;
+  final List<Suggestion> recentDestinations;
+  final VoidCallback onSearchTap;
+  final void Function(Suggestion) onRecentTap;
+  final Widget gpsAction;
+
+  const _LandscapeLayout({
+    required this.ui,
+    required this.theme,
+    required this.ctaKey,
+    required this.ctaLabel,
+    required this.recentDestinations,
+    required this.onSearchTap,
+    required this.onRecentTap,
+    required this.gpsAction,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final width = MediaQuery.of(context).size.width;
+    final int crossAxisCount = width >= 1100 ? 3 : 2;
+
+    return Column(
+      children: [
+        _SheetHandle(ui: ui),
+        SizedBox(height: ui.gap(6)),
+        Expanded(
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Expanded(
+                flex: 42,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Street ride',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: theme.textTheme.titleSmall?.copyWith(
+                        fontSize: ui.font(13),
+                        fontWeight: FontWeight.w900,
+                        letterSpacing: -0.25,
+                      ),
+                    ),
+                    SizedBox(height: ui.gap(8)),
+                    _TapableTile(
+                      key: ctaKey,
+                      ui: ui,
+                      label: ctaLabel,
+                      icon: Icons.search_rounded,
+                      badge: 'Now',
+                      onTap: onSearchTap,
+                    ),
+                  ],
+                ),
+              ),
+              SizedBox(width: ui.gap(12)),
+              Expanded(
+                flex: 58,
+                child: _RecentsGrid(
+                  ui: ui,
+                  items: recentDestinations,
+                  onTap: onRecentTap,
+                  isDark: theme.brightness == Brightness.dark,
+                  crossAxisCount: crossAxisCount,
+                  emptyTrailing: gpsAction,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _MicroLayout extends StatelessWidget {
+  final UIScale ui;
+  final ThemeData theme;
+  final Key? ctaKey;
+  final String ctaLabel;
+  final List<Suggestion> recentDestinations;
+  final VoidCallback onSearchTap;
+  final void Function(Suggestion) onRecentTap;
+  final Widget gpsAction;
+
+  const _MicroLayout({
+    required this.ui,
+    required this.theme,
+    required this.ctaKey,
+    required this.ctaLabel,
+    required this.recentDestinations,
+    required this.onSearchTap,
+    required this.onRecentTap,
+    required this.gpsAction,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final showGpsAction = gpsAction is! SizedBox;
+
+    return ListView(
+      physics: const BouncingScrollPhysics(),
+      padding: EdgeInsets.zero,
+      children: [
+        _SheetHandle(ui: ui),
+        SizedBox(height: ui.gap(6)),
+        _TapableTile(
+          key: ctaKey,
+          ui: ui,
+          label: ctaLabel,
+          icon: Icons.search_rounded,
+          badge: 'Now',
+          onTap: onSearchTap,
+        ),
+        SizedBox(height: ui.gap(8)),
+        if (recentDestinations.isNotEmpty) ...[
+          _RecentsHeader(
+            ui: ui,
+            count: math.min(recentDestinations.length, 6),
+          ),
+          SizedBox(
+            height: ui.landscape ? ui.gap(46) : ui.gap(52),
+            child: ListView.separated(
+              scrollDirection: Axis.horizontal,
+              physics: const BouncingScrollPhysics(),
+              itemCount: math.min(recentDestinations.length, 6),
+              separatorBuilder: (_, __) => SizedBox(width: ui.gap(8)),
+              itemBuilder: (_, i) {
+                final item = recentDestinations[i];
+                return SizedBox(
+                  width: math.max(150, MediaQuery.of(context).size.width * 0.46),
+                  child: _MicroRecentTile(
+                    ui: ui,
+                    item: item,
+                    onTap: () {
+                      HapticFeedback.lightImpact();
+                      onRecentTap(item);
+                    },
+                  ),
+                );
+              },
+            ),
+          ),
+        ] else ...[
+          if (showGpsAction) gpsAction,
+        ],
+      ],
+    );
+  }
+}
+
+class _SheetHandle extends StatelessWidget {
+  final UIScale ui;
+
+  const _SheetHandle({required this.ui});
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Container(
+        width: ui.landscape ? 44 : 50,
+        height: 4,
+        decoration: BoxDecoration(
+          color: AppColors.textSecondary.withOpacity(0.22),
+          borderRadius: BorderRadius.circular(999),
+        ),
+      ),
+    );
+  }
+}
+
 class _TapableTile extends StatefulWidget {
-  final double s;
+  final UIScale ui;
   final String label;
   final IconData icon;
   final VoidCallback onTap;
@@ -263,7 +501,7 @@ class _TapableTile extends StatefulWidget {
 
   const _TapableTile({
     super.key,
-    required this.s,
+    required this.ui,
     required this.label,
     required this.icon,
     required this.onTap,
@@ -275,91 +513,105 @@ class _TapableTile extends StatefulWidget {
 }
 
 class _TapableTileState extends State<_TapableTile> {
-  bool _active = false;
-  bool _isProcessing = false;
+  bool _pressed = false;
+  bool _busy = false;
 
-  void _press() {
-    if (_isProcessing) return;
-    _isProcessing = true;
-    setState(() => _active = true);
+  Future<void> _handleTap() async {
+    if (_busy) return;
+
+    _busy = true;
+    if (mounted) {
+      setState(() => _pressed = true);
+    }
 
     HapticFeedback.selectionClick();
-    // Fire after this frame to avoid gesture reentrancy issues on overlays.
-    WidgetsBinding.instance.addPostFrameCallback((_) => widget.onTap());
 
-    Future.delayed(const Duration(milliseconds: 120), () {
-      if (!mounted) return;
-      setState(() => _active = false);
-      _isProcessing = false;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      widget.onTap();
     });
+
+    await Future<void>.delayed(const Duration(milliseconds: 100));
+
+    if (mounted) {
+      setState(() => _pressed = false);
+    }
+
+    _busy = false;
   }
 
   @override
   Widget build(BuildContext context) {
-    final h = math.max(44.0, 52 * widget.s);
+    final ui = widget.ui;
+    final theme = Theme.of(context);
+    final height = math.max(40.0, ui.landscape ? ui.gap(44) : ui.gap(50));
 
-    return Focus(
-      canRequestFocus: true,
-      child: Semantics(
-        button: true,
-        label: 'Search destination',
-        child: Material(
-          color: Theme.of(context).cardColor,
-          borderRadius: BorderRadius.circular(16 * widget.s),
-          child: InkWell(
-            onTap: _press,
-            borderRadius: BorderRadius.circular(16 * widget.s),
-            child: AnimatedScale(
-              scale: _active ? 0.96 : 1.0,
-              duration: const Duration(milliseconds: 100),
-              curve: Curves.easeOut,
-              child: Container(
-                height: h,
-                decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(16 * widget.s),
-                  border: Border.all(
-                    color: AppColors.mintBgLight.withOpacity(0.2),
-                    width: 1.2,
-                  ),
+    return Semantics(
+      button: true,
+      label: widget.label,
+      child: Material(
+        color: theme.cardColor,
+        borderRadius: BorderRadius.circular(ui.radius(16)),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(ui.radius(16)),
+          onTap: _handleTap,
+          child: AnimatedScale(
+            scale: _pressed ? 0.97 : 1.0,
+            duration: const Duration(milliseconds: 90),
+            curve: Curves.easeOut,
+            child: Container(
+              height: height,
+              padding: EdgeInsets.symmetric(horizontal: ui.inset(12)),
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(ui.radius(16)),
+                border: Border.all(
+                  color: AppColors.mintBgLight.withOpacity(0.22),
+                  width: 1.0,
                 ),
-                padding: EdgeInsets.symmetric(horizontal: 14 * widget.s),
-                child: Row(
-                  children: [
-                    Icon(widget.icon, size: 20 * widget.s),
-                    SizedBox(width: 10 * widget.s),
-                    Expanded(
+              ),
+              child: Row(
+                children: [
+                  Icon(
+                    widget.icon,
+                    size: ui.icon(18),
+                    color: AppColors.textPrimary.withOpacity(0.92),
+                  ),
+                  SizedBox(width: ui.gap(8)),
+                  Expanded(
+                    child: Text(
+                      widget.label,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: ui.font(13.5),
+                        fontWeight: FontWeight.w800,
+                        letterSpacing: -0.15,
+                        color: AppColors.textPrimary.withOpacity(0.92),
+                      ),
+                    ),
+                  ),
+                  if (widget.badge != null) ...[
+                    SizedBox(width: ui.gap(6)),
+                    Container(
+                      padding: EdgeInsets.symmetric(
+                        horizontal: ui.inset(6),
+                        vertical: ui.inset(3),
+                      ),
+                      decoration: BoxDecoration(
+                        color: AppColors.primary.withOpacity(0.10),
+                        borderRadius: BorderRadius.circular(ui.radius(6)),
+                      ),
                       child: Text(
-                        widget.label,
-                        overflow: TextOverflow.ellipsis,
+                        widget.badge!,
                         style: TextStyle(
-                          fontSize: 15 * widget.s,
-                          fontWeight: FontWeight.w800,
-                          letterSpacing: -0.2,
-                          color: AppColors.textPrimary.withOpacity(0.9),
+                          fontSize: ui.font(8.8),
+                          fontWeight: FontWeight.w900,
+                          color: AppColors.primary,
+                          letterSpacing: -0.1,
                         ),
                       ),
                     ),
-                    if (widget.badge != null)
-                      Container(
-                        padding: EdgeInsets.symmetric(
-                          horizontal: 7 * widget.s,
-                          vertical: 3 * widget.s,
-                        ),
-                        decoration: BoxDecoration(
-                          color: AppColors.primary.withOpacity(0.1),
-                          borderRadius: BorderRadius.circular(5 * widget.s),
-                        ),
-                        child: Text(
-                          widget.badge!,
-                          style: TextStyle(
-                            fontSize: 9 * widget.s,
-                            fontWeight: FontWeight.w800,
-                            color: AppColors.primary,
-                          ),
-                        ),
-                      ),
                   ],
-                ),
+                ],
               ),
             ),
           ),
@@ -369,54 +621,53 @@ class _TapableTileState extends State<_TapableTile> {
   }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Recents – List (portrait) & Grid (landscape)
-// ─────────────────────────────────────────────────────────────────────────────
-
 class _RecentsList extends StatelessWidget {
-  final double s;
+  final UIScale ui;
   final List<Suggestion> items;
   final void Function(Suggestion) onTap;
   final bool isDark;
-  final Widget? emptyTrailing;
+  final Widget emptyTrailing;
 
   const _RecentsList({
-    required this.s,
+    required this.ui,
     required this.items,
     required this.onTap,
     required this.isDark,
-    this.emptyTrailing,
+    required this.emptyTrailing,
   });
 
   @override
   Widget build(BuildContext context) {
     if (items.isEmpty) {
-      return _Empty(s: s, trailing: emptyTrailing);
+      return _Empty(ui: ui, trailing: emptyTrailing);
     }
 
-    final cnt = math.min(items.length, 6);
+    final count = math.min(items.length, 6);
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        _RecentsHeader(s: s, count: cnt),
+        _RecentsHeader(ui: ui, count: count),
         Expanded(
           child: RepaintBoundary(
             child: ListView.separated(
               physics: const BouncingScrollPhysics(),
               padding: EdgeInsets.zero,
-              itemCount: cnt,
-              separatorBuilder: (_, __) => SizedBox(height: 7 * s),
-              itemBuilder: (_, i) => _RecentTile(
-                key: ValueKey(items[i].placeId),
-                s: s,
-                item: items[i],
-                isDark: isDark,
-                onTap: () {
-                  HapticFeedback.lightImpact();
-                  onTap(items[i]);
-                },
-              ),
+              itemCount: count,
+              separatorBuilder: (_, __) => SizedBox(height: ui.gap(6)),
+              itemBuilder: (_, i) {
+                final item = items[i];
+                return _RecentTile(
+                  key: ValueKey(item.placeId),
+                  ui: ui,
+                  item: item,
+                  isDark: isDark,
+                  onTap: () {
+                    HapticFeedback.lightImpact();
+                    onTap(item);
+                  },
+                );
+              },
             ),
           ),
         ),
@@ -426,56 +677,59 @@ class _RecentsList extends StatelessWidget {
 }
 
 class _RecentsGrid extends StatelessWidget {
-  final double s;
+  final UIScale ui;
   final int crossAxisCount;
   final List<Suggestion> items;
   final void Function(Suggestion) onTap;
   final bool isDark;
-  final Widget? emptyTrailing;
+  final Widget emptyTrailing;
 
   const _RecentsGrid({
-    required this.s,
+    required this.ui,
     required this.items,
     required this.onTap,
     required this.isDark,
     required this.crossAxisCount,
-    this.emptyTrailing,
+    required this.emptyTrailing,
   });
 
   @override
   Widget build(BuildContext context) {
     if (items.isEmpty) {
-      return _Empty(s: s, trailing: emptyTrailing);
+      return _Empty(ui: ui, trailing: emptyTrailing);
     }
 
-    final cnt = math.min(items.length, 8);
+    final count = math.min(items.length, 8);
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        _RecentsHeader(s: s, count: cnt),
+        _RecentsHeader(ui: ui, count: count),
         Expanded(
           child: RepaintBoundary(
             child: GridView.builder(
               physics: const BouncingScrollPhysics(),
               padding: EdgeInsets.zero,
-              itemCount: cnt,
+              itemCount: count,
               gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
                 crossAxisCount: crossAxisCount,
-                crossAxisSpacing: 8 * s,
-                mainAxisSpacing: 8 * s,
-                childAspectRatio: 3.6,
+                crossAxisSpacing: ui.gap(8),
+                mainAxisSpacing: ui.gap(8),
+                childAspectRatio: ui.tiny ? 3.0 : 3.4,
               ),
-              itemBuilder: (_, i) => _RecentTile(
-                key: ValueKey(items[i].placeId),
-                s: s,
-                item: items[i],
-                isDark: isDark,
-                onTap: () {
-                  HapticFeedback.lightImpact();
-                  onTap(items[i]);
-                },
-              ),
+              itemBuilder: (_, i) {
+                final item = items[i];
+                return _RecentTile(
+                  key: ValueKey(item.placeId),
+                  ui: ui,
+                  item: item,
+                  isDark: isDark,
+                  onTap: () {
+                    HapticFeedback.lightImpact();
+                    onTap(item);
+                  },
+                );
+              },
             ),
           ),
         ),
@@ -485,33 +739,54 @@ class _RecentsGrid extends StatelessWidget {
 }
 
 class _RecentsHeader extends StatelessWidget {
-  final double s;
+  final UIScale ui;
   final int count;
 
-  const _RecentsHeader({required this.s, required this.count});
+  const _RecentsHeader({
+    required this.ui,
+    required this.count,
+  });
 
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: EdgeInsets.only(left: 2 * s, bottom: 10 * s),
+      padding: EdgeInsets.only(left: ui.gap(2), bottom: ui.gap(8)),
       child: Row(
         children: [
           Container(
-            padding: EdgeInsets.all(5 * s),
+            padding: EdgeInsets.all(ui.gap(4)),
             decoration: BoxDecoration(
-              color: AppColors.primary.withOpacity(0.1),
-              borderRadius: BorderRadius.circular(6 * s),
+              color: AppColors.primary.withOpacity(0.10),
+              borderRadius: BorderRadius.circular(ui.radius(6)),
             ),
-            child: Icon(Icons.history_rounded, size: 12 * s, color: AppColors.primary),
+            child: Icon(
+              Icons.history_rounded,
+              size: ui.icon(12),
+              color: AppColors.primary,
+            ),
           ),
-          SizedBox(width: 8 * s),
-          Text('Recent',
+          SizedBox(width: ui.gap(7)),
+          Expanded(
+            child: Text(
+              'Recent',
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
               style: TextStyle(
-                  fontSize: 12 * s, fontWeight: FontWeight.w900, letterSpacing: -0.2)),
-          const Spacer(),
-          Text('$count',
-              style: TextStyle(
-                  fontSize: 11 * s, fontWeight: FontWeight.w800, color: AppColors.primary)),
+                fontSize: ui.font(11.8),
+                fontWeight: FontWeight.w900,
+                letterSpacing: -0.2,
+              ),
+            ),
+          ),
+          SizedBox(width: ui.gap(6)),
+          Text(
+            '$count',
+            style: TextStyle(
+              fontSize: ui.font(10.5),
+              fontWeight: FontWeight.w800,
+              color: AppColors.primary,
+            ),
+          ),
         ],
       ),
     );
@@ -519,14 +794,14 @@ class _RecentsHeader extends StatelessWidget {
 }
 
 class _RecentTile extends StatelessWidget {
-  final double s;
+  final UIScale ui;
   final Suggestion item;
   final bool isDark;
   final VoidCallback onTap;
 
   const _RecentTile({
     super.key,
-    required this.s,
+    required this.ui,
     required this.item,
     required this.isDark,
     required this.onTap,
@@ -534,39 +809,50 @@ class _RecentTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final hasSecondary = item.secondaryText.isNotEmpty;
+
     return Semantics(
       button: true,
       label: 'Recent destination: ${item.mainText}',
       child: Material(
         color: Colors.transparent,
         child: InkWell(
-          borderRadius: BorderRadius.circular(12 * s),
+          borderRadius: BorderRadius.circular(ui.radius(12)),
           onTap: onTap,
           child: Container(
-            padding: EdgeInsets.symmetric(horizontal: 12 * s, vertical: 10 * s),
+            constraints: BoxConstraints(
+              minHeight: ui.landscape ? 42 : 48,
+            ),
+            padding: EdgeInsets.symmetric(
+              horizontal: ui.inset(10),
+              vertical: ui.inset(ui.landscape ? 7 : 9),
+            ),
             decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(12 * s),
+              borderRadius: BorderRadius.circular(ui.radius(12)),
               border: Border.all(
                 color: isDark
                     ? Colors.white.withOpacity(0.08)
-                    : AppColors.mintBgLight.withOpacity(0.2),
+                    : AppColors.mintBgLight.withOpacity(0.20),
                 width: 1,
               ),
             ),
             child: Row(
               children: [
                 Container(
-                  width: 32 * s,
-                  height: 32 * s,
+                  width: ui.gap(30),
+                  height: ui.gap(30),
                   alignment: Alignment.center,
                   decoration: BoxDecoration(
-                    borderRadius: BorderRadius.circular(8 * s),
+                    borderRadius: BorderRadius.circular(ui.radius(8)),
                     color: AppColors.mintBgLight.withOpacity(0.15),
                   ),
-                  child: Icon(Icons.location_on_rounded,
-                      size: 16 * s, color: AppColors.textPrimary),
+                  child: Icon(
+                    Icons.location_on_rounded,
+                    size: ui.icon(15),
+                    color: AppColors.textPrimary,
+                  ),
                 ),
-                SizedBox(width: 11 * s),
+                SizedBox(width: ui.gap(9)),
                 Expanded(
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
@@ -577,30 +863,33 @@ class _RecentTile extends StatelessWidget {
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: TextStyle(
-                          fontSize: 13 * s,
+                          fontSize: ui.font(12.2),
                           fontWeight: FontWeight.w700,
                           letterSpacing: -0.1,
                         ),
                       ),
-                      if (item.secondaryText.isNotEmpty) ...[
-                        SizedBox(height: 2 * s),
+                      if (hasSecondary) ...[
+                        SizedBox(height: ui.gap(1.5)),
                         Text(
                           item.secondaryText,
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: TextStyle(
-                            fontSize: 11 * s,
+                            fontSize: ui.font(10.3),
                             fontWeight: FontWeight.w500,
-                            color: AppColors.textSecondary.withOpacity(0.7),
+                            color: AppColors.textSecondary.withOpacity(0.72),
                           ),
                         ),
                       ],
                     ],
                   ),
                 ),
-                SizedBox(width: 8 * s),
-                Icon(Icons.chevron_right_rounded,
-                    size: 16 * s, color: AppColors.textSecondary.withOpacity(0.5)),
+                SizedBox(width: ui.gap(4)),
+                Icon(
+                  Icons.chevron_right_rounded,
+                  size: ui.icon(15),
+                  color: AppColors.textSecondary.withOpacity(0.52),
+                ),
               ],
             ),
           ),
@@ -610,44 +899,119 @@ class _RecentTile extends StatelessWidget {
   }
 }
 
-class _Empty extends StatelessWidget {
-  final double s;
-  final Widget? trailing;
+class _MicroRecentTile extends StatelessWidget {
+  final UIScale ui;
+  final Suggestion item;
+  final VoidCallback onTap;
 
-  const _Empty({required this.s, this.trailing});
+  const _MicroRecentTile({
+    super.key,
+    required this.ui,
+    required this.item,
+    required this.onTap,
+  });
 
   @override
   Widget build(BuildContext context) {
+    return Material(
+      color: Theme.of(context).cardColor,
+      borderRadius: BorderRadius.circular(ui.radius(12)),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(ui.radius(12)),
+        onTap: onTap,
+        child: Container(
+          padding: EdgeInsets.symmetric(
+            horizontal: ui.inset(10),
+            vertical: ui.inset(8),
+          ),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(ui.radius(12)),
+            border: Border.all(
+              color: AppColors.mintBgLight.withOpacity(0.20),
+              width: 1,
+            ),
+          ),
+          child: Row(
+            children: [
+              Icon(
+                Icons.history_rounded,
+                size: ui.icon(14),
+                color: AppColors.primary,
+              ),
+              SizedBox(width: ui.gap(7)),
+              Expanded(
+                child: Text(
+                  item.mainText.isNotEmpty ? item.mainText : item.description,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: ui.font(11.8),
+                    fontWeight: FontWeight.w700,
+                    letterSpacing: -0.1,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _Empty extends StatelessWidget {
+  final UIScale ui;
+  final Widget trailing;
+
+  const _Empty({
+    required this.ui,
+    required this.trailing,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final hasTrailing = trailing is! SizedBox;
+
     return Center(
       child: Padding(
-        padding: EdgeInsets.symmetric(horizontal: 24 * s),
+        padding: EdgeInsets.symmetric(horizontal: ui.inset(20)),
         child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
+          mainAxisSize: MainAxisSize.min,
           children: [
             Container(
-              padding: EdgeInsets.all(12 * s),
+              padding: EdgeInsets.all(ui.inset(10)),
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
                 color: AppColors.primary.withOpacity(0.08),
               ),
-              child: Icon(Icons.explore_off_rounded,
-                  size: 24 * s, color: AppColors.primary.withOpacity(0.6)),
-            ),
-            SizedBox(height: 12 * s),
-            Text('No Recent Trips',
-                style: TextStyle(fontSize: 13 * s, fontWeight: FontWeight.w900)),
-            SizedBox(height: 4 * s),
-            Text(
-              'Trips appear here',
-              style: TextStyle(
-                fontSize: 10 * s,
-                color: AppColors.textSecondary.withOpacity(0.7),
+              child: Icon(
+                Icons.explore_off_rounded,
+                size: ui.icon(22),
+                color: AppColors.primary.withOpacity(0.60),
               ),
             ),
-            if (trailing != null) ...[
-              SizedBox(height: 12 * s),
-              trailing!,
-            ]
+            SizedBox(height: ui.gap(10)),
+            Text(
+              'No Recent Trips',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                fontSize: ui.font(12.5),
+                fontWeight: FontWeight.w900,
+              ),
+            ),
+            SizedBox(height: ui.gap(4)),
+            Text(
+              'Trips appear here',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                fontSize: ui.font(10),
+                color: AppColors.textSecondary.withOpacity(0.70),
+              ),
+            ),
+            if (hasTrailing) ...[
+              SizedBox(height: ui.gap(10)),
+              trailing,
+            ],
           ],
         ),
       ),

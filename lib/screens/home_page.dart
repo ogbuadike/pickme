@@ -49,6 +49,7 @@ import '../services/perf_profile.dart';
 import '../services/ride_market_service.dart';
 import 'state/home_models.dart';
 import '../models/geo_point.dart';
+import '../ui/ui_scale.dart';
 
 enum MovementMode { stationary, pedestrian, vehicle }
 
@@ -157,6 +158,11 @@ class _HomePageState extends State<HomePage>
 
   double _sheetHeight = 0;
   EdgeInsets _mapPadding = EdgeInsets.zero;
+
+  Size _cachedScreenSize = const Size(390, 844);
+  EdgeInsets _cachedSafePadding = EdgeInsets.zero;
+  Orientation _cachedOrientation = Orientation.portrait;
+  double _cachedUiScale = 1.0;
 
   late SharedPreferences _prefs;
   late ApiClient _api;
@@ -382,8 +388,46 @@ class _HomePageState extends State<HomePage>
   void _logLocationDiagnostic(String message) =>
       _dbg('[GPS-DIAGNOSTICS] $message');
 
-  double _s(BuildContext c) {
-    final mq = MediaQuery.of(c);
+  MediaQueryData _safeMediaQuery() {
+    if (mounted) {
+      final mq = MediaQuery.maybeOf(context);
+      if (mq != null) return mq;
+    }
+
+    final views = WidgetsBinding.instance.platformDispatcher.views;
+    if (views.isNotEmpty) {
+      return MediaQueryData.fromView(views.first);
+    }
+
+    return const MediaQueryData(size: Size(390, 844));
+  }
+
+  double _scaleFromUi(UIScale ui) {
+    double scale = (ui.shortest / 390.0).clamp(0.58, 1.12);
+
+    if (ui.tiny) scale *= 0.88;
+    if (ui.compact) scale *= 0.94;
+    if (ui.landscape && !ui.tablet) scale *= 0.86;
+
+    final aspect = ui.longest / ui.shortest;
+    if (aspect > 2.0) scale *= 0.88;
+    if (aspect < 1.45) scale *= 1.04;
+
+    return scale.clamp(0.56, 1.12);
+  }
+
+  void _cacheUiMetrics(UIScale ui, MediaQueryData mq) {
+    _cachedScreenSize = mq.size;
+    _cachedSafePadding = mq.padding;
+    _cachedOrientation = mq.orientation;
+    _cachedUiScale = _scaleFromUi(ui);
+  }
+
+  double _s(BuildContext c) => _scaleFromUi(UIScale.of(c));
+
+
+  /** double _s(BuildContext c) {
+    final mq = MediaQuery.of(c);_applyMapPadding
     final size = mq.size;
     final shortest = math.min(size.width, size.height);
     final longest = math.max(size.width, size.height);
@@ -393,7 +437,7 @@ class _HomePageState extends State<HomePage>
     if (aspect > 2.0) scale *= 0.90;
     if (aspect < 1.5) scale *= 1.08;
     return scale;
-  }
+  } **/
 
   double _effectiveBottomNavH() {
     if (_marketOpen) return 0;
@@ -1130,51 +1174,46 @@ class _HomePageState extends State<HomePage>
   void _applyMapPadding() {
     if (!mounted) return;
 
-    final mq = MediaQuery.of(context);
+    final mq = _safeMediaQuery();
+    final ui = UIScale.of(context);
     final size = mq.size;
     final orientation = mq.orientation;
     final safeArea = mq.padding;
 
-    // Compute dynamic safe areas
-    final topPad = safeArea.top + (kHeaderVisualH * _s(context));
+    final topPad = safeArea.top + (kHeaderVisualH * _scaleFromUi(ui));
 
-    // Smart bottom padding based on orientation & sheet height
     final baseBottomPad = _sheetHeight + _effectiveBottomNavH();
 
-    // Landscape: reduce vertical padding, increase horizontal awareness
     final bottomPad = orientation == Orientation.landscape
-        ? (baseBottomPad * 0.72).clamp(12.0, 280.0)
-        : (baseBottomPad + 12.0).clamp(24.0, 560.0);
+        ? (baseBottomPad * (ui.tablet ? 0.78 : 0.68)).clamp(10.0, 260.0)
+        : (baseBottomPad + ui.gap(ui.compact ? 8 : 12)).clamp(20.0, 520.0);
 
-    // Responsive horizontal padding (screen-aware)
     final minScreenDim = math.min(size.width, size.height);
-    final hPad = minScreenDim < 400 ? 4.0 : (minScreenDim < 600 ? 6.0 : 8.0);
+    final hPad = minScreenDim < 360
+        ? 4.0
+        : minScreenDim < 480
+        ? 6.0
+        : 8.0;
 
     if (!mounted) return;
     setState(() {
-      _mapPadding = EdgeInsets.fromLTRB(
-        hPad,
-        topPad,
-        hPad,
-        bottomPad,
-      );
+      _mapPadding = EdgeInsets.fromLTRB(hPad, topPad, hPad, bottomPad);
     });
   }
 
   /// Enhanced effective bounds padding with context awareness
   double _effectiveBoundsPaddingV2(double basePad) {
-    final mq = MediaQuery.of(context);
+    final mq = _safeMediaQuery();
+    final minSide = math.min(mq.size.width, mq.size.height);
+
     final extraV = math.max(_mapPadding.top, _mapPadding.bottom);
     final extraH = math.max(_mapPadding.left, _mapPadding.right);
     final extra = math.max(extraV, extraH);
 
-    // Add safe margin for UI elements
-    final finalPad = (basePad + extra + 16.0).clamp(
+    return (basePad + extra + 16.0).clamp(
       basePad,
-      (math.min(mq.size.width, mq.size.height) * 0.35).clamp(basePad, 600.0),
+      (minSide * 0.35).clamp(basePad, 600.0),
     );
-
-    return finalPad;
   }
 
   // ============================================================================
@@ -1191,7 +1230,7 @@ class _HomePageState extends State<HomePage>
     _camMode = _CamMode.overview;
     _rotateWithHeading = false;
 
-    final mq = MediaQuery.of(context);
+    //final mq = MediaQuery.of(context);
     final pad = _effectiveBoundsPaddingV2(basePadding);
 
     // Multi-tier retry strategy with exponential backoff
@@ -1272,15 +1311,16 @@ class _HomePageState extends State<HomePage>
     required double zoom,
     required double tilt,
   }) async {
-    if (_map == null) return;
+    if (!mounted || _map == null) return;
 
     final now = DateTime.now();
+    final isLandscape = _cachedScreenSize.width > _cachedScreenSize.height;
 
-    // Adaptive timing: slower on landscape (more content visible)
-    final mq = MediaQuery.of(context);
-    final isLandscape = mq.orientation == Orientation.landscape;
     final minMoveInterval = isLandscape
-        ? Duration(milliseconds: (Perf.I.camMoveMin.inMilliseconds * 1.2).toInt())
+        ? Duration(
+      milliseconds:
+      (Perf.I.camMoveMin.inMilliseconds * 1.2).round(),
+    )
         : Perf.I.camMoveMin;
 
     if (now.difference(_lastCamMove) < minMoveInterval) return;
@@ -1298,9 +1338,7 @@ class _HomePageState extends State<HomePage>
         ),
       );
       _lastCamTarget = target;
-    } catch (_) {
-      // Silent fail - preserves current camera state
-    }
+    } catch (_) {}
   }
 
   // ============================================================================
@@ -3963,20 +4001,23 @@ class _HomePageState extends State<HomePage>
   @override
   Widget build(BuildContext context) {
     final mq = MediaQuery.of(context);
-    final s = _s(context);
+    final ui = UIScale.of(context);
+    _cacheUiMetrics(ui, mq);
+
+    final s = _scaleFromUi(ui);
     final safeTop = mq.padding.top;
     final orientation = mq.orientation;
 
-    // Handle orientation changes with smart refit
     if (_lastOrientation != orientation) {
       _lastOrientation = orientation;
       WidgetsBinding.instance.addPostFrameCallback((_) {
         _scheduleMapPaddingUpdate();
 
-        // Auto-refit route on orientation change
         if (_routePts.isNotEmpty && _camMode == _CamMode.overview) {
-          Future.delayed(const Duration(milliseconds: 240), () {
-            if (mounted) _fitCurrentRouteToViewportV2(waitForLayout: true);
+          Future.delayed(const Duration(milliseconds: 220), () {
+            if (mounted) {
+              _fitCurrentRouteToViewportV2(waitForLayout: true);
+            }
           });
         }
       });
@@ -3984,19 +4025,27 @@ class _HomePageState extends State<HomePage>
 
     final bottomNavH = _effectiveBottomNavH();
 
-    // Landscape-aware FAB positioning
-    final fabBottom = orientation == Orientation.landscape
-        ? (_sheetHeight + math.max(bottomNavH * 0.6, 8.0) + 12)
-        .clamp(60.0, 320.0)
-        : (_sheetHeight + bottomNavH + 16).clamp(96.0, 520.0);
+    final fabBottom = ui.landscape
+        ? (_sheetHeight + math.max(bottomNavH * 0.45, ui.gap(8)) + ui.gap(10))
+        .clamp(ui.gap(54), ui.height * 0.42)
+        : (_sheetHeight + bottomNavH + ui.gap(ui.compact ? 10 : 16))
+        .clamp(ui.gap(84), ui.height * 0.62);
 
-    final fabRight = orientation == Orientation.landscape
-        ? (14 * s).clamp(8.0, 32.0)
-        : (14 * s).clamp(12.0, 28.0);
+    final fabRight = ui.landscape
+        ? ui.inset(ui.tiny ? 8 : 12).clamp(8.0, 24.0)
+        : ui.inset(14).clamp(12.0, 24.0);
 
     final hasSummary = _distanceText != null && _durationText != null;
-    final bottomSheetMaxH = mq.size.height *
-        (orientation == Orientation.landscape ? 0.75 : 0.60);
+
+    final bottomSheetMaxH = ui.landscape
+        ? mq.size.height * (ui.tablet ? 0.80 : 0.74)
+        : mq.size.height * (ui.tiny ? 0.72 : (ui.compact ? 0.66 : 0.60));
+
+    final summaryMaxWidth = ui.tablet
+        ? 920.0
+        : ui.landscape
+        ? mq.size.width * 0.78
+        : mq.size.width - 24;
 
     return Scaffold(
       key: _scaffoldKey,
@@ -4039,29 +4088,44 @@ class _HomePageState extends State<HomePage>
           ),
           if (!_isConnected)
             Positioned(
-              top: safeTop + (kHeaderVisualH * s) + 8,
-              left: 12 * s,
-              right: 12 * s,
-              child: Material(
-                color: Colors.orange.shade700,
-                borderRadius: BorderRadius.circular(8 * s),
-                elevation: 6,
-                child: Padding(
-                  padding: EdgeInsets.symmetric(horizontal: 12 * s, vertical: 8 * s),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(Icons.wifi_off, size: 16 * s, color: Colors.white),
-                      SizedBox(width: 8 * s),
-                      Text(
-                        'Connection issue. Retrying...',
-                        style: TextStyle(
-                          color: Colors.white,
-                          fontSize: (12 * s).clamp(11.0, 14.0),
-                          fontWeight: FontWeight.w700,
-                        ),
+              top: safeTop + (kHeaderVisualH * s) + ui.gap(8),
+              left: ui.inset(10),
+              right: ui.inset(10),
+              child: Center(
+                child: ConstrainedBox(
+                  constraints: BoxConstraints(maxWidth: summaryMaxWidth),
+                  child: Material(
+                    color: Colors.orange.shade700,
+                    borderRadius: BorderRadius.circular(ui.radius(10)),
+                    elevation: 6,
+                    child: Padding(
+                      padding: EdgeInsets.symmetric(
+                        horizontal: ui.inset(12),
+                        vertical: ui.inset(8),
                       ),
-                    ],
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(
+                            Icons.wifi_off,
+                            size: ui.icon(16),
+                            color: Colors.white,
+                          ),
+                          SizedBox(width: ui.gap(8)),
+                          Expanded(
+                            child: Text(
+                              'Connection issue. Retrying...',
+                              style: TextStyle(
+                                color: Colors.white,
+                                fontSize: ui.font(12),
+                                fontWeight: FontWeight.w700,
+                              ),
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
                   ),
                 ),
               ),
@@ -4103,68 +4167,94 @@ class _HomePageState extends State<HomePage>
           ),
           if (hasSummary)
             Positioned(
-              top: safeTop + (kHeaderVisualH * s) + 6,
-              left: 12,
-              right: 12,
+              top: safeTop + (kHeaderVisualH * s) + ui.gap(6),
+              left: ui.inset(10),
+              right: ui.inset(10),
               child: Center(
-                child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
-                  decoration: BoxDecoration(
-                    color: Theme.of(context).cardColor.withOpacity(0.97),
-                    borderRadius: BorderRadius.circular(16),
-                    border: Border.all(
-                      color: AppColors.mintBgLight.withOpacity(.38),
-                      width: 1.2,
+                child: ConstrainedBox(
+                  constraints: BoxConstraints(maxWidth: summaryMaxWidth),
+                  child: Container(
+                    padding: EdgeInsets.symmetric(
+                      horizontal: ui.inset(ui.compact ? 10 : 14),
+                      vertical: ui.inset(ui.compact ? 7 : 9),
                     ),
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.black.withOpacity(.15),
-                        blurRadius: 12,
-                        offset: const Offset(0, 6),
-                      )
-                    ],
-                  ),
-                  child: Wrap(
-                    alignment: WrapAlignment.center,
-                    spacing: 12,
-                    runSpacing: 6,
-                    children: [
-                      Row(mainAxisSize: MainAxisSize.min, children: const [
-                        Icon(Icons.schedule_rounded, size: 17),
-                        SizedBox(width: 6),
-                      ]),
-                      Text(_durationText!,
-                          style: const TextStyle(fontWeight: FontWeight.w800)),
-                      Container(
-                        height: 16,
-                        width: 1,
-                        color: AppColors.mintBgLight.withOpacity(.5),
+                    decoration: BoxDecoration(
+                      color: Theme.of(context).cardColor.withOpacity(0.97),
+                      borderRadius: BorderRadius.circular(ui.radius(16)),
+                      border: Border.all(
+                        color: AppColors.mintBgLight.withOpacity(.38),
+                        width: 1.2,
                       ),
-                      Row(mainAxisSize: MainAxisSize.min, children: const [
-                        Icon(Icons.straighten_rounded, size: 17),
-                        SizedBox(width: 6),
-                      ]),
-                      Text(_distanceText!,
-                          style: const TextStyle(fontWeight: FontWeight.w800)),
-                      if (_arrivalTime != null) ...[
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withOpacity(.15),
+                          blurRadius: ui.reduceFx ? 8 : 12,
+                          offset: const Offset(0, 6),
+                        ),
+                      ],
+                    ),
+                    child: Wrap(
+                      alignment: WrapAlignment.center,
+                      crossAxisAlignment: WrapCrossAlignment.center,
+                      spacing: ui.gap(10),
+                      runSpacing: ui.gap(6),
+                      children: [
+                        Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(Icons.schedule_rounded, size: ui.icon(16)),
+                            SizedBox(width: ui.gap(6)),
+                            Text(
+                              _durationText!,
+                              style: TextStyle(
+                                fontWeight: FontWeight.w800,
+                                fontSize: ui.font(12.5),
+                              ),
+                            ),
+                          ],
+                        ),
                         Container(
-                          height: 16,
+                          height: ui.gap(16),
                           width: 1,
                           color: AppColors.mintBgLight.withOpacity(.5),
                         ),
                         Row(
                           mainAxisSize: MainAxisSize.min,
                           children: [
-                            const Icon(Icons.flag_rounded, size: 17),
-                            const SizedBox(width: 6),
+                            Icon(Icons.straighten_rounded, size: ui.icon(16)),
+                            SizedBox(width: ui.gap(6)),
                             Text(
-                              'Arrive ${DateFormat('h:mm a').format(_arrivalTime!)}',
-                              style: const TextStyle(fontWeight: FontWeight.w800),
+                              _distanceText!,
+                              style: TextStyle(
+                                fontWeight: FontWeight.w800,
+                                fontSize: ui.font(12.5),
+                              ),
                             ),
                           ],
                         ),
+                        if (_arrivalTime != null) ...[
+                          Container(
+                            height: ui.gap(16),
+                            width: 1,
+                            color: AppColors.mintBgLight.withOpacity(.5),
+                          ),
+                          Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(Icons.flag_rounded, size: ui.icon(16)),
+                              SizedBox(width: ui.gap(6)),
+                              Text(
+                                'Arrive ${DateFormat('h:mm a').format(_arrivalTime!)}',
+                                style: TextStyle(
+                                  fontWeight: FontWeight.w800,
+                                  fontSize: ui.font(12.5),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ],
                       ],
-                    ],
+                    ),
                   ),
                 ),
               ),
@@ -4256,7 +4346,7 @@ class _HomePageState extends State<HomePage>
               opacity: _overlayFadeAnim,
               child: AutoOverlay(
                 safeTop: safeTop,
-                bottomPadding: bottomNavH + 12,
+                bottomPadding: bottomNavH + ui.gap(12),
                 autoStatus: _autoStatus,
                 autoError: _autoError,
                 isTyping: _isTyping,

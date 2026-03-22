@@ -251,6 +251,29 @@ class _RideMarketSheetState extends State<RideMarketSheet> {
     return u;
   }
 
+  bool _hasPrice(RideNearbyDriver d) {
+    return d.estimatedTotal > 0 || d.pricePerKm > 0 || d.baseFare > 0;
+  }
+
+  bool _hasImage(RideNearbyDriver d) {
+    return d.imagesEffective.isNotEmpty || d.carImageUrl.trim().isNotEmpty;
+  }
+
+  bool _hasContactData(RideNearbyDriver d) {
+    return d.phone.trim().isNotEmpty || d.nin.trim().isNotEmpty;
+  }
+
+  bool _hasPerformanceData(RideNearbyDriver d) {
+    return d.completedTrips > 0 || d.reviewsCount > 0 || d.totalTrips > 0;
+  }
+
+  bool _hasProfileData(RideNearbyDriver d) {
+    return d.rank.trim().isNotEmpty ||
+        d.vehicleDescription.trim().isNotEmpty ||
+        d.avatarUrl.trim().isNotEmpty ||
+        d.carPlate.trim().isNotEmpty;
+  }
+
   RideNearbyDriver _driverVM(dynamic raw) {
     if (raw is DriverCar) {
       final d = raw as dynamic;
@@ -282,6 +305,23 @@ class _RideMarketSheetState extends State<RideMarketSheet> {
       String carPlate = '';
       try {
         carPlate = (d.carPlate ?? d.car_plate ?? d.plate ?? '').toString();
+      } catch (_) {}
+
+      String vehicleDescription = '';
+      try {
+        vehicleDescription =
+            (d.vehicleDescription ?? d.vehicle_description ?? '').toString();
+      } catch (_) {}
+
+      String phone = '';
+      try {
+        phone = (d.phone ?? d.phone_number ?? d.tel ?? d.mobile ?? '')
+            .toString();
+      } catch (_) {}
+
+      String nin = '';
+      try {
+        nin = (d.nin ?? d.national_id ?? d.nationalId ?? '').toString();
       } catch (_) {}
 
       final currency = (() {
@@ -327,6 +367,46 @@ class _RideMarketSheetState extends State<RideMarketSheet> {
         }
       })();
 
+      final completedTrips = (() {
+        try {
+          return _num(d.completedTrips ?? d.completed_trips, 0).toInt();
+        } catch (_) {
+          return 0;
+        }
+      })();
+
+      final cancelledTrips = (() {
+        try {
+          return _num(d.cancelledTrips ?? d.cancelled_trips, 0).toInt();
+        } catch (_) {
+          return 0;
+        }
+      })();
+
+      final incompleteTrips = (() {
+        try {
+          return _num(d.incompleteTrips ?? d.incomplete_trips, 0).toInt();
+        } catch (_) {
+          return 0;
+        }
+      })();
+
+      final reviewsCount = (() {
+        try {
+          return _num(d.reviewsCount ?? d.reviews_count, 0).toInt();
+        } catch (_) {
+          return 0;
+        }
+      })();
+
+      final totalTrips = (() {
+        try {
+          return _num(d.totalTrips ?? d.total_trips, 0).toInt();
+        } catch (_) {
+          return 0;
+        }
+      })();
+
       List<String> images = const <String>[];
       try {
         final v = d.vehicleImages ?? d.vehicle_images;
@@ -355,9 +435,17 @@ class _RideMarketSheetState extends State<RideMarketSheet> {
             .map(_fixUrl)
             .where((x) => x.isNotEmpty)
             .toList(growable: false),
+        vehicleDescription: vehicleDescription,
         carImageUrl: _fixUrl(carImg),
         avatarUrl: _fixUrl(avatarUrl),
+        phone: phone,
+        nin: nin,
         rank: rank,
+        completedTrips: completedTrips,
+        cancelledTrips: cancelledTrips,
+        incompleteTrips: incompleteTrips,
+        reviewsCount: reviewsCount,
+        totalTrips: totalTrips,
         currency: currency,
         pricePerKm: pricePerKm,
         baseFare: baseFare,
@@ -389,9 +477,19 @@ class _RideMarketSheetState extends State<RideMarketSheet> {
             .map(_fixUrl)
             .where((x) => x.isNotEmpty)
             .toList(growable: false),
+        vehicleDescription: (m['vehicle_description'] ?? '').toString(),
         carImageUrl: _fixUrl((m['car_image_url'] ?? '').toString()),
         avatarUrl: _fixUrl((m['avatar_url'] ?? '').toString()),
+        phone: (m['phone'] ?? m['phone_number'] ?? m['tel'] ?? m['mobile'] ?? '')
+            .toString(),
+        nin: (m['nin'] ?? m['national_id'] ?? m['nationalId'] ?? '')
+            .toString(),
         rank: (m['rank'] ?? '').toString(),
+        completedTrips: _num(m['completed_trips'], 0).toInt(),
+        cancelledTrips: _num(m['cancelled_trips'], 0).toInt(),
+        incompleteTrips: _num(m['incomplete_trips'], 0).toInt(),
+        reviewsCount: _num(m['reviews_count'], 0).toInt(),
+        totalTrips: _num(m['total_trips'], 0).toInt(),
         currency: (m['currency'] ?? 'NGN').toString(),
         pricePerKm: _num(m['price_per_km'], 0).toDouble(),
         baseFare: _num(m['base_fare'], 0).toDouble(),
@@ -454,19 +552,6 @@ class _RideMarketSheetState extends State<RideMarketSheet> {
     if (c5 != 0) return c5;
 
     return a.id.compareTo(b.id);
-  }
-
-  bool _hasPrice(RideNearbyDriver d) {
-    if (d.estimatedTotal > 0) return true;
-    if (d.pricePerKm > 0) return true;
-    if (d.baseFare > 0) return true;
-    return false;
-  }
-
-  bool _hasImage(RideNearbyDriver d) {
-    if (d.imagesEffective.isNotEmpty) return true;
-    if (d.carImageUrl.trim().isNotEmpty) return true;
-    return false;
   }
 
   void _resetStable({bool alsoClearSelection = false}) {
@@ -535,8 +620,17 @@ class _RideMarketSheetState extends State<RideMarketSheet> {
         final needImage = !_hasImage(old) && _hasImage(fresh);
         final needRating =
         (_safeRating(old.rating) <= 0 && _safeRating(fresh.rating) > 0);
+        final needContact = !_hasContactData(old) && _hasContactData(fresh);
+        final needPerformance =
+            !_hasPerformanceData(old) && _hasPerformanceData(fresh);
+        final needProfile = !_hasProfileData(old) && _hasProfileData(fresh);
 
-        if (needPrice || needImage || needRating) {
+        if (needPrice ||
+            needImage ||
+            needRating ||
+            needContact ||
+            needPerformance ||
+            needProfile) {
           updated.add(fresh);
           changed = true;
         } else {
@@ -550,7 +644,9 @@ class _RideMarketSheetState extends State<RideMarketSheet> {
 
     final allGood = updated.isNotEmpty &&
         updated.every((d) => _hasPrice(d) || _tripKm <= 0) &&
-        updated.every(_hasImage);
+        updated.every(_hasImage) &&
+        updated.every(_hasContactData) &&
+        updated.every(_hasPerformanceData);
 
     if (allGood) _fullyFrozen = true;
 
@@ -1585,7 +1681,8 @@ class _RideMarketSheetState extends State<RideMarketSheet> {
     return <String, dynamic>{
       'id': 'driver-${d.id}',
       'provider': 'PickMe',
-      'category': d.vehicleType.toLowerCase().contains('bike') ? 'Bike' : 'Car',
+      'category':
+      d.vehicleType.toLowerCase().contains('bike') ? 'Bike' : 'Car',
       'vehicle_type': d.vehicleType,
       'seats': d.seats,
       'eta_min': d.etaMin,
@@ -1717,7 +1814,9 @@ class _RouteTreeAligned extends StatelessWidget {
             child: Padding(
               padding: const EdgeInsets.symmetric(vertical: 2),
               child: CustomPaint(
-                painter: _DottedStemPainter(color: cs.onSurface.withOpacity(0.22)),
+                painter: _DottedStemPainter(
+                  color: cs.onSurface.withOpacity(0.22),
+                ),
               ),
             ),
           ),

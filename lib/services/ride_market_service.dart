@@ -236,50 +236,81 @@ class DriverCar {
   }
 
   factory DriverCar.fromJson(Map<String, dynamic> m) {
+    String pickString(List<String> keys) {
+      for (final k in keys) {
+        final v = m[k];
+        final s = v?.toString().trim() ?? '';
+        if (s.isNotEmpty) return s;
+      }
+      return '';
+    }
+
+    int? pickInt(List<String> keys) {
+      for (final k in keys) {
+        final v = _asIntNullable(m[k]);
+        if (v != null) return v;
+      }
+      return null;
+    }
+
+    double? pickDouble(List<String> keys) {
+      for (final k in keys) {
+        final v = _asDouble(m[k]);
+        if (v != null) return v;
+      }
+      return null;
+    }
+
     final lat = _asDouble0(m['lat'] ?? m['latitude']);
     final lng = _asDouble0(m['lng'] ?? m['longitude']);
     final hdg = _asDouble0(m['heading'] ?? m['bearing']);
 
-    final vt = (m['vehicle_type'] ?? m['vehicle'] ?? m['type'])?.toString();
+    final vt = pickString(['vehicle_type', 'vehicle', 'type']);
     final imgs = _asStringList(m['vehicle_images']);
-    final carImg = (m['car_image_url'] ?? m['carImageUrl'] ?? m['car_img'])?.toString();
-    final avatar = (m['avatar_url'] ?? m['avatarUrl'] ?? m['avatar'])?.toString();
+    final carImg = pickString(['car_image_url', 'carImageUrl', 'car_img']);
+    final avatar = pickString(['avatar_url', 'avatarUrl', 'avatar']);
 
-    final currency = (m['currency'] ?? 'NGN').toString();
+    final currency = pickString(['currency']).isEmpty ? 'NGN' : pickString(['currency']);
 
     return DriverCar(
-      id: (m['id'] ?? m['driver_id'] ?? '').toString(),
+      id: pickString(['id', 'driver_id']),
       ll: LatLng(lat, lng),
       heading: hdg,
-      name: m['name']?.toString(),
-      category: m['category']?.toString(),
-      rating: _asDouble(m['rating']),
-      carPlate: (m['car_plate'] ?? m['plate'])?.toString(),
-      distanceKm: _asDouble(m['distance_km']),
-      etaMin: _asIntNullable(m['eta_min']),
+      name: pickString(['name']).isEmpty ? null : pickString(['name']),
+      category: pickString(['category']).isEmpty ? null : pickString(['category']),
+      rating: pickDouble(['rating']),
+      carPlate: pickString(['car_plate', 'plate']).isEmpty ? null : pickString(['car_plate', 'plate']),
+      distanceKm: pickDouble(['distance_km']),
+      etaMin: pickInt(['eta_min']),
 
-      vehicleType: vt,
-      seats: _asIntNullable(m['seats']),
+      vehicleType: vt.isEmpty ? null : vt,
+      seats: pickInt(['seats']),
       vehicleImages: imgs,
-      vehicleDescription: (m['vehicle_description'] ?? m['vehicleDescription'])?.toString(),
-      carImageUrl: carImg,
-      avatarUrl: avatar,
+      vehicleDescription: pickString(['vehicle_description', 'vehicleDescription']).isEmpty
+          ? null
+          : pickString(['vehicle_description', 'vehicleDescription']),
+      carImageUrl: carImg.isEmpty ? null : carImg,
+      avatarUrl: avatar.isEmpty ? null : avatar,
 
-      phone: m['phone']?.toString(),
-      nin: m['nin']?.toString(),
-      rank: m['rank']?.toString(),
+      phone: pickString(['phone', 'phone_number', 'tel', 'mobile']).isEmpty
+          ? null
+          : pickString(['phone', 'phone_number', 'tel', 'mobile']),
+      nin: pickString(['nin', 'national_id', 'nationalId']).isEmpty
+          ? null
+          : pickString(['nin', 'national_id', 'nationalId']),
+      rank: pickString(['rank']).isEmpty ? null : pickString(['rank']),
 
-      completedTrips: _asIntNullable(m['completed_trips']),
-      cancelledTrips: _asIntNullable(m['cancelled_trips']),
-      incompleteTrips: _asIntNullable(m['incomplete_trips']),
-      reviewsCount: _asIntNullable(m['reviews_count']),
-      totalTrips: _asIntNullable(m['total_trips']),
+      completedTrips: pickInt(['completed_trips']),
+      cancelledTrips: pickInt(['cancelled_trips']),
+      incompleteTrips: pickInt(['incomplete_trips']),
+      reviewsCount: pickInt(['reviews_count']),
+      totalTrips: pickInt(['total_trips']),
 
       currency: currency,
-      pricePerKm: _asDouble(m['price_per_km']),
-      baseFare: _asDouble(m['base_fare']),
-      estimatedTotal: _asDouble(m['estimated_total'] ?? m['price_total']),
-      tripKm: _asDouble(m['trip_km']),
+      pricePerKm: pickDouble(['price_per_km']),
+      baseFare: pickDouble(['base_fare']),
+      estimatedTotal: pickDouble(['estimated_total', 'price_total']),
+      tripKm: pickDouble(['trip_km']),
     );
   }
 }

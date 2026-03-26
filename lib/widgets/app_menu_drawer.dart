@@ -4,6 +4,7 @@
 // - Balance card with fund action
 // - Profile header with avatar & edit button
 // - Categorized menu items
+// - Premium Become a Driver opportunity card
 // - Landscape/portrait adaptive layout
 // - Dark mode support
 // - Smooth animations & haptics
@@ -246,6 +247,17 @@ class _AppMenuDrawerState extends State<AppMenuDrawer>
                       isDark: isDark,
                       onTap: () => _nav(AppRoutes.settings),
                     ),
+
+                    SizedBox(height: 16 * s),
+
+                    // Become a Driver premium card
+                    _BecomeDriverCard(
+                      scale: s,
+                      isDark: isDark,
+                      onTap: () => _nav(AppRoutes.become_a_driver),
+                    ),
+
+                    SizedBox(height: 12 * s),
                   ],
                 ),
               ),
@@ -505,6 +517,253 @@ class _BalanceCard extends StatelessWidget {
         ],
       ),
     );
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// BECOME DRIVER CARD - PREMIUM
+// ═══════════════════════════════════════════════════════════════════════════
+
+class _BecomeDriverCard extends StatefulWidget {
+  final double scale;
+  final bool isDark;
+  final VoidCallback onTap;
+
+  const _BecomeDriverCard({
+    required this.scale,
+    required this.isDark,
+    required this.onTap,
+  });
+
+  @override
+  State<_BecomeDriverCard> createState() => _BecomeDriverCardState();
+}
+
+class _BecomeDriverCardState extends State<_BecomeDriverCard>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _scaleCtrl;
+  late final Animation<double> _scaleAnim;
+
+  @override
+  void initState() {
+    super.initState();
+    _scaleCtrl = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 120),
+    );
+    _scaleAnim = Tween<double>(begin: 1.0, end: 0.96).animate(
+      CurvedAnimation(parent: _scaleCtrl, curve: Curves.easeInOut),
+    );
+  }
+
+  @override
+  void dispose() {
+    _scaleCtrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTapDown: (_) => _scaleCtrl.forward(),
+      onTapUp: (_) {
+        _scaleCtrl.reverse();
+        HapticFeedback.mediumImpact();
+        widget.onTap();
+      },
+      onTapCancel: () => _scaleCtrl.reverse(),
+      child: ScaleTransition(
+        scale: _scaleAnim,
+        child: Container(
+          margin: EdgeInsets.symmetric(horizontal: 4 * widget.scale),
+          padding: EdgeInsets.all(12 * widget.scale),
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: widget.isDark
+                  ? [
+                const Color(0xFF1E7B5F).withOpacity(0.9),
+                const Color(0xFF0F4C3A).withOpacity(0.95),
+              ]
+                  : [
+                const Color(0xFF00D084).withOpacity(0.12),
+                const Color(0xFF00A366).withOpacity(0.08),
+              ],
+            ),
+            borderRadius: BorderRadius.circular(14 * widget.scale),
+            border: Border.all(
+              color: widget.isDark
+                  ? const Color(0xFF00D084).withOpacity(0.35)
+                  : const Color(0xFF00D084).withOpacity(0.25),
+              width: 1.2,
+            ),
+            boxShadow: [
+              BoxShadow(
+                color: const Color(0xFF00D084).withOpacity(0.2),
+                blurRadius: 10 * widget.scale,
+                offset: Offset(0, 3 * widget.scale),
+              ),
+            ],
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // Header with icon and title
+              Row(
+                children: [
+                  Container(
+                    padding: EdgeInsets.all(8 * widget.scale),
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: const Color(0xFF00D084).withOpacity(
+                        widget.isDark ? 0.25 : 0.15,
+                      ),
+                    ),
+                    child: Icon(
+                      Icons.directions_car_rounded,
+                      size: 20 * widget.scale,
+                      color: widget.isDark
+                          ? const Color(0xFF00D084)
+                          : const Color(0xFF00A366),
+                    ),
+                  ),
+                  SizedBox(width: 10 * widget.scale),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Become a Driver',
+                          style: TextStyle(
+                            fontSize: (14 * widget.scale).clamp(12.0, 16.0),
+                            fontWeight: FontWeight.w900,
+                            color: widget.isDark
+                                ? Colors.white
+                                : const Color(0xFF1E7B5F),
+                            letterSpacing: -0.3,
+                          ),
+                        ),
+                        SizedBox(height: 2 * widget.scale),
+                        Text(
+                          'Earn & grow with us',
+                          style: TextStyle(
+                            fontSize: (11 * widget.scale).clamp(10.0, 12.0),
+                            fontWeight: FontWeight.w600,
+                            color: widget.isDark
+                                ? Colors.white.withOpacity(0.75)
+                                : const Color(0xFF1E7B5F).withOpacity(0.75),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  Icon(
+                    Icons.arrow_forward_rounded,
+                    size: 18 * widget.scale,
+                    color: widget.isDark
+                        ? const Color(0xFF00D084)
+                        : const Color(0xFF00A366),
+                  ),
+                ],
+              ),
+
+              SizedBox(height: 10 * widget.scale),
+
+              // Benefits preview
+              Text(
+                'Get instant access to:',
+                style: TextStyle(
+                  fontSize: (10 * widget.scale).clamp(9.0, 11.0),
+                  fontWeight: FontWeight.w700,
+                  color: widget.isDark
+                      ? Colors.white.withOpacity(0.85)
+                      : const Color(0xFF1E7B5F).withOpacity(0.85),
+                  letterSpacing: 0.2,
+                ),
+              ),
+
+              SizedBox(height: 6 * widget.scale),
+
+              // Benefits list
+              ..._buildBenefits(widget.scale, widget.isDark),
+
+              SizedBox(height: 10 * widget.scale),
+
+              // CTA Button
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton.icon(
+                  onPressed: widget.onTap,
+                  icon: Icon(Icons.play_arrow_rounded, size: 16 * widget.scale),
+                  label: Text(
+                    'Apply Now',
+                    style: TextStyle(
+                      fontSize: (12 * widget.scale).clamp(11.0, 14.0),
+                      fontWeight: FontWeight.w800,
+                      letterSpacing: 0.3,
+                    ),
+                  ),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF00D084),
+                    foregroundColor: Colors.white,
+                    padding: EdgeInsets.symmetric(vertical: 9 * widget.scale),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(9 * widget.scale),
+                    ),
+                    elevation: 0,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// Build benefit items with optimized layout
+  List<Widget> _buildBenefits(double scale, bool isDark) {
+    const benefits = [
+      ('Flexible hours', Icons.schedule_rounded),
+      ('Competitive earnings', Icons.trending_up_rounded),
+      ('24/7 support', Icons.support_agent_rounded),
+    ];
+
+    return benefits
+        .asMap()
+        .entries
+        .map((e) {
+      final isLast = e.key == benefits.length - 1;
+      return Padding(
+        padding: EdgeInsets.only(bottom: isLast ? 0 : 5 * scale),
+        child: Row(
+          children: [
+            Icon(
+              e.value.$2,
+              size: 14 * scale,
+              color: isDark
+                  ? const Color(0xFF00D084)
+                  : const Color(0xFF00A366),
+            ),
+            SizedBox(width: 8 * scale),
+            Expanded(
+              child: Text(
+                e.value.$1,
+                style: TextStyle(
+                  fontSize: (10 * scale).clamp(9.0, 11.0),
+                  fontWeight: FontWeight.w600,
+                  color: isDark
+                      ? Colors.white.withOpacity(0.8)
+                      : const Color(0xFF1E7B5F).withOpacity(0.8),
+                ),
+              ),
+            ),
+          ],
+        ),
+      );
+    })
+        .toList();
   }
 }
 

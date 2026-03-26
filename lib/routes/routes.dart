@@ -20,6 +20,7 @@ import '../screens/payments_screen.dart';
 import '../screens/offers_screen.dart';
 import '../screens/settings_screen.dart';
 import '../screens/help_screen.dart';
+import '../screens/become_a_driver.dart';
 
 class AppRoutes {
   // Existing
@@ -33,6 +34,8 @@ class AppRoutes {
   static const String home = '/home';
   static const String history = '/history';
   static const String profile = '/profile';
+
+  static const String become_a_driver = '/become_a_driver';
 
   // Added to satisfy Home/Booking
   static const String rideOptions = '/ride-options';
@@ -67,6 +70,8 @@ class AppRoutes {
       offers: (context) => const OffersScreen(),
       settings: (context) => const SettingsScreen(),
       help: (context) => const HelpScreen(),
+
+      become_a_driver: (context) => const BecomeADriverPage(),
 
       // Ride options expects a Map argument from HomePage
       rideOptions: (context) {

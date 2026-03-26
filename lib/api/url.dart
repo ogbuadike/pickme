@@ -26,6 +26,8 @@ class ApiConstants {
   static const String rideCompleteEndpoint = 'ride_complete_trip.php';
   static const String driversUpdateLocationEndpoint = 'drivers_update_location.php';
 
+  static const String upgradeToDriverEndpoint = 'become_driver.php';
+
   static const String upgradeKYCEndpoint = 'kyc_upgrade.php';
   static const String billList = 'flutter_bill_list.php';
   static const String transactionsEndpoint = 'transaction_history.php';

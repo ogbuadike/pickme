@@ -17,6 +17,8 @@ import '../../themes/app_theme.dart';
 import '../../utility/notification.dart';
 import '../../widgets/inner_background.dart';
 import '../../ui/ui_scale.dart';
+import '../../driver/driver_home_page.dart';
+import '../home_page.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -114,7 +116,9 @@ class _LoginScreenState extends State<LoginScreen>
       await prefs.setString('user_id', user?.uid ?? '');
       await prefs.setString('user_name', user?.displayName ?? '');
       await prefs.setString('user_logo', user?.photoURL ?? '');
-      await prefs.setString('user_pin', '');
+      await prefs.setString('post_login_home', 'home');
+      await prefs.setString('user_driver_status', 'not_started');
+      await prefs.setString('user_driver_id', '');
 
       if (!mounted) return;
       showToastNotification(
@@ -153,32 +157,51 @@ class _LoginScreenState extends State<LoginScreen>
 
       final body = jsonDecode(res.body);
       if (res.statusCode == 200 && body['error'] == false) {
-        showToastNotification(
-          context: context,
-          title: 'Success',
-          message: body['login_msg']?['title_msg_body'] ?? 'Welcome back!',
-          isSuccess: true,
-        );
+        final loginMsg = (body['login_msg'] is Map)
+            ? Map<String, dynamic>.from(body['login_msg'] as Map)
+            : <String, dynamic>{};
 
         final prefs = await SharedPreferences.getInstance();
-        await prefs.setString('user_id', body['login_msg']?['uid'] ?? '');
-        await prefs.setString('user_name', body['login_msg']?['fname'] ?? '');
+        final existingPin = prefs.getString('user_pin') ?? '';
+
+        final isDriver = _isApprovedDriver(loginMsg);
+        final driverStatus = (loginMsg['driver_status'] ?? 'not_started').toString();
+        final driverId = (loginMsg['driver_id'] ?? '').toString();
+        final postLoginHome = isDriver ? 'driver_home' : 'home';
+
+        await prefs.setString('user_id', (loginMsg['uid'] ?? '').toString());
+        await prefs.setString('user_name', (loginMsg['fname'] ?? '').toString());
         await prefs.setString(
           'user_account_name',
-          body['login_msg']?['accountname'] ?? '',
+          (loginMsg['accountname'] ?? '').toString(),
         );
         await prefs.setString(
           'user_account_number',
-          body['login_msg']?['accountnumber'] ?? '',
+          (loginMsg['accountnumber'] ?? '').toString(),
         );
         await prefs.setString(
           'user_account_bank',
-          body['login_msg']?['bankname'] ?? '',
+          (loginMsg['bankname'] ?? '').toString(),
         );
-        await prefs.setString('user_pin', '');
+        await prefs.setString('user_driver_status', driverStatus);
+        await prefs.setString('user_driver_id', driverId);
+        await prefs.setBool('user_is_driver', isDriver);
+        await prefs.setString('post_login_home', postLoginHome);
+        await prefs.setString('user_pin', existingPin);
 
         if (!mounted) return;
-        Navigator.of(context).pushReplacementNamed(AppRoutes.set_user_pin);
+        showToastNotification(
+          context: context,
+          title: 'Success',
+          message: (loginMsg['title_msg_body'] ?? 'Welcome back!').toString(),
+          isSuccess: true,
+        );
+
+        if (existingPin.trim().isEmpty) {
+          Navigator.of(context).pushReplacementNamed(AppRoutes.set_user_pin);
+        } else {
+          await _goToResolvedHome(isDriver: isDriver);
+        }
       } else {
         if (!mounted) return;
         showBannerNotification(
@@ -200,6 +223,20 @@ class _LoginScreenState extends State<LoginScreen>
     } finally {
       if (mounted) setState(() => _busy = false);
     }
+  }
+
+  bool _isApprovedDriver(Map<String, dynamic> loginMsg) {
+    final status = (loginMsg['driver_status'] ?? '').toString().trim().toLowerCase();
+    final hasDriverId = (loginMsg['driver_id'] ?? '').toString().trim().isNotEmpty;
+    return hasDriverId && (status == 'approved' || status == 'activated');
+  }
+
+  Future<void> _goToResolvedHome({required bool isDriver}) async {
+    if (!mounted) return;
+    final route = MaterialPageRoute<void>(
+      builder: (_) => isDriver ? const DriverHomePage() : const HomePage(),
+    );
+    Navigator.of(context).pushAndRemoveUntil(route, (_) => false);
   }
 
   @override
@@ -511,7 +548,10 @@ class _LoginScreenState extends State<LoginScreen>
               return SingleChildScrollView(
                 physics: const ClampingScrollPhysics(),
                 child: ConstrainedBox(
-                  constraints: BoxConstraints(minHeight: 0, maxWidth: constraints.maxWidth),
+                  constraints: BoxConstraints(
+                    minHeight: 0,
+                    maxWidth: constraints.maxWidth,
+                  ),
                   child: Form(
                     key: _formKey,
                     child: Column(
@@ -749,8 +789,7 @@ class _LoginScreenState extends State<LoginScreen>
         final inline = constraints.maxWidth >= 340;
 
         final forgot = TextButton(
-          onPressed: () =>
-              Navigator.pushNamed(context, AppRoutes.forgot_password),
+          onPressed: () => Navigator.pushNamed(context, AppRoutes.forgot_password),
           style: TextButton.styleFrom(
             foregroundColor: AppColors.primary,
             padding: EdgeInsets.symmetric(
@@ -980,8 +1019,7 @@ class _LoginScreenState extends State<LoginScreen>
           ),
         ),
         TextButton(
-          onPressed: () =>
-              Navigator.pushNamed(context, AppRoutes.registration),
+          onPressed: () => Navigator.pushNamed(context, AppRoutes.registration),
           style: TextButton.styleFrom(foregroundColor: AppColors.primary),
           child: Text(
             'Sign Up',

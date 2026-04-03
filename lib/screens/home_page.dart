@@ -179,7 +179,7 @@ class _HomePageState extends State<HomePage>
 
   GoogleMapController? _map;
   final CameraPosition _initialCam = const CameraPosition(
-    target: LatLng(6.458985, 7.548266),
+    target: LatLng(4.9757, 8.3417),
     zoom: 15,
   );
 

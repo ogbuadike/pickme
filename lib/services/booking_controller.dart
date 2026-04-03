@@ -570,6 +570,7 @@ class BookingController {
 
   BookingStatus _mapStatus(String s) {
     switch (s.trim().toLowerCase()) {
+      case 'accepted':
       case 'driver_assigned':
       case 'assigned':
         return BookingStatus.driverAssigned;
@@ -582,6 +583,7 @@ class BookingController {
       case 'on_trip':
       case 'in_progress':
       case 'ontrip':
+      case 'arrived_destination':
         return BookingStatus.onTrip;
       case 'completed':
       case 'done':

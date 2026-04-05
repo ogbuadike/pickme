@@ -1,52 +1,4 @@
 // lib/widgets/driver_details_sheet.dart
-//
-// ✅ Dense, Bybit-like, information-rich details sheet
-// ✅ Shows ALL driver + offer + trip fields in a premium layout
-// ✅ Location panel: User, Driver, Pickup, Drop (lat/lng + copy)
-// ✅ Confirm will SUBMIT to rideBookEndpoint via submitBooking (if provided)
-// ✅ Always returns booking payload via Navigator.pop(payload)
-//
-// Usage (recommended):
-// final payload = await showModalBottomSheet<Map<String, dynamic>>(
-//   context: context,
-//   isScrollControlled: true,
-//   backgroundColor: Colors.transparent,
-//   builder: (_) => DriverDetailsSheet(
-//     driver: driverMap,
-//     offer: offerMap,
-//     originText: origin,
-//     destinationText: dest,
-//     distanceText: distanceText,
-//     durationText: durationText,Launching lib/main.dart on 2201117SG (wireless) in debug mode...
-// Running Gradle task 'assembleDebug'...
-// lib/widgets/driver_details_sheet.dart:1437:15: Error: The argument type 'num' can't be assigned to the parameter type 'double?'.
-//       height: h,
-//               ^
-// Target kernel_snapshot_program failed: Exception
-//
-//
-// FAILURE: Build failed with an exception.
-//
-// * What went wrong:
-// Execution failed for task ':app:compileFlutterBuildDebug'.
-// > Process 'command '/Volumes/Chibuikem_SSD/Flutter_SDK/flutter/bin/flutter'' finished with non-zero exit value 1
-//
-// * Try:
-// > Run with --stacktrace option to get the stack trace.
-// > Run with --info or --debug option to get more log output.
-// > Run with --scan to get full insights.
-// > Get more help at https://help.gradle.org.
-//
-// BUILD FAILED in 45s
-// Error: Gradle task assembleDebug failed with exit code 1
-//     tripDistanceKm: tripKm,
-//     userLocation: GeoPoint(userLat, userLng),
-//     pickupLocation: GeoPoint(pickupLat, pickupLng),
-//     dropLocation: GeoPoint(dropLat, dropLng),
-//     submitBooking: (payload) => ApiClient.postJson('/rideBookEndpoint', payload),
-//   ),
-// );
-
 import 'dart:convert';
 import 'dart:math' as math;
 import 'dart:ui' show Canvas, FontFeature, Offset, Size;
@@ -60,14 +12,8 @@ import '../services/address_resolver_service.dart';
 import '../themes/app_theme.dart';
 import '../ui/ui_scale.dart';
 
-/// Simple coordinate holder (no external deps).
-
 class DriverDetailsSheet extends StatefulWidget {
-  /// Inject your booking endpoint call here.
-  /// When provided, Confirm Ride will call this and only close on success.
-  final Future<Map<String, dynamic>> Function(Map<String, dynamic> payload)?
-  submitBooking;
-
+  final Future<Map<String, dynamic>> Function(Map<String, dynamic> payload)? submitBooking;
   final Map<String, dynamic> driver;
   final Map<String, dynamic> offer;
 
@@ -77,14 +23,14 @@ class DriverDetailsSheet extends StatefulWidget {
   final String? durationText;
   final double tripDistanceKm;
 
-  /// Pass these so the sheet can show + send them to booking endpoint.
-  final GeoPoint? userLocation; // user's current GPS
-  final GeoPoint? pickupLocation; // pickup coords
-  final GeoPoint? dropLocation; // final destination coords
+  final GeoPoint? userLocation;
+  final GeoPoint? pickupLocation;
+  final GeoPoint? dropLocation;
 
-  /// Optional: called on confirm with payload.
-  /// (payload is also returned via Navigator.pop)
   final ValueChanged<Map<String, dynamic>>? onConfirm;
+
+  // ---> NEW: View Only Mode for Ride History <---
+  final bool isViewOnly;
 
   const DriverDetailsSheet({
     super.key,
@@ -100,6 +46,7 @@ class DriverDetailsSheet extends StatefulWidget {
     this.dropLocation,
     this.onConfirm,
     this.submitBooking,
+    this.isViewOnly = false, // Default is false for normal booking
   });
 
   @override
@@ -162,9 +109,6 @@ class _DriverDetailsSheetState extends State<DriverDetailsSheet> {
     );
   }
 
-  // =========================
-  // Helpers: parse + sanitize
-  // =========================
   static num _num(dynamic v, num fallback) {
     if (v == null) return fallback;
     if (v is num) return v;
@@ -216,9 +160,6 @@ class _DriverDetailsSheetState extends State<DriverDetailsSheet> {
     return r.clamp(0, 5).toDouble();
   }
 
-  // =========================
-  // Icons/colors
-  // =========================
   IconData _vehicleIcon(String t) {
     final x = t.trim().toLowerCase();
     if (x.contains('bike')) return Icons.two_wheeler_rounded;
@@ -254,9 +195,6 @@ class _DriverDetailsSheetState extends State<DriverDetailsSheet> {
     return c;
   }
 
-  // =========================
-  // Pricing (base + perKm + km)
-  // =========================
   double _baseFare() {
     final v = _num(widget.offer['base_fare'], -1).toDouble();
     if (v >= 0) return v;
@@ -268,7 +206,7 @@ class _DriverDetailsSheetState extends State<DriverDetailsSheet> {
     if (v >= 0) return v;
     final d = _num(widget.driver['price_per_km'], -1).toDouble();
     if (d >= 0) return d;
-    return _num(widget.offer['price'], 0).toDouble(); // fallback legacy
+    return _num(widget.offer['price'], 0).toDouble();
   }
 
   double _estimatedTotal() {
@@ -296,26 +234,15 @@ class _DriverDetailsSheetState extends State<DriverDetailsSheet> {
     return 0;
   }
 
-  // =========================
-  // Locations
-  // =========================
   GeoPoint? get _pickupResolved => widget.pickupLocation ?? widget.userLocation;
 
-  Future<String> _addressFromGeoPoint(
-      GeoPoint? point, {
-        required String fallback,
-      }) async {
+  Future<String> _addressFromGeoPoint(GeoPoint? point, {required String fallback}) async {
     if (point == null) return fallback;
-
     try {
       final dynamic p = point;
       final lat = (p.latitude ?? p.lat) as num;
       final lng = (p.longitude ?? p.lng) as num;
-      return _addressFromLatLng(
-        lat.toDouble(),
-        lng.toDouble(),
-        fallback: fallback,
-      );
+      return _addressFromLatLng(lat.toDouble(), lng.toDouble(), fallback: fallback);
     } catch (_) {
       try {
         final dynamic p = point;
@@ -329,54 +256,31 @@ class _DriverDetailsSheetState extends State<DriverDetailsSheet> {
     }
   }
 
-  Future<String> _addressFromLatLng(
-      double lat,
-      double lng, {
-        required String fallback,
-      }) async {
+  Future<String> _addressFromLatLng(double lat, double lng, {required String fallback}) async {
     if (!lat.isFinite || !lng.isFinite || (lat == 0 && lng == 0)) {
       return fallback;
     }
-    return AddressResolverService.detailedAddressFromLatLng(
-      lat,
-      lng,
-      fallback: fallback,
-    );
+    return AddressResolverService.detailedAddressFromLatLng(lat, lng, fallback: fallback);
   }
 
-  // =========================
-  // Clipboard
-  // =========================
   Future<void> _copy(String label, String value) async {
     final v = value.trim();
     if (v.isEmpty) return;
     await Clipboard.setData(ClipboardData(text: v));
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text('$label copied'),
-        duration: const Duration(milliseconds: 900),
-      ),
+      SnackBar(content: Text('$label copied'), duration: const Duration(milliseconds: 900)),
     );
   }
 
-  // =========================
-  // Booking payload (for rideBookEndpoint)
-  // =========================
   Map<String, dynamic> _buildBookingPayload() {
     final cur = _currencySym();
     final base = _baseFare();
     final per = _perKm();
     final total = _calcTotal();
 
-    final origin =
-    widget.originText.trim().isEmpty ? 'Pickup' : widget.originText.trim();
-    final dest = widget.destinationText.trim().isEmpty
-        ? 'Destination'
-        : widget.destinationText.trim();
-
-    final pickup = _pickupResolved;
-    final drop = widget.dropLocation;
+    final origin = widget.originText.trim().isEmpty ? 'Pickup' : widget.originText.trim();
+    final dest = widget.destinationText.trim().isEmpty ? 'Destination' : widget.destinationText.trim();
 
     return <String, dynamic>{
       'meta': {
@@ -393,26 +297,23 @@ class _DriverDetailsSheetState extends State<DriverDetailsSheet> {
       },
       'locations': {
         'user': widget.userLocation?.toJson(),
-        'pickup': pickup?.toJson(),
-        'drop': drop?.toJson(),
+        'pickup': _pickupResolved?.toJson(),
+        'drop': widget.dropLocation?.toJson(),
         'driver': {
           'lat': _num(widget.driver['lat'], 0).toDouble(),
           'lng': _num(widget.driver['lng'], 0).toDouble(),
         },
         'missing': {
           'user': widget.userLocation == null,
-          'pickup': pickup == null,
-          'drop': drop == null,
+          'pickup': _pickupResolved == null,
+          'drop': widget.dropLocation == null,
         }
       },
       'driver': Map<String, dynamic>.from(widget.driver),
       'offer': Map<String, dynamic>.from(widget.offer),
       'pricing': {
         'currency_symbol': cur,
-        'currency': _s(
-          widget.offer['currency'],
-          _s(widget.driver['currency'], 'NGN'),
-        ),
+        'currency': _s(widget.offer['currency'], _s(widget.driver['currency'], 'NGN')),
         'base_fare': base,
         'price_per_km': per,
         'estimated_total': _estimatedTotal(),
@@ -425,20 +326,9 @@ class _DriverDetailsSheetState extends State<DriverDetailsSheet> {
     if (_submitting) return;
 
     final payload = _buildBookingPayload();
-
     final missing = (payload['locations'] as Map)['missing'] as Map;
-    final missUser = missing['user'] == true;
-    final missPickup = missing['pickup'] == true;
-    final missDrop = missing['drop'] == true;
-
-    if (missUser || missPickup || missDrop) {
-      final parts = <String>[];
-      if (missUser) parts.add('User');
-      if (missPickup) parts.add('Pickup');
-      if (missDrop) parts.add('Drop');
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Missing locations: ${parts.join(', ')}')),
-      );
+    if (missing['user'] == true || missing['pickup'] == true || missing['drop'] == true) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Missing locations required for booking.')));
       return;
     }
 
@@ -460,17 +350,12 @@ class _DriverDetailsSheetState extends State<DriverDetailsSheet> {
       Navigator.of(context).pop(payload);
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Booking failed: $e')),
-      );
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Booking failed: $e')));
     } finally {
       if (mounted) setState(() => _submitting = false);
     }
   }
 
-  // =========================
-  // UI
-  // =========================
   @override
   Widget build(BuildContext context) {
     final mq = MediaQuery.of(context);
@@ -479,37 +364,18 @@ class _DriverDetailsSheetState extends State<DriverDetailsSheet> {
 
     final sources = <Map<String, dynamic>>[widget.driver, widget.offer];
 
-    final name = _pickString(sources, const ['name']).isEmpty
-        ? 'Driver'
-        : _pickString(sources, const ['name']);
+    final name = _pickString(sources, const ['name']).isEmpty ? 'Driver' : _pickString(sources, const ['name']);
     final category = _pickString(sources, const ['category']);
     final rating = _clampRating(_num(widget.driver['rating'], 0).toDouble());
 
-    final phone = _pickString(
-      sources,
-      const ['phone', 'phone_number', 'tel', 'mobile'],
-    );
-    final nin = _pickString(
-      sources,
-      const ['nin', 'national_id', 'nationalId'],
-    );
+    final phone = _pickString(sources, const ['phone', 'phone_number', 'tel', 'mobile']);
+    final nin = _pickString(sources, const ['nin', 'national_id', 'nationalId']);
     final rankRaw = _pickString(sources, const ['rank']).trim();
     final rank = rankRaw.isEmpty ? 'Verified' : rankRaw;
 
-    final vehicleType = _pickString(
-      sources,
-      const ['vehicle_type', 'vehicle'],
-    ).isEmpty
-        ? 'car'
-        : _pickString(sources, const ['vehicle_type', 'vehicle']);
-    final seats =
-    vehicleType.toLowerCase().contains('bike')
-        ? 1
-        : _num(widget.driver['seats'] ?? widget.offer['seats'], 4).toInt();
-    final desc = _pickString(
-      sources,
-      const ['vehicle_description', 'description'],
-    );
+    final vehicleType = _pickString(sources, const ['vehicle_type', 'vehicle']).isEmpty ? 'car' : _pickString(sources, const ['vehicle_type', 'vehicle']);
+    final seats = vehicleType.toLowerCase().contains('bike') ? 1 : _num(widget.driver['seats'] ?? widget.offer['seats'], 4).toInt();
+    final desc = _pickString(sources, const ['vehicle_description', 'description']);
 
     final avatar = _fixUrl(_pickString(sources, const ['avatar_url', 'avatar']));
     final plate = _pickString(sources, const ['car_plate', 'plate']);
@@ -520,14 +386,10 @@ class _DriverDetailsSheetState extends State<DriverDetailsSheet> {
 
     final heading = _num(widget.driver['heading'], 0).toDouble();
     final distKmToUser = _num(widget.driver['distance_km'], 0).toDouble();
-    final etaMin = _num(widget.driver['eta_min'] ?? widget.offer['eta_min'], 0)
-        .toInt();
+    final etaMin = _num(widget.driver['eta_min'] ?? widget.offer['eta_min'], 0).toInt();
 
     final imgs = (() {
-      final a = _stringList(widget.driver['vehicle_images'])
-          .map(_fixUrl)
-          .where((x) => x.isNotEmpty)
-          .toList(growable: false);
+      final a = _stringList(widget.driver['vehicle_images']).map(_fixUrl).where((x) => x.isNotEmpty).toList(growable: false);
       if (a.isNotEmpty) return a;
       final single = _fixUrl(_s(widget.driver['car_image_url'], ''));
       if (single.isNotEmpty) return <String>[single];
@@ -539,19 +401,16 @@ class _DriverDetailsSheetState extends State<DriverDetailsSheet> {
     final perKm = _perKm();
     final total = _calcTotal();
 
-    final origin =
-    widget.originText.trim().isEmpty ? 'Pickup' : widget.originText.trim();
-    final dest = widget.destinationText.trim().isEmpty
-        ? 'Destination'
-        : widget.destinationText.trim();
+    final origin = widget.originText.trim().isEmpty ? 'Pickup' : widget.originText.trim();
+    final dest = widget.destinationText.trim().isEmpty ? 'Destination' : widget.destinationText.trim();
 
     final distText = widget.distanceText ?? '--';
     final durText = widget.durationText ?? '--';
 
     final bool isLandscape = mq.orientation == Orientation.landscape;
     final double maxHeight = isLandscape ? mq.size.height * 0.94 : mq.size.height * 0.88;
-    final double sidePad = ui.inset(12).clamp(12.0, 16.0);
-    final double cardGap = ui.gap(10).clamp(8.0, 12.0);
+    final double sidePad = ui.inset(12).clamp(12.0, 16.0).toDouble();
+    final double cardGap = ui.gap(10).clamp(8.0, 12.0).toDouble();
 
     return Align(
       alignment: Alignment.bottomCenter,
@@ -563,7 +422,7 @@ class _DriverDetailsSheetState extends State<DriverDetailsSheet> {
           decoration: BoxDecoration(
             color: Theme.of(context).cardColor,
             borderRadius: BorderRadius.vertical(
-              top: Radius.circular(ui.radius(18).clamp(16.0, 20.0)),
+              top: Radius.circular(ui.radius(18).clamp(16.0, 20.0).toDouble()),
             ),
             boxShadow: [
               BoxShadow(
@@ -575,9 +434,9 @@ class _DriverDetailsSheetState extends State<DriverDetailsSheet> {
           ),
           child: Column(
             children: [
-              SizedBox(height: ui.gap(8).clamp(8.0, 10.0)),
+              SizedBox(height: ui.gap(8).clamp(8.0, 10.0).toDouble()),
               _handle(cs, ui),
-              SizedBox(height: ui.gap(6).clamp(6.0, 8.0)),
+              SizedBox(height: ui.gap(6).clamp(6.0, 8.0).toDouble()),
               _topBar(cs, ui),
               Expanded(
                 child: ListView(
@@ -599,48 +458,19 @@ class _DriverDetailsSheetState extends State<DriverDetailsSheet> {
                               ui,
                               icon: Icons.price_change_rounded,
                               tone: AppColors.primary,
-                              text: total > 0
-                                  ? '$cur${_moneyFmt.format(total.round())}'
-                                  : '—',
+                              text: total > 0 ? '$cur${_moneyFmt.format(total.round())}' : '—',
                             ),
                           ),
                           SizedBox(height: cardGap),
                           Wrap(
-                            spacing: ui.gap(7).clamp(6.0, 8.0),
-                            runSpacing: ui.gap(7).clamp(6.0, 8.0),
+                            spacing: ui.gap(7).clamp(6.0, 8.0).toDouble(),
+                            runSpacing: ui.gap(7).clamp(6.0, 8.0).toDouble(),
                             children: [
-                              _nxChip(
-                                cs,
-                                ui,
-                                icon: Icons.schedule_rounded,
-                                tone: const Color(0xFFB8860B),
-                                text: durText,
-                              ),
-                              _nxChip(
-                                cs,
-                                ui,
-                                icon: Icons.route_rounded,
-                                tone: const Color(0xFF1E8E3E),
-                                text: distText,
-                              ),
-                              _nxChip(
-                                cs,
-                                ui,
-                                icon: Icons.straighten_rounded,
-                                tone: const Color(0xFF1A73E8),
-                                text: widget.tripDistanceKm > 0
-                                    ? '${widget.tripDistanceKm.toStringAsFixed(2)} km'
-                                    : '—',
-                                mono: true,
-                              ),
-                              _nxChip(
-                                cs,
-                                ui,
-                                icon: Icons.timer_rounded,
-                                tone: const Color(0xFF6A5ACD),
-                                text: etaMin > 0 ? '${etaMin}m to pickup' : 'ETA —',
-                                mono: true,
-                              ),
+                              _nxChip(cs, ui, icon: Icons.schedule_rounded, tone: const Color(0xFFB8860B), text: durText),
+                              _nxChip(cs, ui, icon: Icons.route_rounded, tone: const Color(0xFF1E8E3E), text: distText),
+                              _nxChip(cs, ui, icon: Icons.straighten_rounded, tone: const Color(0xFF1A73E8), text: widget.tripDistanceKm > 0 ? '${widget.tripDistanceKm.toStringAsFixed(2)} km' : '—', mono: true),
+                              if (!widget.isViewOnly)
+                                _nxChip(cs, ui, icon: Icons.timer_rounded, tone: const Color(0xFF6A5ACD), text: etaMin > 0 ? '${etaMin}m to pickup' : 'ETA —', mono: true),
                             ],
                           ),
                         ],
@@ -657,14 +487,14 @@ class _DriverDetailsSheetState extends State<DriverDetailsSheet> {
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               _avatar(cs, ui, avatar, _initials(name)),
-                              SizedBox(width: ui.gap(12).clamp(10.0, 14.0)),
+                              SizedBox(width: ui.gap(12).clamp(10.0, 14.0).toDouble()),
                               Expanded(
                                 child: Column(
                                   crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
                                     Wrap(
-                                      spacing: ui.gap(8).clamp(6.0, 10.0),
-                                      runSpacing: ui.gap(6).clamp(4.0, 8.0),
+                                      spacing: ui.gap(8).clamp(6.0, 10.0).toDouble(),
+                                      runSpacing: ui.gap(6).clamp(4.0, 8.0).toDouble(),
                                       crossAxisAlignment: WrapCrossAlignment.center,
                                       children: [
                                         Text(
@@ -672,7 +502,7 @@ class _DriverDetailsSheetState extends State<DriverDetailsSheet> {
                                           style: TextStyle(
                                             fontWeight: FontWeight.w900,
                                             color: cs.onSurface.withOpacity(0.92),
-                                            fontSize: ui.font(14).clamp(13.0, 15.0),
+                                            fontSize: ui.font(14).clamp(13.0, 15.0).toDouble(),
                                             height: 1.05,
                                             letterSpacing: -0.2,
                                           ),
@@ -680,37 +510,16 @@ class _DriverDetailsSheetState extends State<DriverDetailsSheet> {
                                         _rankPill(cs, ui, rank),
                                       ],
                                     ),
-                                    SizedBox(height: ui.gap(8).clamp(6.0, 10.0)),
+                                    SizedBox(height: ui.gap(8).clamp(6.0, 10.0).toDouble()),
                                     Wrap(
-                                      spacing: ui.gap(7).clamp(6.0, 8.0),
-                                      runSpacing: ui.gap(7).clamp(6.0, 8.0),
+                                      spacing: ui.gap(7).clamp(6.0, 8.0).toDouble(),
+                                      runSpacing: ui.gap(7).clamp(6.0, 8.0).toDouble(),
                                       children: [
                                         if (category.isNotEmpty)
-                                          _nxChip(
-                                            cs,
-                                            ui,
-                                            icon: Icons.local_taxi_rounded,
-                                            tone: AppColors.primary,
-                                            text: category,
-                                          ),
-                                        _nxChip(
-                                          cs,
-                                          ui,
-                                          icon: _vehicleIcon(vehicleType),
-                                          tone: const Color(0xFF1A73E8),
-                                          text:
-                                          '${vehicleType.toLowerCase().contains('bike') ? 'Bike' : 'Car'} • $seats',
-                                          mono: true,
-                                        ),
+                                          _nxChip(cs, ui, icon: Icons.local_taxi_rounded, tone: AppColors.primary, text: category),
+                                        _nxChip(cs, ui, icon: _vehicleIcon(vehicleType), tone: const Color(0xFF1A73E8), text: '${vehicleType.toLowerCase().contains('bike') ? 'Bike' : 'Car'} • $seats', mono: true),
                                         if (plate.isNotEmpty)
-                                          _nxChip(
-                                            cs,
-                                            ui,
-                                            icon: Icons.qr_code_rounded,
-                                            tone: const Color(0xFF6A5ACD),
-                                            text: plate,
-                                            mono: true,
-                                          ),
+                                          _nxChip(cs, ui, icon: Icons.qr_code_rounded, tone: const Color(0xFF6A5ACD), text: plate, mono: true),
                                       ],
                                     ),
                                   ],
@@ -718,29 +527,17 @@ class _DriverDetailsSheetState extends State<DriverDetailsSheet> {
                               ),
                             ],
                           ),
-                          SizedBox(height: ui.gap(10).clamp(8.0, 12.0)),
+                          SizedBox(height: ui.gap(10).clamp(8.0, 12.0).toDouble()),
                           _starsRow(cs, ui, rating),
                           if (desc.trim().isNotEmpty) ...[
-                            SizedBox(height: ui.gap(10).clamp(8.0, 12.0)),
+                            SizedBox(height: ui.gap(10).clamp(8.0, 12.0).toDouble()),
                             Row(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                Icon(
-                                  Icons.info_rounded,
-                                  color: cs.onSurface.withOpacity(0.60),
-                                  size: ui.icon(18).clamp(18.0, 20.0),
-                                ),
-                                SizedBox(width: ui.gap(8).clamp(8.0, 10.0)),
+                                Icon(Icons.info_rounded, color: cs.onSurface.withOpacity(0.60), size: ui.icon(18).clamp(18.0, 20.0).toDouble()),
+                                SizedBox(width: ui.gap(8).clamp(8.0, 10.0).toDouble()),
                                 Expanded(
-                                  child: Text(
-                                    desc,
-                                    style: TextStyle(
-                                      fontWeight: FontWeight.w800,
-                                      color: cs.onSurface.withOpacity(0.78),
-                                      height: 1.3,
-                                      fontSize: ui.font(12).clamp(12.0, 13.0),
-                                    ),
-                                  ),
+                                  child: Text(desc, style: TextStyle(fontWeight: FontWeight.w800, color: cs.onSurface.withOpacity(0.78), height: 1.3, fontSize: ui.font(12).clamp(12.0, 13.0).toDouble())),
                                 ),
                               ],
                             ),
@@ -759,53 +556,17 @@ class _DriverDetailsSheetState extends State<DriverDetailsSheet> {
                         if (stacked) {
                           return Column(
                             children: [
-                              _actionCard(
-                                cs,
-                                ui,
-                                title: 'Phone',
-                                value: phone.isEmpty ? '—' : phone,
-                                icon: Icons.call_rounded,
-                                tone: const Color(0xFF1E8E3E),
-                                onTap: phone.isEmpty ? null : () => _copy('Phone', phone),
-                              ),
-                              SizedBox(height: ui.gap(8).clamp(8.0, 10.0)),
-                              _actionCard(
-                                cs,
-                                ui,
-                                title: 'NIN',
-                                value: nin.isEmpty ? '—' : nin,
-                                icon: Icons.badge_rounded,
-                                tone: const Color(0xFF6A5ACD),
-                                onTap: nin.isEmpty ? null : () => _copy('NIN', nin),
-                              ),
+                              _actionCard(cs, ui, title: 'Phone', value: phone.isEmpty ? '—' : phone, icon: Icons.call_rounded, tone: const Color(0xFF1E8E3E), onTap: phone.isEmpty ? null : () => _copy('Phone', phone)),
+                              SizedBox(height: ui.gap(8).clamp(8.0, 10.0).toDouble()),
+                              _actionCard(cs, ui, title: 'NIN', value: nin.isEmpty ? '—' : nin, icon: Icons.badge_rounded, tone: const Color(0xFF6A5ACD), onTap: nin.isEmpty ? null : () => _copy('NIN', nin)),
                             ],
                           );
                         }
                         return Row(
                           children: [
-                            Expanded(
-                              child: _actionCard(
-                                cs,
-                                ui,
-                                title: 'Phone',
-                                value: phone.isEmpty ? '—' : phone,
-                                icon: Icons.call_rounded,
-                                tone: const Color(0xFF1E8E3E),
-                                onTap: phone.isEmpty ? null : () => _copy('Phone', phone),
-                              ),
-                            ),
-                            SizedBox(width: ui.gap(8).clamp(8.0, 10.0)),
-                            Expanded(
-                              child: _actionCard(
-                                cs,
-                                ui,
-                                title: 'NIN',
-                                value: nin.isEmpty ? '—' : nin,
-                                icon: Icons.badge_rounded,
-                                tone: const Color(0xFF6A5ACD),
-                                onTap: nin.isEmpty ? null : () => _copy('NIN', nin),
-                              ),
-                            ),
+                            Expanded(child: _actionCard(cs, ui, title: 'Phone', value: phone.isEmpty ? '—' : phone, icon: Icons.call_rounded, tone: const Color(0xFF1E8E3E), onTap: phone.isEmpty ? null : () => _copy('Phone', phone))),
+                            SizedBox(width: ui.gap(8).clamp(8.0, 10.0).toDouble()),
+                            Expanded(child: _actionCard(cs, ui, title: 'NIN', value: nin.isEmpty ? '—' : nin, icon: Icons.badge_rounded, tone: const Color(0xFF6A5ACD), onTap: nin.isEmpty ? null : () => _copy('NIN', nin))),
                           ],
                         );
                       },
@@ -818,65 +579,26 @@ class _DriverDetailsSheetState extends State<DriverDetailsSheet> {
                       icon: Icons.public_rounded,
                       child: Column(
                         children: [
-                          _locRow(
-                            cs,
-                            ui,
-                            label: 'User',
-                            icon: Icons.my_location_rounded,
-                            future: _userAddressFuture,
-                          ),
-                          SizedBox(height: ui.gap(8).clamp(8.0, 10.0)),
-                          _locRow(
-                            cs,
-                            ui,
-                            label: 'Driver',
-                            icon: Icons.navigation_rounded,
-                            future: _driverAddressFuture,
-                            trailing: _miniText(cs, ui, 'Hd ${heading.toStringAsFixed(0)}°'),
-                          ),
-                          SizedBox(height: ui.gap(8).clamp(8.0, 10.0)),
-                          _locRow(
-                            cs,
-                            ui,
-                            label: 'Pickup',
-                            icon: Icons.pin_drop_rounded,
-                            future: _pickupAddressFuture,
-                          ),
-                          SizedBox(height: ui.gap(8).clamp(8.0, 10.0)),
-                          _locRow(
-                            cs,
-                            ui,
-                            label: 'Drop',
-                            icon: Icons.flag_rounded,
-                            future: _dropAddressFuture,
-                          ),
-                          SizedBox(height: ui.gap(10).clamp(8.0, 12.0)),
-                          Wrap(
-                            spacing: ui.gap(7).clamp(6.0, 8.0),
-                            runSpacing: ui.gap(7).clamp(6.0, 8.0),
-                            children: [
-                              _nxChip(
-                                cs,
-                                ui,
-                                icon: Icons.near_me_rounded,
-                                tone: const Color(0xFF1E8E3E),
-                                text: distKmToUser > 0
-                                    ? (distKmToUser < 1
-                                    ? '${(distKmToUser * 1000).round()}m'
-                                    : '${distKmToUser.toStringAsFixed(2)}km')
-                                    : 'Near',
-                                mono: true,
-                              ),
-                              _nxChip(
-                                cs,
-                                ui,
-                                icon: Icons.timer_rounded,
-                                tone: const Color(0xFFB8860B),
-                                text: etaMin > 0 ? '${etaMin} min' : '—',
-                                mono: true,
-                              ),
-                            ],
-                          ),
+                          if (!widget.isViewOnly) ...[
+                            _locRow(cs, ui, label: 'User', icon: Icons.my_location_rounded, future: _userAddressFuture),
+                            SizedBox(height: ui.gap(8).clamp(8.0, 10.0).toDouble()),
+                            _locRow(cs, ui, label: 'Driver', icon: Icons.navigation_rounded, future: _driverAddressFuture, trailing: _miniText(cs, ui, 'Hd ${heading.toStringAsFixed(0)}°')),
+                            SizedBox(height: ui.gap(8).clamp(8.0, 10.0).toDouble()),
+                          ],
+                          _locRow(cs, ui, label: 'Pickup', icon: Icons.pin_drop_rounded, future: _pickupAddressFuture),
+                          SizedBox(height: ui.gap(8).clamp(8.0, 10.0).toDouble()),
+                          _locRow(cs, ui, label: 'Drop', icon: Icons.flag_rounded, future: _dropAddressFuture),
+                          if (!widget.isViewOnly) ...[
+                            SizedBox(height: ui.gap(10).clamp(8.0, 12.0).toDouble()),
+                            Wrap(
+                              spacing: ui.gap(7).clamp(6.0, 8.0).toDouble(),
+                              runSpacing: ui.gap(7).clamp(6.0, 8.0).toDouble(),
+                              children: [
+                                _nxChip(cs, ui, icon: Icons.near_me_rounded, tone: const Color(0xFF1E8E3E), text: distKmToUser > 0 ? (distKmToUser < 1 ? '${(distKmToUser * 1000).round()}m' : '${distKmToUser.toStringAsFixed(2)}km') : 'Near', mono: true),
+                                _nxChip(cs, ui, icon: Icons.timer_rounded, tone: const Color(0xFFB8860B), text: etaMin > 0 ? '${etaMin} min' : '—', mono: true),
+                              ],
+                            ),
+                          ]
                         ],
                       ),
                     ),
@@ -892,69 +614,21 @@ class _DriverDetailsSheetState extends State<DriverDetailsSheet> {
                           if (stacked) {
                             return Column(
                               children: [
-                                _statTile(
-                                  cs,
-                                  ui,
-                                  'Completed',
-                                  '$completed',
-                                  Icons.check_circle_rounded,
-                                  const Color(0xFF1E8E3E),
-                                ),
-                                SizedBox(height: ui.gap(8).clamp(8.0, 10.0)),
-                                _statTile(
-                                  cs,
-                                  ui,
-                                  'Reviews',
-                                  '$reviews',
-                                  Icons.reviews_rounded,
-                                  const Color(0xFF6A5ACD),
-                                ),
-                                SizedBox(height: ui.gap(8).clamp(8.0, 10.0)),
-                                _statTile(
-                                  cs,
-                                  ui,
-                                  'Total trips',
-                                  '$totalTrips',
-                                  Icons.verified_rounded,
-                                  AppColors.primary,
-                                ),
+                                _statTile(cs, ui, 'Completed', '$completed', Icons.check_circle_rounded, const Color(0xFF1E8E3E)),
+                                SizedBox(height: ui.gap(8).clamp(8.0, 10.0).toDouble()),
+                                _statTile(cs, ui, 'Reviews', '$reviews', Icons.reviews_rounded, const Color(0xFF6A5ACD)),
+                                SizedBox(height: ui.gap(8).clamp(8.0, 10.0).toDouble()),
+                                _statTile(cs, ui, 'Total trips', '$totalTrips', Icons.verified_rounded, AppColors.primary),
                               ],
                             );
                           }
                           return Row(
                             children: [
-                              Expanded(
-                                child: _statTile(
-                                  cs,
-                                  ui,
-                                  'Completed',
-                                  '$completed',
-                                  Icons.check_circle_rounded,
-                                  const Color(0xFF1E8E3E),
-                                ),
-                              ),
-                              SizedBox(width: ui.gap(8).clamp(8.0, 10.0)),
-                              Expanded(
-                                child: _statTile(
-                                  cs,
-                                  ui,
-                                  'Reviews',
-                                  '$reviews',
-                                  Icons.reviews_rounded,
-                                  const Color(0xFF6A5ACD),
-                                ),
-                              ),
-                              SizedBox(width: ui.gap(8).clamp(8.0, 10.0)),
-                              Expanded(
-                                child: _statTile(
-                                  cs,
-                                  ui,
-                                  'Total trips',
-                                  '$totalTrips',
-                                  Icons.verified_rounded,
-                                  AppColors.primary,
-                                ),
-                              ),
+                              Expanded(child: _statTile(cs, ui, 'Completed', '$completed', Icons.check_circle_rounded, const Color(0xFF1E8E3E))),
+                              SizedBox(width: ui.gap(8).clamp(8.0, 10.0).toDouble()),
+                              Expanded(child: _statTile(cs, ui, 'Reviews', '$reviews', Icons.reviews_rounded, const Color(0xFF6A5ACD))),
+                              SizedBox(width: ui.gap(8).clamp(8.0, 10.0).toDouble()),
+                              Expanded(child: _statTile(cs, ui, 'Total trips', '$totalTrips', Icons.verified_rounded, AppColors.primary)),
                             ],
                           );
                         },
@@ -969,135 +643,81 @@ class _DriverDetailsSheetState extends State<DriverDetailsSheet> {
                       child: Column(
                         children: [
                           Wrap(
-                            spacing: ui.gap(8).clamp(8.0, 10.0),
-                            runSpacing: ui.gap(8).clamp(8.0, 10.0),
+                            spacing: ui.gap(8).clamp(8.0, 10.0).toDouble(),
+                            runSpacing: ui.gap(8).clamp(8.0, 10.0).toDouble(),
                             children: [
-                              _priceMetricTile(
-                                cs,
-                                ui,
-                                title: 'Base fare',
-                                value: base > 0
-                                    ? '$cur${_moneyFmt.format(base.round())}'
-                                    : '—',
-                                tone: const Color(0xFF1A73E8),
-                              ),
-                              _priceMetricTile(
-                                cs,
-                                ui,
-                                title: 'Per km',
-                                value: perKm > 0
-                                    ? '$cur${_moneyFmt.format(perKm.round())}'
-                                    : '—',
-                                tone: const Color(0xFF6A5ACD),
-                              ),
-                              _priceMetricTile(
-                                cs,
-                                ui,
-                                title: 'Trip km',
-                                value: widget.tripDistanceKm > 0
-                                    ? widget.tripDistanceKm.toStringAsFixed(2)
-                                    : '—',
-                                tone: const Color(0xFF1E8E3E),
-                              ),
-                              _priceMetricTile(
-                                cs,
-                                ui,
-                                title: 'API total',
-                                value: _estimatedTotal() > 0
-                                    ? '$cur${_moneyFmt.format(_estimatedTotal().round())}'
-                                    : '—',
-                                tone: const Color(0xFFB8860B),
-                              ),
+                              _priceMetricTile(cs, ui, title: 'Base fare', value: base > 0 ? '$cur${_moneyFmt.format(base.round())}' : '—', tone: const Color(0xFF1A73E8)),
+                              _priceMetricTile(cs, ui, title: 'Per km', value: perKm > 0 ? '$cur${_moneyFmt.format(perKm.round())}' : '—', tone: const Color(0xFF6A5ACD)),
+                              _priceMetricTile(cs, ui, title: 'Trip km', value: widget.tripDistanceKm > 0 ? widget.tripDistanceKm.toStringAsFixed(2) : '—', tone: const Color(0xFF1E8E3E)),
+                              _priceMetricTile(cs, ui, title: 'API total', value: _estimatedTotal() > 0 ? '$cur${_moneyFmt.format(_estimatedTotal().round())}' : '—', tone: const Color(0xFFB8860B)),
                             ],
                           ),
-                          SizedBox(height: ui.gap(12).clamp(10.0, 14.0)),
-                          _kvRow(
-                            cs,
-                            ui,
-                            'Currency',
-                            _s(widget.offer['currency'], _s(widget.driver['currency'], 'NGN')),
-                          ),
-                          SizedBox(height: ui.gap(6).clamp(6.0, 8.0)),
-                          // _kvRow(cs, 'Base fare', base > 0 ? '$cur${_moneyFmt.format(base.round())}' : '—', mono: true),
-                          // const SizedBox(height: 6),
-                          // _kvRow(cs, 'Price / km', perKm > 0 ? '$cur${_moneyFmt.format(perKm.round())}/km' : '—', mono: true),
-                          // const SizedBox(height: 6),
-                          // _kvRow(cs, 'Trip km', widget.tripDistanceKm > 0 ? widget.tripDistanceKm.toStringAsFixed(3) : '—', mono: true),
-                          SizedBox(height: ui.gap(6).clamp(6.0, 8.0)),
-                          _kvRow(
-                            cs,
-                            ui,
-                            'Estimated total (API)',
-                            _estimatedTotal() > 0
-                                ? '$cur${_moneyFmt.format(_estimatedTotal().round())}'
-                                : '—',
-                            mono: true,
-                          ),
-                          SizedBox(height: ui.gap(10).clamp(10.0, 12.0)),
-                          _bigTotal(
-                            cs,
-                            ui,
-                            total > 0 ? '$cur${_moneyFmt.format(total.round())}' : '—',
-                          ),
+                          SizedBox(height: ui.gap(12).clamp(10.0, 14.0).toDouble()),
+                          _kvRow(cs, ui, 'Currency', _s(widget.offer['currency'], _s(widget.driver['currency'], 'NGN'))),
+                          SizedBox(height: ui.gap(6).clamp(6.0, 8.0).toDouble()),
+                          _kvRow(cs, ui, 'Estimated total (API)', _estimatedTotal() > 0 ? '$cur${_moneyFmt.format(_estimatedTotal().round())}' : '—', mono: true),
+                          SizedBox(height: ui.gap(10).clamp(10.0, 12.0).toDouble()),
+                          _bigTotal(cs, ui, total > 0 ? '$cur${_moneyFmt.format(total.round())}' : '—'),
                         ],
                       ),
                     ),
-                    SizedBox(height: ui.gap(90).clamp(84.0, 100.0)),
+                    SizedBox(height: widget.isViewOnly ? ui.gap(24).toDouble() : ui.gap(90).clamp(84.0, 100.0).toDouble()),
                   ],
                 ),
               ),
-              SafeArea(
-                top: false,
-                child: Container(
-                  padding: EdgeInsets.fromLTRB(
-                    sidePad,
-                    ui.gap(10).clamp(10.0, 12.0),
-                    sidePad,
-                    ui.gap(10).clamp(10.0, 12.0) + mq.padding.bottom,
-                  ),
-                  decoration: BoxDecoration(
-                    color: Theme.of(context).cardColor,
-                    border: Border(
-                      top: BorderSide(color: cs.onSurface.withOpacity(0.08)),
+
+              // ---> CONDITIONALLY HIDE CONFIRM BUTTON IF IN VIEW ONLY MODE <---
+              if (!widget.isViewOnly)
+                SafeArea(
+                  top: false,
+                  child: Container(
+                    padding: EdgeInsets.fromLTRB(
+                      sidePad,
+                      ui.gap(10).clamp(10.0, 12.0).toDouble(),
+                      sidePad,
+                      ui.gap(10).clamp(10.0, 12.0).toDouble() + mq.padding.bottom,
                     ),
-                  ),
-                  child: SizedBox(
-                    width: double.infinity,
-                    height: ui.inset(52).clamp(50.0, 56.0),
-                    child: ElevatedButton(
-                      onPressed: _submitting ? null : _handleConfirm,
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: AppColors.primary,
-                        foregroundColor: Colors.white,
-                        disabledBackgroundColor: cs.onSurface.withOpacity(0.12),
-                        disabledForegroundColor: cs.onSurface.withOpacity(0.45),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(
-                            ui.radius(16).clamp(14.0, 18.0),
-                          ),
-                        ),
-                        elevation: 0,
+                    decoration: BoxDecoration(
+                      color: Theme.of(context).cardColor,
+                      border: Border(
+                        top: BorderSide(color: cs.onSurface.withOpacity(0.08)),
                       ),
-                      child: _submitting
-                          ? const SizedBox(
-                        width: 18,
-                        height: 18,
-                        child: CircularProgressIndicator(
-                          strokeWidth: 2.4,
-                          valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                    ),
+                    child: SizedBox(
+                      width: double.infinity,
+                      height: ui.inset(52).clamp(50.0, 56.0).toDouble(),
+                      child: ElevatedButton(
+                        onPressed: _submitting ? null : _handleConfirm,
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: AppColors.primary,
+                          foregroundColor: Colors.white,
+                          disabledBackgroundColor: cs.onSurface.withOpacity(0.12),
+                          disabledForegroundColor: cs.onSurface.withOpacity(0.45),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(ui.radius(16).clamp(14.0, 18.0).toDouble()),
+                          ),
+                          elevation: 0,
                         ),
-                      )
-                          : Text(
-                        'Confirm ride',
-                        style: TextStyle(
-                          fontWeight: FontWeight.w900,
-                          fontSize: ui.font(13).clamp(13.0, 14.0),
+                        child: _submitting
+                            ? const SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2.4,
+                            valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                          ),
+                        )
+                            : Text(
+                          'Confirm ride',
+                          style: TextStyle(
+                            fontWeight: FontWeight.w900,
+                            fontSize: ui.font(13).clamp(13.0, 14.0).toDouble(),
+                          ),
                         ),
                       ),
                     ),
                   ),
                 ),
-              ),
             ],
           ),
         ),
@@ -1105,12 +725,9 @@ class _DriverDetailsSheetState extends State<DriverDetailsSheet> {
     );
   }
 
-  // =========================
-  // Small UI building blocks
-  // =========================
   Widget _handle(ColorScheme cs, UIScale ui) {
     return Container(
-      width: ui.inset(54).clamp(50.0, 58.0),
+      width: ui.inset(54).clamp(50.0, 58.0).toDouble(),
       height: 5,
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(999),
@@ -1122,29 +739,26 @@ class _DriverDetailsSheetState extends State<DriverDetailsSheet> {
   Widget _topBar(ColorScheme cs, UIScale ui) {
     return Padding(
       padding: EdgeInsets.fromLTRB(
-        ui.inset(10).clamp(10.0, 12.0),
+        ui.inset(10).clamp(10.0, 12.0).toDouble(),
         0,
-        ui.inset(10).clamp(10.0, 12.0),
-        ui.gap(6).clamp(6.0, 8.0),
+        ui.inset(10).clamp(10.0, 12.0).toDouble(),
+        ui.gap(6).clamp(6.0, 8.0).toDouble(),
       ),
       child: Row(
         children: [
           IconButton(
             onPressed: _submitting ? null : () => Navigator.of(context).pop(),
-            icon: Icon(
-              Icons.arrow_back_rounded,
-              size: ui.icon(22).clamp(22.0, 24.0),
-            ),
+            icon: Icon(Icons.arrow_back_rounded, size: ui.icon(22).clamp(22.0, 24.0).toDouble()),
             tooltip: 'Back',
           ),
           Expanded(
             child: Text(
-              'Ride details',
+              widget.isViewOnly ? 'Profile Details' : 'Ride details',
               textAlign: TextAlign.center,
               style: TextStyle(
                 fontWeight: FontWeight.w900,
                 color: cs.onSurface.withOpacity(0.90),
-                fontSize: ui.font(14).clamp(13.0, 15.0),
+                fontSize: ui.font(14).clamp(13.0, 15.0).toDouble(),
               ),
             ),
           ),
@@ -1158,10 +772,7 @@ class _DriverDetailsSheetState extends State<DriverDetailsSheet> {
                 _copy('Booking payload', payload.toString());
               }
             },
-            icon: Icon(
-              Icons.copy_all_rounded,
-              size: ui.icon(21).clamp(21.0, 23.0),
-            ),
+            icon: Icon(Icons.copy_all_rounded, size: ui.icon(21).clamp(21.0, 23.0).toDouble()),
             tooltip: 'Copy payload',
           ),
         ],
@@ -1169,23 +780,12 @@ class _DriverDetailsSheetState extends State<DriverDetailsSheet> {
     );
   }
 
-  Widget _card(
-      ColorScheme cs,
-      UIScale ui, {
-        String? header,
-        IconData? icon,
-        required Widget child,
-      }) {
+  Widget _card(ColorScheme cs, UIScale ui, {String? header, IconData? icon, required Widget child}) {
     return Container(
-      padding: EdgeInsets.fromLTRB(
-        ui.inset(12).clamp(12.0, 14.0),
-        ui.inset(12).clamp(12.0, 14.0),
-        ui.inset(12).clamp(12.0, 14.0),
-        ui.inset(12).clamp(12.0, 14.0),
-      ),
+      padding: EdgeInsets.all(ui.inset(12).clamp(12.0, 14.0).toDouble()),
       decoration: BoxDecoration(
         color: cs.surface,
-        borderRadius: BorderRadius.circular(ui.radius(14).clamp(14.0, 16.0)),
+        borderRadius: BorderRadius.circular(ui.radius(14).clamp(14.0, 16.0).toDouble()),
         border: Border.all(color: cs.onSurface.withOpacity(0.08)),
       ),
       child: (header == null)
@@ -1195,24 +795,12 @@ class _DriverDetailsSheetState extends State<DriverDetailsSheet> {
         children: [
           Row(
             children: [
-              if (icon != null)
-                Icon(
-                  icon,
-                  size: ui.icon(18).clamp(18.0, 20.0),
-                  color: cs.onSurface.withOpacity(0.60),
-                ),
-              if (icon != null) SizedBox(width: ui.gap(8).clamp(8.0, 10.0)),
-              Text(
-                header,
-                style: TextStyle(
-                  fontWeight: FontWeight.w900,
-                  color: cs.onSurface.withOpacity(0.88),
-                  fontSize: ui.font(12.5).clamp(12.5, 13.5),
-                ),
-              ),
+              if (icon != null) Icon(icon, size: ui.icon(18).clamp(18.0, 20.0).toDouble(), color: cs.onSurface.withOpacity(0.60)),
+              if (icon != null) SizedBox(width: ui.gap(8).clamp(8.0, 10.0).toDouble()),
+              Text(header, style: TextStyle(fontWeight: FontWeight.w900, color: cs.onSurface.withOpacity(0.88), fontSize: ui.font(12.5).clamp(12.5, 13.5).toDouble())),
             ],
           ),
-          SizedBox(height: ui.gap(10).clamp(8.0, 12.0)),
+          SizedBox(height: ui.gap(10).clamp(8.0, 12.0).toDouble()),
           child,
         ],
       ),
@@ -1220,24 +808,13 @@ class _DriverDetailsSheetState extends State<DriverDetailsSheet> {
   }
 
   Widget _miniText(ColorScheme cs, UIScale ui, String t) {
-    return Text(
-      t,
-      style: TextStyle(
-        fontWeight: FontWeight.w900,
-        color: cs.onSurface.withOpacity(0.55),
-        fontSize: ui.font(10.5).clamp(10.0, 11.0),
-        height: 1.0,
-      ),
-    );
+    return Text(t, style: TextStyle(fontWeight: FontWeight.w900, color: cs.onSurface.withOpacity(0.55), fontSize: ui.font(10.5).clamp(10.0, 11.0).toDouble(), height: 1.0));
   }
 
   Widget _rankPill(ColorScheme cs, UIScale ui, String rank) {
     final c = _rankColor(rank);
     return Container(
-      padding: EdgeInsets.symmetric(
-        horizontal: ui.inset(10).clamp(9.0, 11.0),
-        vertical: ui.inset(6).clamp(5.0, 7.0),
-      ),
+      padding: EdgeInsets.symmetric(horizontal: ui.inset(10).clamp(9.0, 11.0).toDouble(), vertical: ui.inset(6).clamp(5.0, 7.0).toDouble()),
       decoration: BoxDecoration(
         color: c.withOpacity(0.12),
         borderRadius: BorderRadius.circular(999),
@@ -1246,30 +823,15 @@ class _DriverDetailsSheetState extends State<DriverDetailsSheet> {
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(_rankIcon(rank), size: ui.icon(14).clamp(14.0, 15.0), color: c),
-          SizedBox(width: ui.gap(6).clamp(5.0, 7.0)),
-          Text(
-            rank,
-            style: TextStyle(
-              fontWeight: FontWeight.w900,
-              color: c,
-              fontSize: ui.font(11).clamp(10.5, 11.5),
-              height: 1.0,
-            ),
-          ),
+          Icon(_rankIcon(rank), size: ui.icon(14).clamp(14.0, 15.0).toDouble(), color: c),
+          SizedBox(width: ui.gap(6).clamp(5.0, 7.0).toDouble()),
+          Text(rank, style: TextStyle(fontWeight: FontWeight.w900, color: c, fontSize: ui.font(11).clamp(10.5, 11.5).toDouble(), height: 1.0)),
         ],
       ),
     );
   }
 
-  Widget _nxChip(
-      ColorScheme cs,
-      UIScale ui, {
-        required IconData icon,
-        required Color tone,
-        required String text,
-        bool mono = false,
-      }) {
+  Widget _nxChip(ColorScheme cs, UIScale ui, {required IconData icon, required Color tone, required String text, bool mono = false}) {
     return DecoratedBox(
       decoration: BoxDecoration(
         color: tone.withOpacity(0.10),
@@ -1277,65 +839,29 @@ class _DriverDetailsSheetState extends State<DriverDetailsSheet> {
         border: Border.all(color: tone.withOpacity(0.22), width: 1),
       ),
       child: Padding(
-        padding: EdgeInsets.symmetric(
-          horizontal: ui.inset(8).clamp(7.0, 9.0),
-          vertical: ui.inset(5).clamp(4.0, 6.0),
-        ),
+        padding: EdgeInsets.symmetric(horizontal: ui.inset(8).clamp(7.0, 9.0).toDouble(), vertical: ui.inset(5).clamp(4.0, 6.0).toDouble()),
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(icon, size: ui.icon(12.5).clamp(12.0, 13.0), color: tone),
-            SizedBox(width: ui.gap(6).clamp(5.0, 7.0)),
-            Text(
-              text,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(
-                fontWeight: FontWeight.w900,
-                color: cs.onSurface.withOpacity(0.86),
-                fontSize: ui.font(10.4).clamp(10.0, 11.0),
-                height: 1.0,
-                letterSpacing: -0.1,
-                fontFeatures: mono ? const [FontFeature.tabularFigures()] : null,
-              ),
-            ),
+            Icon(icon, size: ui.icon(12.5).clamp(12.0, 13.0).toDouble(), color: tone),
+            SizedBox(width: ui.gap(6).clamp(5.0, 7.0).toDouble()),
+            Text(text, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontWeight: FontWeight.w900, color: cs.onSurface.withOpacity(0.86), fontSize: ui.font(10.4).clamp(10.0, 11.0).toDouble(), height: 1.0, letterSpacing: -0.1, fontFeatures: mono ? const [FontFeature.tabularFigures()] : null)),
           ],
         ),
       ),
     );
   }
 
-  Widget _miniPill(
-      ColorScheme cs,
-      UIScale ui, {
-        required IconData icon,
-        required Color tone,
-        required String text,
-      }) {
+  Widget _miniPill(ColorScheme cs, UIScale ui, {required IconData icon, required Color tone, required String text}) {
     return Container(
-      padding: EdgeInsets.symmetric(
-        horizontal: ui.inset(9).clamp(8.0, 10.0),
-        vertical: ui.inset(6).clamp(5.0, 7.0),
-      ),
-      decoration: BoxDecoration(
-        color: tone.withOpacity(0.10),
-        borderRadius: BorderRadius.circular(999),
-        border: Border.all(color: tone.withOpacity(0.22)),
-      ),
+      padding: EdgeInsets.symmetric(horizontal: ui.inset(9).clamp(8.0, 10.0).toDouble(), vertical: ui.inset(6).clamp(5.0, 7.0).toDouble()),
+      decoration: BoxDecoration(color: tone.withOpacity(0.10), borderRadius: BorderRadius.circular(999), border: Border.all(color: tone.withOpacity(0.22))),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(icon, size: ui.icon(14).clamp(14.0, 15.0), color: tone),
-          SizedBox(width: ui.gap(6).clamp(5.0, 7.0)),
-          Text(
-            text,
-            style: TextStyle(
-              fontWeight: FontWeight.w900,
-              color: cs.onSurface.withOpacity(0.86),
-              fontSize: ui.font(11).clamp(10.5, 11.5),
-              height: 1.0,
-            ),
-          ),
+          Icon(icon, size: ui.icon(14).clamp(14.0, 15.0).toDouble(), color: tone),
+          SizedBox(width: ui.gap(6).clamp(5.0, 7.0).toDouble()),
+          Text(text, style: TextStyle(fontWeight: FontWeight.w900, color: cs.onSurface.withOpacity(0.86), fontSize: ui.font(11).clamp(10.5, 11.5).toDouble(), height: 1.0)),
         ],
       ),
     );
@@ -1348,72 +874,33 @@ class _DriverDetailsSheetState extends State<DriverDetailsSheet> {
     final empty = 5 - full - half;
 
     final icons = <Widget>[];
-    for (int i = 0; i < full; i++) {
-      icons.add(Icon(
-        Icons.star_rounded,
-        size: ui.icon(16).clamp(16.0, 18.0),
-        color: const Color(0xFFFFD54F),
-      ));
-    }
-    if (half == 1) {
-      icons.add(Icon(
-        Icons.star_half_rounded,
-        size: ui.icon(16).clamp(16.0, 18.0),
-        color: const Color(0xFFFFD54F),
-      ));
-    }
-    for (int i = 0; i < empty; i++) {
-      icons.add(Icon(
-        Icons.star_outline_rounded,
-        size: ui.icon(16).clamp(16.0, 18.0),
-        color: cs.onSurface.withOpacity(0.30),
-      ));
-    }
+    for (int i = 0; i < full; i++) icons.add(Icon(Icons.star_rounded, size: ui.icon(16).clamp(16.0, 18.0).toDouble(), color: const Color(0xFFFFD54F)));
+    if (half == 1) icons.add(Icon(Icons.star_half_rounded, size: ui.icon(16).clamp(16.0, 18.0).toDouble(), color: const Color(0xFFFFD54F)));
+    for (int i = 0; i < empty; i++) icons.add(Icon(Icons.star_outline_rounded, size: ui.icon(16).clamp(16.0, 18.0).toDouble(), color: cs.onSurface.withOpacity(0.30)));
 
     return Row(
       children: [
         ...icons,
-        SizedBox(width: ui.gap(8).clamp(8.0, 10.0)),
-        Text(
-          r.toStringAsFixed(2),
-          style: TextStyle(
-            fontWeight: FontWeight.w900,
-            color: cs.onSurface.withOpacity(0.80),
-            fontSize: ui.font(12).clamp(12.0, 13.0),
-          ),
-        ),
+        SizedBox(width: ui.gap(8).clamp(8.0, 10.0).toDouble()),
+        Text(r.toStringAsFixed(2), style: TextStyle(fontWeight: FontWeight.w900, color: cs.onSurface.withOpacity(0.80), fontSize: ui.font(12).clamp(12.0, 13.0).toDouble())),
       ],
     );
   }
 
   Widget _avatar(ColorScheme cs, UIScale ui, String url, String initials) {
-    final size = ui.inset(54).clamp(52.0, 58.0);
+    final size = ui.inset(54).clamp(52.0, 58.0).toDouble();
     final u = url.trim();
 
     Widget fallback() {
       return Container(
         width: size,
         height: size,
-        decoration: BoxDecoration(
-          shape: BoxShape.circle,
-          color: cs.onSurface.withOpacity(0.06),
-          border: Border.all(color: cs.onSurface.withOpacity(0.10)),
-        ),
-        child: Center(
-          child: Text(
-            initials,
-            style: TextStyle(
-              fontWeight: FontWeight.w900,
-              color: cs.onSurface.withOpacity(0.78),
-              fontSize: ui.font(12).clamp(12.0, 13.0),
-            ),
-          ),
-        ),
+        decoration: BoxDecoration(shape: BoxShape.circle, color: cs.onSurface.withOpacity(0.06), border: Border.all(color: cs.onSurface.withOpacity(0.10))),
+        child: Center(child: Text(initials, style: TextStyle(fontWeight: FontWeight.w900, color: cs.onSurface.withOpacity(0.78), fontSize: ui.font(12).clamp(12.0, 13.0).toDouble()))),
       );
     }
 
     if (u.isEmpty) return fallback();
-
     final dpr = MediaQuery.of(context).devicePixelRatio;
     final cacheW = (size * dpr).round();
 
@@ -1429,19 +916,7 @@ class _DriverDetailsSheetState extends State<DriverDetailsSheet> {
           errorBuilder: (_, __, ___) => fallback(),
           loadingBuilder: (c, w, p) {
             if (p == null) return w;
-            return Container(
-              color: cs.onSurface.withOpacity(0.06),
-              child: const Center(
-                child: SizedBox(
-                  width: 18,
-                  height: 18.0,
-                  child: CircularProgressIndicator(
-                    strokeWidth: 2.4,
-                    valueColor: AlwaysStoppedAnimation<Color>(AppColors.primary),
-                  ),
-                ),
-              ),
-            );
+            return Container(color: cs.onSurface.withOpacity(0.06), child: const Center(child: SizedBox(width: 18, height: 18.0, child: CircularProgressIndicator(strokeWidth: 2.4, valueColor: AlwaysStoppedAnimation<Color>(AppColors.primary)))));
           },
         ),
       ),
@@ -1452,17 +927,13 @@ class _DriverDetailsSheetState extends State<DriverDetailsSheet> {
     final double h = math.min<double>(
       220.0,
       math.max<double>(170.0, MediaQuery.of(context).size.height * 0.24),
-    );
+    ).toDouble();
 
     return Container(
       height: h,
-      decoration: BoxDecoration(
-        color: cs.surface,
-        borderRadius: BorderRadius.circular(ui.radius(14).clamp(14.0, 16.0)),
-        border: Border.all(color: cs.onSurface.withOpacity(0.08)),
-      ),
+      decoration: BoxDecoration(color: cs.surface, borderRadius: BorderRadius.circular(ui.radius(14).clamp(14.0, 16.0).toDouble()), border: Border.all(color: cs.onSurface.withOpacity(0.08))),
       child: ClipRRect(
-        borderRadius: BorderRadius.circular(ui.radius(14).clamp(14.0, 16.0)),
+        borderRadius: BorderRadius.circular(ui.radius(14).clamp(14.0, 16.0).toDouble()),
         child: Stack(
           children: [
             PageView.builder(
@@ -1471,35 +942,7 @@ class _DriverDetailsSheetState extends State<DriverDetailsSheet> {
               onPageChanged: (i) => setState(() => _page = i),
               itemBuilder: (_, i) {
                 final u = _fixUrl(imgs[i]);
-                return Image.network(
-                  u,
-                  fit: BoxFit.cover,
-                  filterQuality: FilterQuality.low,
-                  errorBuilder: (_, __, ___) => Container(
-                    color: cs.onSurface.withOpacity(0.06),
-                    child: Icon(
-                      Icons.image_not_supported_rounded,
-                      color: cs.onSurface.withOpacity(0.55),
-                      size: ui.icon(36).clamp(34.0, 38.0),
-                    ),
-                  ),
-                  loadingBuilder: (c, w, p) {
-                    if (p == null) return w;
-                    return Container(
-                      color: cs.onSurface.withOpacity(0.06),
-                      child: const Center(
-                        child: SizedBox(
-                          width: 18,
-                          height: 18,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2.4,
-                            valueColor: AlwaysStoppedAnimation<Color>(AppColors.primary),
-                          ),
-                        ),
-                      ),
-                    );
-                  },
-                );
+                return Image.network(u, fit: BoxFit.cover, filterQuality: FilterQuality.low, errorBuilder: (_, __, ___) => Container(color: cs.onSurface.withOpacity(0.06), child: Icon(Icons.image_not_supported_rounded, color: cs.onSurface.withOpacity(0.55), size: ui.icon(36).clamp(34.0, 38.0).toDouble())), loadingBuilder: (c, w, p) { if (p == null) return w; return Container(color: cs.onSurface.withOpacity(0.06), child: const Center(child: SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2.4, valueColor: AlwaysStoppedAnimation<Color>(AppColors.primary))))); });
               },
             ),
             Positioned(
@@ -1510,16 +953,7 @@ class _DriverDetailsSheetState extends State<DriverDetailsSheet> {
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: List.generate(imgs.length, (i) {
                   final active = i == _page;
-                  return AnimatedContainer(
-                    duration: const Duration(milliseconds: 220),
-                    margin: const EdgeInsets.symmetric(horizontal: 4),
-                    width: active ? 16 : 7,
-                    height: 7,
-                    decoration: BoxDecoration(
-                      color: Colors.white.withOpacity(active ? 0.95 : 0.55),
-                      borderRadius: BorderRadius.circular(999),
-                    ),
-                  );
+                  return AnimatedContainer(duration: const Duration(milliseconds: 220), margin: const EdgeInsets.symmetric(horizontal: 4), width: active ? 16 : 7, height: 7, decoration: BoxDecoration(color: Colors.white.withOpacity(active ? 0.95 : 0.55), borderRadius: BorderRadius.circular(999)));
                 }),
               ),
             ),
@@ -1529,137 +963,60 @@ class _DriverDetailsSheetState extends State<DriverDetailsSheet> {
     );
   }
 
-  Widget _actionCard(
-      ColorScheme cs,
-      UIScale ui, {
-        required String title,
-        required String value,
-        required IconData icon,
-        required Color tone,
-        VoidCallback? onTap,
-      }) {
+  Widget _actionCard(ColorScheme cs, UIScale ui, {required String title, required String value, required IconData icon, required Color tone, VoidCallback? onTap}) {
     return InkWell(
       onTap: onTap,
-      borderRadius: BorderRadius.circular(ui.radius(14).clamp(14.0, 16.0)),
+      borderRadius: BorderRadius.circular(ui.radius(14).clamp(14.0, 16.0).toDouble()),
       child: Container(
-        padding: EdgeInsets.fromLTRB(
-          ui.inset(12).clamp(12.0, 14.0),
-          ui.inset(12).clamp(12.0, 14.0),
-          ui.inset(12).clamp(12.0, 14.0),
-          ui.inset(12).clamp(12.0, 14.0),
-        ),
-        decoration: BoxDecoration(
-          color: cs.surface,
-          borderRadius: BorderRadius.circular(ui.radius(14).clamp(14.0, 16.0)),
-          border: Border.all(color: cs.onSurface.withOpacity(0.08)),
-        ),
+        padding: EdgeInsets.all(ui.inset(12).clamp(12.0, 14.0).toDouble()),
+        decoration: BoxDecoration(color: cs.surface, borderRadius: BorderRadius.circular(ui.radius(14).clamp(14.0, 16.0).toDouble()), border: Border.all(color: cs.onSurface.withOpacity(0.08))),
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Container(
-              width: ui.inset(40).clamp(40.0, 44.0),
-              height: ui.inset(40).clamp(40.0, 44.0),
-              decoration: BoxDecoration(
-                color: tone.withOpacity(0.12),
-                borderRadius: BorderRadius.circular(ui.radius(12).clamp(12.0, 14.0)),
-                border: Border.all(color: tone.withOpacity(0.22)),
-              ),
-              child: Icon(icon, color: tone, size: ui.icon(20).clamp(20.0, 22.0)),
+              width: ui.inset(40).clamp(40.0, 44.0).toDouble(),
+              height: ui.inset(40).clamp(40.0, 44.0).toDouble(),
+              decoration: BoxDecoration(color: tone.withOpacity(0.12), borderRadius: BorderRadius.circular(ui.radius(12).clamp(12.0, 14.0).toDouble()), border: Border.all(color: tone.withOpacity(0.22))),
+              child: Icon(icon, color: tone, size: ui.icon(20).clamp(20.0, 22.0).toDouble()),
             ),
-            SizedBox(width: ui.gap(10).clamp(10.0, 12.0)),
+            SizedBox(width: ui.gap(10).clamp(10.0, 12.0).toDouble()),
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(
-                    title,
-                    style: TextStyle(
-                      fontWeight: FontWeight.w900,
-                      color: cs.onSurface.withOpacity(0.70),
-                      fontSize: ui.font(12).clamp(12.0, 13.0),
-                    ),
-                  ),
-                  SizedBox(height: ui.gap(4).clamp(4.0, 6.0)),
-                  Text(
-                    value,
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      fontWeight: FontWeight.w900,
-                      color: cs.onSurface.withOpacity(0.90),
-                      fontSize: ui.font(12.5).clamp(12.0, 13.0),
-                    ),
-                  ),
+                  Text(title, style: TextStyle(fontWeight: FontWeight.w900, color: cs.onSurface.withOpacity(0.70), fontSize: ui.font(12).clamp(12.0, 13.0).toDouble())),
+                  SizedBox(height: ui.gap(4).clamp(4.0, 6.0).toDouble()),
+                  Text(value, maxLines: 2, overflow: TextOverflow.ellipsis, style: TextStyle(fontWeight: FontWeight.w900, color: cs.onSurface.withOpacity(0.90), fontSize: ui.font(12.5).clamp(12.0, 13.0).toDouble())),
                 ],
               ),
             ),
-            if (onTap != null)
-              Icon(
-                Icons.copy_rounded,
-                color: cs.onSurface.withOpacity(0.55),
-                size: ui.icon(18).clamp(18.0, 20.0),
-              ),
+            if (onTap != null) Icon(Icons.copy_rounded, color: cs.onSurface.withOpacity(0.55), size: ui.icon(18).clamp(18.0, 20.0).toDouble()),
           ],
         ),
       ),
     );
   }
 
-  Widget _statTile(
-      ColorScheme cs,
-      UIScale ui,
-      String title,
-      String v,
-      IconData icon,
-      Color tone,
-      ) {
+  Widget _statTile(ColorScheme cs, UIScale ui, String title, String v, IconData icon, Color tone) {
     return Container(
-      padding: EdgeInsets.fromLTRB(
-        ui.inset(12).clamp(12.0, 14.0),
-        ui.inset(12).clamp(12.0, 14.0),
-        ui.inset(12).clamp(12.0, 14.0),
-        ui.inset(12).clamp(12.0, 14.0),
-      ),
-      decoration: BoxDecoration(
-        color: cs.surface,
-        borderRadius: BorderRadius.circular(ui.radius(14).clamp(14.0, 16.0)),
-        border: Border.all(color: cs.onSurface.withOpacity(0.08)),
-      ),
+      padding: EdgeInsets.all(ui.inset(12).clamp(12.0, 14.0).toDouble()),
+      decoration: BoxDecoration(color: cs.surface, borderRadius: BorderRadius.circular(ui.radius(14).clamp(14.0, 16.0).toDouble()), border: Border.all(color: cs.onSurface.withOpacity(0.08))),
       child: Row(
         children: [
           Container(
-            width: ui.inset(40).clamp(40.0, 44.0),
-            height: ui.inset(40).clamp(40.0, 44.0),
-            decoration: BoxDecoration(
-              color: tone.withOpacity(0.10),
-              borderRadius: BorderRadius.circular(ui.radius(12).clamp(12.0, 14.0)),
-              border: Border.all(color: tone.withOpacity(0.18)),
-            ),
-            child: Icon(icon, color: tone.withOpacity(0.95), size: ui.icon(20).clamp(20.0, 22.0)),
+            width: ui.inset(40).clamp(40.0, 44.0).toDouble(),
+            height: ui.inset(40).clamp(40.0, 44.0).toDouble(),
+            decoration: BoxDecoration(color: tone.withOpacity(0.10), borderRadius: BorderRadius.circular(ui.radius(12).clamp(12.0, 14.0).toDouble()), border: Border.all(color: tone.withOpacity(0.18))),
+            child: Icon(icon, color: tone.withOpacity(0.95), size: ui.icon(20).clamp(20.0, 22.0).toDouble()),
           ),
-          SizedBox(width: ui.gap(10).clamp(10.0, 12.0)),
+          SizedBox(width: ui.gap(10).clamp(10.0, 12.0).toDouble()),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
-                  title,
-                  style: TextStyle(
-                    fontWeight: FontWeight.w900,
-                    color: cs.onSurface.withOpacity(0.70),
-                    fontSize: ui.font(12).clamp(12.0, 13.0),
-                  ),
-                ),
-                SizedBox(height: ui.gap(4).clamp(4.0, 6.0)),
-                Text(
-                  v,
-                  style: TextStyle(
-                    fontWeight: FontWeight.w900,
-                    color: cs.onSurface.withOpacity(0.90),
-                    fontSize: ui.font(14).clamp(13.5, 15.0),
-                    fontFeatures: const [FontFeature.tabularFigures()],
-                  ),
-                ),
+                Text(title, style: TextStyle(fontWeight: FontWeight.w900, color: cs.onSurface.withOpacity(0.70), fontSize: ui.font(12).clamp(12.0, 13.0).toDouble())),
+                SizedBox(height: ui.gap(4).clamp(4.0, 6.0).toDouble()),
+                Text(v, style: TextStyle(fontWeight: FontWeight.w900, color: cs.onSurface.withOpacity(0.90), fontSize: ui.font(14).clamp(13.5, 15.0).toDouble(), fontFeatures: const [FontFeature.tabularFigures()])),
               ],
             ),
           ),
@@ -1668,225 +1025,86 @@ class _DriverDetailsSheetState extends State<DriverDetailsSheet> {
     );
   }
 
-  Widget _kvRow(
-      ColorScheme cs,
-      UIScale ui,
-      String k,
-      String v, {
-        bool mono = false,
-      }) {
+  Widget _kvRow(ColorScheme cs, UIScale ui, String k, String v, {bool mono = false}) {
     return Row(
       children: [
-        Expanded(
-          child: Text(
-            k,
-            style: TextStyle(
-              fontWeight: FontWeight.w900,
-              color: cs.onSurface.withOpacity(0.70),
-              fontSize: ui.font(11.5).clamp(11.5, 12.5),
-            ),
-          ),
-        ),
+        Expanded(child: Text(k, style: TextStyle(fontWeight: FontWeight.w900, color: cs.onSurface.withOpacity(0.70), fontSize: ui.font(11.5).clamp(11.5, 12.5).toDouble()))),
         const SizedBox(width: 10),
-        Flexible(
-          child: Text(
-            v,
-            textAlign: TextAlign.right,
-            style: TextStyle(
-              fontWeight: FontWeight.w900,
-              color: cs.onSurface.withOpacity(0.90),
-              fontSize: ui.font(11.5).clamp(11.5, 12.5),
-              fontFeatures: mono ? const [FontFeature.tabularFigures()] : null,
-            ),
-          ),
-        ),
+        Flexible(child: Text(v, textAlign: TextAlign.right, style: TextStyle(fontWeight: FontWeight.w900, color: cs.onSurface.withOpacity(0.90), fontSize: ui.font(11.5).clamp(11.5, 12.5).toDouble(), fontFeatures: mono ? const [FontFeature.tabularFigures()] : null))),
       ],
     );
   }
 
   Widget _bigTotal(ColorScheme cs, UIScale ui, String v) {
     return Container(
-      padding: EdgeInsets.fromLTRB(
-        ui.inset(12).clamp(12.0, 14.0),
-        ui.inset(12).clamp(12.0, 14.0),
-        ui.inset(12).clamp(12.0, 14.0),
-        ui.inset(12).clamp(12.0, 14.0),
-      ),
-      decoration: BoxDecoration(
-        color: AppColors.primary.withOpacity(0.10),
-        borderRadius: BorderRadius.circular(ui.radius(14).clamp(14.0, 16.0)),
-        border: Border.all(color: AppColors.primary.withOpacity(0.22)),
-      ),
+      padding: EdgeInsets.all(ui.inset(12).clamp(12.0, 14.0).toDouble()),
+      decoration: BoxDecoration(color: AppColors.primary.withOpacity(0.10), borderRadius: BorderRadius.circular(ui.radius(14).clamp(14.0, 16.0).toDouble()), border: Border.all(color: AppColors.primary.withOpacity(0.22))),
       child: Row(
         children: [
-          Icon(
-            Icons.payments_rounded,
-            color: AppColors.primary.withOpacity(0.95),
-            size: ui.icon(20).clamp(20.0, 22.0),
-          ),
-          SizedBox(width: ui.gap(10).clamp(10.0, 12.0)),
-          Expanded(
-            child: Text(
-              'Total',
-              style: TextStyle(
-                fontWeight: FontWeight.w900,
-                color: cs.onSurface.withOpacity(0.88),
-                fontSize: ui.font(12).clamp(12.0, 13.0),
-              ),
-            ),
-          ),
-          Flexible(
-            child: Text(
-              v,
-              textAlign: TextAlign.right,
-              style: TextStyle(
-                fontWeight: FontWeight.w900,
-                color: cs.onSurface.withOpacity(0.92),
-                fontSize: ui.font(14).clamp(13.5, 15.0),
-                fontFeatures: const [FontFeature.tabularFigures()],
-              ),
-            ),
-          ),
+          Icon(Icons.payments_rounded, color: AppColors.primary.withOpacity(0.95), size: ui.icon(20).clamp(20.0, 22.0).toDouble()),
+          SizedBox(width: ui.gap(10).clamp(10.0, 12.0).toDouble()),
+          Expanded(child: Text('Total', style: TextStyle(fontWeight: FontWeight.w900, color: cs.onSurface.withOpacity(0.88), fontSize: ui.font(12).clamp(12.0, 13.0).toDouble()))),
+          Flexible(child: Text(v, textAlign: TextAlign.right, style: TextStyle(fontWeight: FontWeight.w900, color: cs.onSurface.withOpacity(0.92), fontSize: ui.font(14).clamp(13.5, 15.0).toDouble(), fontFeatures: const [FontFeature.tabularFigures()]))),
         ],
       ),
     );
   }
 
-  Widget _priceMetricTile(
-      ColorScheme cs,
-      UIScale ui, {
-        required String title,
-        required String value,
-        required Color tone,
-      }) {
+  Widget _priceMetricTile(ColorScheme cs, UIScale ui, {required String title, required String value, required Color tone}) {
     return Container(
       width: 145,
-      padding: EdgeInsets.fromLTRB(
-        ui.inset(10).clamp(10.0, 12.0),
-        ui.inset(10).clamp(10.0, 12.0),
-        ui.inset(10).clamp(10.0, 12.0),
-        ui.inset(10).clamp(10.0, 12.0),
-      ),
-      decoration: BoxDecoration(
-        color: tone.withOpacity(0.08),
-        borderRadius: BorderRadius.circular(ui.radius(12).clamp(12.0, 14.0)),
-        border: Border.all(color: tone.withOpacity(0.18)),
-      ),
+      padding: EdgeInsets.all(ui.inset(10).clamp(10.0, 12.0).toDouble()),
+      decoration: BoxDecoration(color: tone.withOpacity(0.08), borderRadius: BorderRadius.circular(ui.radius(12).clamp(12.0, 14.0).toDouble()), border: Border.all(color: tone.withOpacity(0.18))),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
-            title,
-            style: TextStyle(
-              fontWeight: FontWeight.w800,
-              color: cs.onSurface.withOpacity(0.64),
-              fontSize: ui.font(10.5).clamp(10.0, 11.0),
-            ),
-          ),
-          SizedBox(height: ui.gap(4).clamp(4.0, 6.0)),
-          Text(
-            value,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: TextStyle(
-              fontWeight: FontWeight.w900,
-              color: cs.onSurface.withOpacity(0.92),
-              fontSize: ui.font(12.4).clamp(12.0, 13.0),
-              fontFeatures: const [FontFeature.tabularFigures()],
-            ),
-          ),
+          Text(title, style: TextStyle(fontWeight: FontWeight.w800, color: cs.onSurface.withOpacity(0.64), fontSize: ui.font(10.5).clamp(10.0, 11.0).toDouble())),
+          SizedBox(height: ui.gap(4).clamp(4.0, 6.0).toDouble()),
+          Text(value, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontWeight: FontWeight.w900, color: cs.onSurface.withOpacity(0.92), fontSize: ui.font(12.4).clamp(12.0, 13.0).toDouble(), fontFeatures: const [FontFeature.tabularFigures()])),
         ],
       ),
     );
   }
 
-  Widget _locRow(
-      ColorScheme cs,
-      UIScale ui, {
-        required String label,
-        required IconData icon,
-        required Future<String> future,
-        Widget? trailing,
-      }) {
+  Widget _locRow(ColorScheme cs, UIScale ui, {required String label, required IconData icon, required Future<String> future, Widget? trailing}) {
     return FutureBuilder<String>(
       future: future,
       builder: (context, snapshot) {
         final text = (snapshot.data ?? 'Resolving address...').trim();
-        final canCopy =
-            snapshot.connectionState == ConnectionState.done &&
-                text.isNotEmpty &&
-                text != '—';
+        final canCopy = snapshot.connectionState == ConnectionState.done && text.isNotEmpty && text != '—';
 
         return InkWell(
           onTap: canCopy ? () => _copy('$label location', text) : null,
-          borderRadius: BorderRadius.circular(ui.radius(12).clamp(12.0, 14.0)),
+          borderRadius: BorderRadius.circular(ui.radius(12).clamp(12.0, 14.0).toDouble()),
           child: Container(
-            padding: EdgeInsets.fromLTRB(
-              ui.inset(10).clamp(10.0, 12.0),
-              ui.inset(10).clamp(10.0, 12.0),
-              ui.inset(10).clamp(10.0, 12.0),
-              ui.inset(10).clamp(10.0, 12.0),
-            ),
-            decoration: BoxDecoration(
-              color: cs.onSurface.withOpacity(0.03),
-              borderRadius: BorderRadius.circular(ui.radius(12).clamp(12.0, 14.0)),
-              border: Border.all(color: cs.onSurface.withOpacity(0.08)),
-            ),
+            padding: EdgeInsets.all(ui.inset(10).clamp(10.0, 12.0).toDouble()),
+            decoration: BoxDecoration(color: cs.onSurface.withOpacity(0.03), borderRadius: BorderRadius.circular(ui.radius(12).clamp(12.0, 14.0).toDouble()), border: Border.all(color: cs.onSurface.withOpacity(0.08))),
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Container(
-                  width: ui.inset(34).clamp(34.0, 38.0),
-                  height: ui.inset(34).clamp(34.0, 38.0),
-                  decoration: BoxDecoration(
-                    color: AppColors.primary.withOpacity(0.10),
-                    borderRadius: BorderRadius.circular(ui.radius(12).clamp(12.0, 14.0)),
-                    border: Border.all(color: AppColors.primary.withOpacity(0.18)),
-                  ),
-                  child: Icon(
-                    icon,
-                    size: ui.icon(18).clamp(18.0, 20.0),
-                    color: AppColors.primary.withOpacity(0.95),
-                  ),
+                  width: ui.inset(34).clamp(34.0, 38.0).toDouble(),
+                  height: ui.inset(34).clamp(34.0, 38.0).toDouble(),
+                  decoration: BoxDecoration(color: AppColors.primary.withOpacity(0.10), borderRadius: BorderRadius.circular(ui.radius(12).clamp(12.0, 14.0).toDouble()), border: Border.all(color: AppColors.primary.withOpacity(0.18))),
+                  child: Icon(icon, size: ui.icon(18).clamp(18.0, 20.0).toDouble(), color: AppColors.primary.withOpacity(0.95)),
                 ),
-                SizedBox(width: ui.gap(10).clamp(10.0, 12.0)),
+                SizedBox(width: ui.gap(10).clamp(10.0, 12.0).toDouble()),
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(
-                        label,
-                        style: TextStyle(
-                          fontWeight: FontWeight.w900,
-                          color: cs.onSurface.withOpacity(0.72),
-                          fontSize: ui.font(11.5).clamp(11.5, 12.5),
-                        ),
-                      ),
-                      SizedBox(height: ui.gap(3).clamp(3.0, 5.0)),
-                      Text(
-                        text,
-                        maxLines: 3,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          fontWeight: FontWeight.w800,
-                          color: cs.onSurface.withOpacity(0.90),
-                          fontSize: ui.font(12).clamp(12.0, 13.0),
-                          height: 1.28,
-                        ),
-                      ),
+                      Text(label, style: TextStyle(fontWeight: FontWeight.w900, color: cs.onSurface.withOpacity(0.72), fontSize: ui.font(11.5).clamp(11.5, 12.5).toDouble())),
+                      SizedBox(height: ui.gap(3).clamp(3.0, 5.0).toDouble()),
+                      Text(text, maxLines: 3, overflow: TextOverflow.ellipsis, style: TextStyle(fontWeight: FontWeight.w800, color: cs.onSurface.withOpacity(0.90), fontSize: ui.font(12).clamp(12.0, 13.0).toDouble(), height: 1.28)),
                     ],
                   ),
                 ),
                 if (trailing != null) ...[
-                  SizedBox(width: ui.gap(10).clamp(8.0, 10.0)),
+                  SizedBox(width: ui.gap(10).clamp(8.0, 10.0).toDouble()),
                   trailing,
                 ] else if (canCopy) ...[
-                  SizedBox(width: ui.gap(10).clamp(8.0, 10.0)),
-                  Icon(
-                    Icons.copy_rounded,
-                    size: ui.icon(18).clamp(18.0, 20.0),
-                    color: cs.onSurface.withOpacity(0.55),
-                  ),
+                  SizedBox(width: ui.gap(10).clamp(8.0, 10.0).toDouble()),
+                  Icon(Icons.copy_rounded, size: ui.icon(18).clamp(18.0, 20.0).toDouble(), color: cs.onSurface.withOpacity(0.55)),
                 ],
               ],
             ),
@@ -1906,9 +1124,6 @@ class _DriverDetailsSheetState extends State<DriverDetailsSheet> {
   }
 }
 
-/// ===============================
-/// Route mini (aligned tree like in ride_market_sheet)
-/// ===============================
 class _FromToMiniDense extends StatelessWidget {
   final String origin;
   final String dest;
@@ -1927,7 +1142,7 @@ class _FromToMiniDense extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final bool narrow = MediaQuery.of(context).size.width < 390;
-    final double h = ui.inset(52).clamp(48.0, 58.0);
+    final double h = ui.inset(52).clamp(48.0, 58.0).toDouble();
 
     final route = SizedBox(
       height: h,
@@ -1938,28 +1153,16 @@ class _FromToMiniDense extends StatelessWidget {
             cs: cs,
             ui: ui,
             height: h,
-            width: ui.inset(18).clamp(16.0, 20.0),
+            width: ui.inset(18).clamp(16.0, 20.0).toDouble(),
           ),
-          SizedBox(width: ui.gap(10).clamp(8.0, 10.0)),
+          SizedBox(width: ui.gap(10).clamp(8.0, 10.0).toDouble()),
           Expanded(
             child: Column(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                _LabeledLine(
-                  label: 'FROM',
-                  value: origin,
-                  cs: cs,
-                  strong: true,
-                  ui: ui,
-                ),
-                _LabeledLine(
-                  label: 'TO',
-                  value: dest,
-                  cs: cs,
-                  strong: false,
-                  ui: ui,
-                ),
+                _LabeledLine(label: 'FROM', value: origin, cs: cs, strong: true, ui: ui),
+                _LabeledLine(label: 'TO', value: dest, cs: cs, strong: false, ui: ui),
               ],
             ),
           ),
@@ -1974,7 +1177,7 @@ class _FromToMiniDense extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           route,
-          SizedBox(height: ui.gap(8).clamp(6.0, 8.0)),
+          SizedBox(height: ui.gap(8).clamp(6.0, 8.0).toDouble()),
           rightTop!,
         ],
       );
@@ -1984,7 +1187,7 @@ class _FromToMiniDense extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Expanded(child: route),
-        SizedBox(width: ui.gap(10).clamp(8.0, 10.0)),
+        SizedBox(width: ui.gap(10).clamp(8.0, 10.0).toDouble()),
         rightTop!,
       ],
     );
@@ -2039,7 +1242,7 @@ class _RouteTreePainter extends CustomPainter {
 
     double y = topStem;
     while (y < bottomStem) {
-      final y2 = math.min(y + 3.0, bottomStem);
+      final y2 = math.min(y + 3.0, bottomStem).toDouble();
       canvas.drawLine(Offset(x, y), Offset(x, y2), linePaint);
       y += 5.0;
     }
@@ -2078,13 +1281,13 @@ class _LabeledLine extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.center,
       children: [
         SizedBox(
-          width: ui.inset(34).clamp(30.0, 36.0),
+          width: ui.inset(34).clamp(30.0, 36.0).toDouble(),
           child: Text(
             label,
             maxLines: 1,
             overflow: TextOverflow.clip,
             style: TextStyle(
-              fontSize: ui.font(9.2).clamp(9.0, 10.0),
+              fontSize: ui.font(9.2).clamp(9.0, 10.0).toDouble(),
               height: 1.0,
               fontWeight: FontWeight.w900,
               letterSpacing: 0.4,
@@ -2092,7 +1295,7 @@ class _LabeledLine extends StatelessWidget {
             ),
           ),
         ),
-        SizedBox(width: ui.gap(6).clamp(4.0, 6.0)),
+        SizedBox(width: ui.gap(6).clamp(4.0, 6.0).toDouble()),
         Expanded(
           child: Text(
             value,
@@ -2102,7 +1305,7 @@ class _LabeledLine extends StatelessWidget {
               fontSize: ui.font(strong ? 12.2 : 11.2).clamp(
                 strong ? 12.0 : 11.0,
                 strong ? 13.0 : 12.0,
-              ),
+              ).toDouble(),
               height: 1.0,
               letterSpacing: -0.2,
               fontWeight: strong ? FontWeight.w900 : FontWeight.w800,

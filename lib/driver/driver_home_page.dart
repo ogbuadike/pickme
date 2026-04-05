@@ -40,11 +40,14 @@ class _DriverHomePageState extends State<DriverHomePage>
   static const double _fallbackLng = 7.548266;
   static const double _headerVisualH = 88.0;
   static const double _bottomNavVisualH = 82.0;
-  static const Duration _driverFixMaxAge = Duration(seconds: 20);
-  static const double _pickupArrivalRadiusM = 80.0;
-  static const double _tripStartRadiusM = 90.0;
-  static const double _destinationArrivalRadiusM = 90.0;
-  static const double _rideCompleteRadiusM = 120.0;
+
+  // --- HYBRID FIX: EXPANDED GPS CONSTANTS ---
+  static const Duration _driverFixMaxAge = Duration(seconds: 180);
+  static const double _pickupArrivalRadiusM = 150.0;
+  static const double _tripStartRadiusM = 150.0;
+  static const double _destinationArrivalRadiusM = 150.0;
+  static const double _rideCompleteRadiusM = 200.0;
+  // ------------------------------------------
 
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
 
@@ -578,9 +581,15 @@ class _DriverHomePageState extends State<DriverHomePage>
   String? _localRideActionGuard(_RideJob ride, String action) {
     final pos = _currentPosition;
     final normalized = action.trim().toLowerCase();
-    if (normalized == 'enroute_pickup' || normalized == 'head_to_pickup') {
+
+    // --- HYBRID FIX: ALWAYS ALLOW CANCELLATION ---
+    if (normalized == 'enroute_pickup' ||
+        normalized == 'head_to_pickup' ||
+        normalized.contains('cancel')) {
       return null;
     }
+    // ---------------------------------------------
+
     if (pos == null) {
       return 'Current GPS fix unavailable. Wait for location to stabilise and try again.';
     }
@@ -588,29 +597,39 @@ class _DriverHomePageState extends State<DriverHomePage>
       return 'Location fix is stale. Keep the app open until live GPS updates again.';
     }
 
+    // --- DYNAMIC ACCURACY COMPENSATION (DAC) ---
+    final double gpsErrorMargin = pos.accuracy > 0 ? pos.accuracy : 10.0;
+    final double compensation = math.min(gpsErrorMargin, 150.0);
+
+    final double effectivePickupRadius = _pickupArrivalRadiusM + compensation;
+    final double effectiveStartRadius = _tripStartRadiusM + compensation;
+    final double effectiveDestRadius = _destinationArrivalRadiusM + compensation;
+    final double effectiveCompleteRadius = _rideCompleteRadiusM + compensation;
+    // -------------------------------------------
+
     final driverLL = LatLng(pos.latitude, pos.longitude);
     final pickupLL = LatLng(ride.pickupLat, ride.pickupLng);
     final destLL = LatLng(ride.destLat, ride.destLng);
 
     if (normalized == 'arrived_pickup') {
       final meters = _distanceMeters(driverLL, pickupLL);
-      if (meters > _pickupArrivalRadiusM) {
-        return 'You must be at the rider pickup point before marking arrived. Current gap: ${meters.toStringAsFixed(0)} m.';
+      if (meters > effectivePickupRadius) {
+        return 'You must be at the rider pickup point before marking arrived. Current gap: ${meters.toStringAsFixed(0)} m (Accuracy: ±${gpsErrorMargin.toStringAsFixed(0)}m).';
       }
       return null;
     }
 
     if (normalized == 'start_trip') {
       final meters = _distanceMeters(driverLL, pickupLL);
-      if (meters > _tripStartRadiusM) {
-        return 'Trip can only start when driver and rider are together at pickup. Current gap: ${meters.toStringAsFixed(0)} m.';
+      if (meters > effectiveStartRadius) {
+        return 'Trip can only start when driver and rider are together at pickup. Current gap: ${meters.toStringAsFixed(0)} m (Accuracy: ±${gpsErrorMargin.toStringAsFixed(0)}m).';
       }
       return null;
     }
 
     if (normalized == 'arrived_destination') {
       final meters = _distanceMeters(driverLL, destLL);
-      if (meters > _destinationArrivalRadiusM) {
+      if (meters > effectiveDestRadius) {
         return 'You need to reach the trip destination before marking arrived. Current gap: ${meters.toStringAsFixed(0)} m.';
       }
       return null;
@@ -618,7 +637,7 @@ class _DriverHomePageState extends State<DriverHomePage>
 
     if (normalized == 'complete' || normalized == 'complete_trip') {
       final meters = _distanceMeters(driverLL, destLL);
-      if (meters > _rideCompleteRadiusM) {
+      if (meters > effectiveCompleteRadius) {
         return 'Ride can only be completed at the destination zone. Current gap: ${meters.toStringAsFixed(0)} m.';
       }
       return null;
@@ -813,6 +832,7 @@ class _DriverHomePageState extends State<DriverHomePage>
           if (pos != null) 'lat': pos.latitude.toStringAsFixed(7),
           if (pos != null) 'lng': pos.longitude.toStringAsFixed(7),
           if (pos != null) 'heading': (pos.heading.isFinite ? pos.heading : 0).toStringAsFixed(2),
+          if (pos != null) 'accuracy': pos.accuracy.toStringAsFixed(2), // --- HYBRID FIX: DAC PAYLOAD ---
         },
       );
 

@@ -16,6 +16,10 @@ import '../../api/url.dart';
 import '../../routes/routes.dart';
 import '../../widgets/inner_background.dart';
 
+// Added imports for correct home routing
+import '../../driver/driver_home_page.dart';
+import '../home_page.dart';
+
 class AuthenticationScreen extends StatefulWidget {
   const AuthenticationScreen({Key? key}) : super(key: key);
 
@@ -135,21 +139,6 @@ class _AuthenticationScreenState extends State<AuthenticationScreen>
       _biometricAvailable = false;
     }
 
-    /*
-    try {
-      final canCheck = await _localAuth.canCheckBiometrics;
-      final supported = await _localAuth.isDeviceSupported();
-      final types = await _localAuth.getAvailableBiometrics();
-      _biometricAvailable = canCheck &&
-          supported &&
-          (types.contains(BiometricType.fingerprint) ||
-              types.contains(BiometricType.face) ||
-              types.contains(BiometricType.strong));
-    } catch (e) {
-      _biometricAvailable = false;
-    }
-     */
-
     // Check lock status
     final lockStr = _prefs.getString('lock_time');
     if (lockStr != null) {
@@ -224,7 +213,12 @@ class _AuthenticationScreenState extends State<AuthenticationScreen>
       if (bypass) {
         _resetPin();
         if (!mounted) return;
-        Navigator.of(context).pushReplacementNamed(AppRoutes.home);
+
+        final isDriver = _prefs.getBool('user_is_driver') ?? false;
+        final route = MaterialPageRoute<void>(
+          builder: (_) => isDriver ? const DriverHomePage() : const HomePage(),
+        );
+        Navigator.of(context).pushAndRemoveUntil(route, (_) => false);
         return;
       }
 
@@ -239,7 +233,12 @@ class _AuthenticationScreenState extends State<AuthenticationScreen>
         _prefs.setInt('failed_attempts', 0);
         _resetPin();
         if (!mounted) return;
-        Navigator.of(context).pushReplacementNamed(AppRoutes.home);
+
+        final isDriver = _prefs.getBool('user_is_driver') ?? false;
+        final route = MaterialPageRoute<void>(
+          builder: (_) => isDriver ? const DriverHomePage() : const HomePage(),
+        );
+        Navigator.of(context).pushAndRemoveUntil(route, (_) => false);
       } else {
         _onFailedAttempt();
       }

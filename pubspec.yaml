@@ -78,6 +78,7 @@ dependencies:
   flutter_compass: ^0.8.0
   local_auth: ^2.3.0
 
+
 dependency_overrides:
   # Critical: forces GoogleSignIn pod ~> 7.1 (compatible with Firebase iOS SDK 10.29.0)
   google_sign_in_ios: 5.7.8

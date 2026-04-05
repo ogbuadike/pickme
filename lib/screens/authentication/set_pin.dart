@@ -15,6 +15,10 @@ import '../../api/url.dart';
 import '../../routes/routes.dart';
 import '../../widgets/inner_background.dart';
 
+// Added imports for correct home routing after PIN creation
+import '../../driver/driver_home_page.dart';
+import '../home_page.dart';
+
 class SetPinScreen extends StatefulWidget {
   const SetPinScreen({super.key});
 
@@ -190,6 +194,9 @@ class _SetPinScreenState extends State<SetPinScreen>
       if (res.statusCode == 200 && body['error'] == false) {
         await prefs.setString('user_pin', 'available');
 
+        // Check if they are a driver so we drop them in the correct screen
+        final isDriver = prefs.getBool('user_is_driver') ?? false;
+
         showToastNotification(
           context: context,
           title: 'Success',
@@ -198,7 +205,13 @@ class _SetPinScreenState extends State<SetPinScreen>
         );
 
         if (!mounted) return;
-        Navigator.of(context).pushReplacementNamed(AppRoutes.authentication);
+
+        // Push straight to the correct dashboard based on role
+        final route = MaterialPageRoute<void>(
+          builder: (_) => isDriver ? const DriverHomePage() : const HomePage(),
+        );
+        Navigator.of(context).pushAndRemoveUntil(route, (_) => false);
+
       } else {
         showToastNotification(
           context: context,

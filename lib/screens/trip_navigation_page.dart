@@ -1,4 +1,3 @@
-
 import 'dart:async';
 import 'dart:convert';
 import 'dart:math' as math;
@@ -100,7 +99,9 @@ class TripNavigationArgs {
     this.role = TripNavigationRole.rider,
     this.tickEvery = const Duration(seconds: 2),
     this.routeMinGap = const Duration(seconds: 2),
-    this.arrivalMeters = 35.0,
+    // --- HYBRID FIX: Increased default from 35m to 150m ---
+    this.arrivalMeters = 150.0,
+    // ------------------------------------------------------
     this.routeMoveThresholdMeters = 8.0,
     this.autoFollowCamera = true,
     this.showStartTripButton = true,
@@ -212,7 +213,7 @@ class _TripNavigationPageState extends State<TripNavigationPage> with WidgetsBin
 
   Duration get _tickEvery => widget.args.tickEvery;
   Duration get _routeMinGap => widget.args.routeMinGap;
-  double get _arrivalMeters => widget.args.arrivalMeters > 0 ? widget.args.arrivalMeters : 35.0;
+  double get _arrivalMeters => widget.args.arrivalMeters > 0 ? widget.args.arrivalMeters : 150.0;
   double get _routeMoveThresholdMeters => widget.args.routeMoveThresholdMeters > 0 ? widget.args.routeMoveThresholdMeters : 8.0;
 
   List<LatLng> get _allTargets => <LatLng>[...widget.args.dropOffs, widget.args.destination];
@@ -379,23 +380,6 @@ class _TripNavigationPageState extends State<TripNavigationPage> with WidgetsBin
     _busyTick = true;
     try {
       await _applyLiveSnapshot();
-      if (_driverLL != null) {
-        if (_phase == TripNavPhase.driverToPickup) {
-          final double meters = _haversine(_driverLL!, _effectivePickupLL);
-          if (meters <= _arrivalMeters) {
-            // Client UI hint only; backend remains authoritative.
-            _canArrivePickup = true;
-          }
-        } else if (_phase == TripNavPhase.enRoute) {
-          final LatLng? movingOrigin = _enRouteOrigin;
-          if (movingOrigin != null && _haversine(movingOrigin, _currentTarget) <= _arrivalMeters) {
-            _canArriveDestination = true;
-          }
-        } else if (_phase == TripNavPhase.arrivedDestination) {
-          _canCompleteRide = true;
-        }
-      }
-
       _recomputePermissions();
       _syncMarkers();
       await _rebuildRoute(force: force);
@@ -483,14 +467,19 @@ class _TripNavigationPageState extends State<TripNavigationPage> with WidgetsBin
     final double pickupGap = _haversine(_driverLL!, _effectivePickupLL);
     final double destGap = _haversine(_driverLL!, _currentTarget);
 
+    // --- HYBRID FIX: Force UI buttons to enable at safe distances ---
+    // Even if parent passed 35m, we guarantee at least 150m for buttons to light up.
+    final double safeArrivalMeters = math.max(_arrivalMeters, 150.0);
+    final double safeCompletionMeters = math.max(_arrivalMeters + 50.0, 200.0);
+
     if (_phase == TripNavPhase.driverToPickup) {
-      _canArrivePickup = pickupGap <= _arrivalMeters;
+      _canArrivePickup = pickupGap <= safeArrivalMeters;
     } else if (_phase == TripNavPhase.waitingPickup) {
-      _canStartTrip = pickupGap <= _arrivalMeters;
+      _canStartTrip = pickupGap <= safeArrivalMeters;
     } else if (_phase == TripNavPhase.enRoute) {
-      _canArriveDestination = destGap <= _arrivalMeters;
+      _canArriveDestination = destGap <= safeArrivalMeters;
     } else if (_phase == TripNavPhase.arrivedDestination) {
-      _canCompleteRide = destGap <= (_arrivalMeters + 10);
+      _canCompleteRide = destGap <= safeCompletionMeters;
     }
   }
 

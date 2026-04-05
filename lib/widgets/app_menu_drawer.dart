@@ -4,7 +4,7 @@
 // - Balance card with fund action
 // - Profile header with avatar & edit button
 // - Categorized menu items
-// - Premium Become a Driver opportunity card
+// - Premium Become a Driver opportunity card (Hides if already a driver)
 // - Landscape/portrait adaptive layout
 // - Dark mode support
 // - Smooth animations & haptics
@@ -13,6 +13,7 @@
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../routes/routes.dart';
 import '../themes/app_theme.dart';
 import 'fund_account_sheet.dart';
@@ -30,6 +31,7 @@ class _AppMenuDrawerState extends State<AppMenuDrawer>
     with SingleTickerProviderStateMixin {
   late final AnimationController _fadeCtrl;
   late final Animation<double> _fadeAnim;
+  bool _isAlreadyDriver = false;
 
   @override
   void initState() {
@@ -40,6 +42,16 @@ class _AppMenuDrawerState extends State<AppMenuDrawer>
     );
     _fadeAnim = CurvedAnimation(parent: _fadeCtrl, curve: Curves.easeOut);
     _fadeCtrl.forward();
+    _checkDriverStatus();
+  }
+
+  Future<void> _checkDriverStatus() async {
+    final prefs = await SharedPreferences.getInstance();
+    if (mounted) {
+      setState(() {
+        _isAlreadyDriver = prefs.getBool('user_is_driver') ?? false;
+      });
+    }
   }
 
   @override
@@ -118,9 +130,17 @@ class _AppMenuDrawerState extends State<AppMenuDrawer>
             child: const Text('Cancel'),
           ),
           TextButton(
-            onPressed: () {
+            onPressed: () async {
               Navigator.pop(ctx);
-              Navigator.pushReplacementNamed(context, AppRoutes.login);
+              final prefs = await SharedPreferences.getInstance();
+              await prefs.remove('user_id');
+              await prefs.remove('user_pin');
+              await prefs.remove('user_driver_id');
+              await prefs.remove('user_driver_status');
+              await prefs.remove('user_is_driver');
+              if (mounted) {
+                Navigator.pushReplacementNamed(context, AppRoutes.login);
+              }
             },
             style: TextButton.styleFrom(foregroundColor: AppColors.error),
             child: const Text('Sign Out'),
@@ -250,14 +270,15 @@ class _AppMenuDrawerState extends State<AppMenuDrawer>
 
                     SizedBox(height: 16 * s),
 
-                    // Become a Driver premium card
-                    _BecomeDriverCard(
-                      scale: s,
-                      isDark: isDark,
-                      onTap: () => _nav(AppRoutes.become_a_driver),
-                    ),
-
-                    SizedBox(height: 12 * s),
+                    // Become a Driver premium card (Hidden if already a driver)
+                    if (!_isAlreadyDriver) ...[
+                      _BecomeDriverCard(
+                        scale: s,
+                        isDark: isDark,
+                        onTap: () => _nav(AppRoutes.become_a_driver),
+                      ),
+                      SizedBox(height: 12 * s),
+                    ],
                   ],
                 ),
               ),

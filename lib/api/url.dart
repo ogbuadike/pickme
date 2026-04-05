@@ -26,6 +26,8 @@ class ApiConstants {
   static const String rideCompleteEndpoint = 'ride_complete_trip.php';
   static const String driversUpdateLocationEndpoint = 'drivers_update_location.php';
 
+  static const String rideHistoryEndpoint = 'ride_history.php';
+
   static const String upgradeToDriverEndpoint = 'become_driver.php';
   static const String _driverHubEndpoint = 'driver_hub.php';
 

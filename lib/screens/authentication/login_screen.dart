@@ -120,6 +120,9 @@ class _LoginScreenState extends State<LoginScreen>
       await prefs.setString('user_driver_status', 'not_started');
       await prefs.setString('user_driver_id', '');
 
+      // Explicitly mark Google sign-ins as non-drivers to prevent getting locked out
+      await prefs.setBool('user_is_driver', false);
+
       if (!mounted) return;
       showToastNotification(
         context: context,

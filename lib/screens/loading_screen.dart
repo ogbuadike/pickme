@@ -94,14 +94,22 @@ class _SplashScreenState extends State<SplashScreen>
     final prefs = await SharedPreferences.getInstance();
     final userId = prefs.getString('user_id');
     final userPin = prefs.getString('user_pin');
+    final isDriver = prefs.getBool('user_is_driver') ?? false;
 
     if (!mounted) return;
+
     if (userId == null || userId.isEmpty) {
+      // User is not logged in
       Navigator.of(context).pushReplacementNamed(AppRoutes.onboarding);
     } else if (userPin == null || userPin.isEmpty) {
+      // EVERYONE must set up a PIN on first login
       Navigator.of(context).pushReplacementNamed(AppRoutes.set_user_pin);
-    } else {
+    } else if (isDriver) {
+      // ONLY drivers are forced to authenticate via PIN on app launch
       Navigator.of(context).pushReplacementNamed(AppRoutes.authentication);
+    } else {
+      // Riders bypass the PIN authentication screen completely
+      Navigator.of(context).pushReplacementNamed(AppRoutes.home);
     }
   }
 

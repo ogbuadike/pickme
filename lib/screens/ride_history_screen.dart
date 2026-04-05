@@ -12,8 +12,6 @@ import '../api/api_client.dart';
 import '../api/url.dart';
 import '../themes/app_theme.dart';
 import '../widgets/inner_background.dart';
-import '../widgets/driver_details_sheet.dart'; // <--- INJECTED TO SUPPORT THE NEW PROFILE VIEW
-import '../models/geo_point.dart';
 import '../utility/notification.dart';
 import 'trip_navigation_page.dart';
 
@@ -497,6 +495,7 @@ class _RideDetailSheetState extends State<_RideDetailSheet> {
     final isActive = ['searching', 'accepted', 'enroute_pickup', 'arrived_pickup', 'in_progress', 'arrived_destination'].contains(status);
     if (!isActive) return;
 
+    // 1. Compile Stops
     final List<LatLng> dropOffs = [];
     final List<String> dropOffTexts = [];
     if (widget.ride['stops'] is List) {
@@ -511,6 +510,7 @@ class _RideDetailSheetState extends State<_RideDetailSheet> {
     final pickup = LatLng(_toDouble(widget.ride['pickup_lat']), _toDouble(widget.ride['pickup_lng']));
     final destination = LatLng(_toDouble(widget.ride['dest_lat']), _toDouble(widget.ride['dest_lng']));
 
+    // 2. Grab immediate location for the driver if opening in Driver Mode
     LatLng? initialDriverLocation;
     if (widget.isDriverMode) {
       try {
@@ -519,6 +519,7 @@ class _RideDetailSheetState extends State<_RideDetailSheet> {
       } catch (_) {}
     }
 
+    // 3. Build Arguments COMPLETELY mirroring the Home Pages
     final args = TripNavigationArgs(
       userId: widget.isDriverMode ? widget.ride['rider_id'].toString() : widget.userId,
       driverId: widget.isDriverMode ? widget.userId : widget.ride['driver_id'].toString(),
@@ -538,8 +539,10 @@ class _RideDetailSheetState extends State<_RideDetailSheet> {
       initialRiderLocation: pickup,
       initialPhase: _derivePhase(status),
 
+      // Live Polling Hook
       liveSnapshotProvider: _liveSnapshotProvider,
 
+      // Hook up direct API backup actions
       onArrivedPickup: widget.isDriverMode ? () => _performBackupDriverAction('arrived_pickup') : null,
       onStartTrip: widget.isDriverMode ? () => _performBackupDriverAction('start_trip') : null,
       onArrivedDestination: widget.isDriverMode ? () => _performBackupDriverAction('arrived_destination') : null,
@@ -550,10 +553,11 @@ class _RideDetailSheetState extends State<_RideDetailSheet> {
 
       tickEvery: const Duration(seconds: 2),
       routeMinGap: const Duration(seconds: 2),
-      arrivalMeters: 150.0,
+      arrivalMeters: 150.0, // DAC update!
       routeMoveThresholdMeters: 8.0,
       autoFollowCamera: true,
 
+      // Exact matchers used in DriverHomePage
       showArrivedPickupButton: const {'accepted', 'driver_assigned', 'driver_arriving', 'enroute_pickup'}.contains(status),
       showStartTripButton: status == 'arrived_pickup',
       showArrivedDestinationButton: status == 'in_progress' || status == 'in_ride',
@@ -568,7 +572,7 @@ class _RideDetailSheetState extends State<_RideDetailSheet> {
     );
 
     if (mounted) {
-      Navigator.pop(context);
+      Navigator.pop(context); // Close the bottom sheet
       Navigator.of(context).push(MaterialPageRoute(builder: (_) => TripNavigationPage(args: args)));
     }
   }
@@ -615,78 +619,42 @@ class _RideDetailSheetState extends State<_RideDetailSheet> {
               ),
               const SizedBox(height: 24),
 
-              // Peer Profile Card: Wrapping with InkWell to launch DriverDetailsSheet
-              Material(
-                color: Colors.transparent,
-                child: InkWell(
-                  onTap: () {
-                    showModalBottomSheet(
-                      context: context,
-                      isScrollControlled: true,
-                      backgroundColor: Colors.transparent,
-                      builder: (_) => DriverDetailsSheet(
-                        isViewOnly: true, // Hides the Confirm button
-                        driver: {
-                          'name': widget.ride['peer_name'],
-                          'phone': widget.ride['peer_phone'],
-                          'car_plate': widget.ride['peer_plate'],
-                          'vehicle_type': widget.ride['vehicle_type'],
-                          'rating': widget.ride['peer_rating'],
-                          'avatar_url': widget.ride['peer_avatar'],
-                        },
-                        offer: {
-                          'price': widget.ride['price'],
-                          'currency': widget.ride['currency'],
-                          'eta_min': widget.ride['eta_min'],
-                        },
-                        originText: widget.ride['pickup_text'] ?? '',
-                        destinationText: widget.ride['dest_text'] ?? '',
-                        distanceText: '—',
-                        durationText: '—',
-                        tripDistanceKm: 0.0,
-                        pickupLocation: GeoPoint(_toDouble(widget.ride['pickup_lat']), _toDouble(widget.ride['pickup_lng'])),
-                        dropLocation: GeoPoint(_toDouble(widget.ride['dest_lat']), _toDouble(widget.ride['dest_lng'])),
-                      ),
-                    );
-                  },
-                  borderRadius: BorderRadius.circular(16),
-                  child: Container(
-                    padding: const EdgeInsets.all(16),
-                    decoration: BoxDecoration(color: AppColors.mintBgLight.withOpacity(0.1), borderRadius: BorderRadius.circular(16)),
-                    child: Row(
-                      children: [
-                        CircleAvatar(
-                          radius: 26,
-                          backgroundColor: AppColors.primary.withOpacity(0.2),
-                          backgroundImage: avatarUrl.isNotEmpty ? NetworkImage(avatarUrl) : null,
-                          child: avatarUrl.isEmpty ? Icon(widget.isDriverMode ? Icons.person : Icons.local_taxi_rounded, color: AppColors.primary) : null,
-                        ),
-                        const SizedBox(width: 16),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(widget.isDriverMode ? 'Rider' : 'Driver', style: TextStyle(fontSize: 12, color: AppColors.textSecondary, fontWeight: FontWeight.w700)),
-                              Text(widget.ride['peer_name'] ?? 'Unknown', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w800)),
-                              if (!widget.isDriverMode && widget.ride['peer_plate'] != null && widget.ride['peer_plate'].toString().isNotEmpty)
-                                Text(widget.ride['peer_plate'], style: const TextStyle(color: AppColors.primary, fontWeight: FontWeight.w700)),
-                            ],
-                          ),
-                        ),
-                        if (phone.isNotEmpty)
-                          Container(
-                            decoration: BoxDecoration(
-                              color: AppColors.primary.withOpacity(0.15),
-                              shape: BoxShape.circle,
-                            ),
-                            child: IconButton(
-                              icon: const Icon(Icons.phone_rounded, color: AppColors.primary),
-                              onPressed: () => _makePhoneCall(phone),
-                            ),
-                          )
-                      ],
+              // Peer Profile Card
+              Container(
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(color: AppColors.mintBgLight.withOpacity(0.1), borderRadius: BorderRadius.circular(16)),
+                child: Row(
+                  children: [
+                    CircleAvatar(
+                      radius: 26,
+                      backgroundColor: AppColors.primary.withOpacity(0.2),
+                      backgroundImage: avatarUrl.isNotEmpty ? NetworkImage(avatarUrl) : null,
+                      child: avatarUrl.isEmpty ? Icon(widget.isDriverMode ? Icons.person : Icons.local_taxi_rounded, color: AppColors.primary) : null,
                     ),
-                  ),
+                    const SizedBox(width: 16),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(widget.isDriverMode ? 'Rider' : 'Driver', style: TextStyle(fontSize: 12, color: AppColors.textSecondary, fontWeight: FontWeight.w700)),
+                          Text(widget.ride['peer_name'] ?? 'Unknown', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w800)),
+                          if (!widget.isDriverMode && widget.ride['peer_plate'] != null && widget.ride['peer_plate'].toString().isNotEmpty)
+                            Text(widget.ride['peer_plate'], style: const TextStyle(color: AppColors.primary, fontWeight: FontWeight.w700)),
+                        ],
+                      ),
+                    ),
+                    if (phone.isNotEmpty)
+                      Container(
+                        decoration: BoxDecoration(
+                          color: AppColors.primary.withOpacity(0.15),
+                          shape: BoxShape.circle,
+                        ),
+                        child: IconButton(
+                          icon: const Icon(Icons.phone_rounded, color: AppColors.primary),
+                          onPressed: () => _makePhoneCall(phone),
+                        ),
+                      )
+                  ],
                 ),
               ),
 

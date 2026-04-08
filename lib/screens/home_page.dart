@@ -425,20 +425,6 @@ class _HomePageState extends State<HomePage>
 
   double _s(BuildContext c) => _scaleFromUi(UIScale.of(c));
 
-
-  /** double _s(BuildContext c) {
-    final mq = MediaQuery.of(c);_applyMapPadding
-    final size = mq.size;
-    final shortest = math.min(size.width, size.height);
-    final longest = math.max(size.width, size.height);
-    final aspect = longest / shortest;
-
-    double scale = (shortest / 390.0).clamp(0.65, 1.20);
-    if (aspect > 2.0) scale *= 0.90;
-    if (aspect < 1.5) scale *= 1.08;
-    return scale;
-  } **/
-
   double _effectiveBottomNavH() {
     if (_marketOpen) return 0;
     if (_tripPhase != TripPhase.browsing) return 0;
@@ -541,7 +527,6 @@ class _HomePageState extends State<HomePage>
         _startNearbyDriversPolling();
       }
 
-      // Restore camera state after rotation
       if (_lastCamTarget != null && _map != null) {
         Future.delayed(const Duration(milliseconds: 80), () {
           if (_routePts.isNotEmpty && _camMode == _CamMode.overview) {
@@ -2795,7 +2780,7 @@ class _HomePageState extends State<HomePage>
 
   void _openWallet() {
     final balance = _user != null
-        ? double.tryParse(_user!['user_bal']?.toString() ?? '0.0') ?? 0.0
+        ? double.tryParse(_user!['user_bal']?.toString() ?? _user!['bal']?.toString() ?? '0.0') ?? 0.0
         : null;
     final currency = _user?['user_currency']?.toString() ?? 'NGN';
     showModalBottomSheet(
@@ -3129,6 +3114,7 @@ class _HomePageState extends State<HomePage>
     required RideOffer offer,
     required LatLng pickup,
     required LatLng destination,
+    required String payMethod,
   }) async {
     if (_booking == null) {
       _lastBookingError = 'BookingController is null';
@@ -3162,6 +3148,7 @@ class _HomePageState extends State<HomePage>
       'category': offer.category,
       'pickup': '${pickup.latitude},${pickup.longitude}',
       'destination': '${destination.latitude},${destination.longitude}',
+      'payMethod': payMethod,
     });
 
     try {
@@ -3179,7 +3166,7 @@ class _HomePageState extends State<HomePage>
         pickupText: _pts.first.controller.text.trim(),
         destinationText: _pts.last.controller.text.trim(),
         stops: dropOffs,
-        payMethod: 'cash',
+        payMethod: payMethod,
         userId: riderId,
         driverId: driverId,
       );
@@ -3223,6 +3210,76 @@ class _HomePageState extends State<HomePage>
       RideNearbyDriver driver,
       RideOffer offer,
       ) async {
+    // 1. Fetch User Balance
+    final double userBalance = _user != null
+        ? double.tryParse(_user!['bal']?.toString() ?? _user!['user_bal']?.toString() ?? '0.0') ?? 0.0
+        : 0.0;
+
+    final double ridePrice = double.tryParse(offer.price.toString()) ?? 0.0;
+
+    // 2. Show Payment Selection Modal
+    final String? selectedPaymentMethod = await showModalBottomSheet<String>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Theme.of(context).scaffoldBackgroundColor,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (BuildContext ctx) {
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.all(20.0),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Select Payment Method',
+                  style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+                ),
+                const SizedBox(height: 8),
+                Text('Total Fare: ${offer.currency} ${ridePrice.toStringAsFixed(2)}'),
+                const SizedBox(height: 20),
+
+                // Wallet Option
+                ListTile(
+                  leading: const Icon(Icons.account_balance_wallet, color: Colors.blue),
+                  title: const Text('Wallet (Automatic)'),
+                  subtitle: Text('Balance: ${offer.currency} ${userBalance.toStringAsFixed(2)}'),
+                  onTap: () {
+                    if (userBalance < ridePrice) {
+                      showToastNotification(
+                        context: ctx,
+                        title: 'Insufficient Balance',
+                        message: 'Please fund your wallet or select Cash.',
+                        isSuccess: false,
+                      );
+                    } else {
+                      Navigator.pop(ctx, 'wallet');
+                    }
+                  },
+                ),
+                const Divider(),
+
+                // Cash Option
+                ListTile(
+                  leading: const Icon(Icons.money, color: Colors.green),
+                  title: const Text('Cash (Manual)'),
+                  subtitle: const Text('Pay the driver directly'),
+                  onTap: () {
+                    Navigator.pop(ctx, 'cash');
+                  },
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+
+    // If user dismissed the modal without selecting
+    if (selectedPaymentMethod == null) return;
+
     _stopRideMarket(restartNearbyPolling: false);
     _selectedOffer = offer;
 
@@ -3243,12 +3300,14 @@ class _HomePageState extends State<HomePage>
     final LatLng pickup = _pickupAnchorLL() ?? _pts.first.latLng!;
     final LatLng destination = _destLL() ?? _pts.last.latLng!;
 
+    // 3. Pass the selected payment method to the booking controller
     final String? rideId = await _startBooking(
       riderId: riderId,
       driverId: driver.id,
       offer: offer,
       pickup: pickup,
       destination: destination,
+      payMethod: selectedPaymentMethod,
     );
 
     if (rideId == null || rideId.trim().isEmpty) {

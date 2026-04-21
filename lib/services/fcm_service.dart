@@ -1,5 +1,4 @@
 import 'dart:convert';
-import 'dart:io' show Platform;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
@@ -20,18 +19,15 @@ class FCMService {
 
   Future<void> initializeFCM() async {
     try {
-      // Permission (iOS only)
-      if (Platform.isIOS) {
-        await _fm.requestPermission(alert: true, badge: true, sound: true);
-      }
+      // 1. Fetch token immediately on app load with recovery logic
+      final token = await _getFcmTokenWithRecovery();
 
-      // Initial token (let PushNotificationService also do it; dedupe is fine)
-      final token = await _safeGetToken();
+      // 2. Send it to the backend immediately
       if (token != null) {
         await _sendTokenToServer(token);
       }
 
-      // Keep backend updated
+      // 3. Listen for mid-session refreshes
       _fm.onTokenRefresh.listen((newToken) async {
         if (kDebugMode) debugPrint('FCMService: token refresh → $newToken');
         await _sendTokenToServer(newToken);
@@ -41,11 +37,27 @@ class FCMService {
     }
   }
 
-  Future<String?> _safeGetToken() async {
+  /// Robust token fetch with backoff-retry for FIS Auth Errors
+  Future<String?> _getFcmTokenWithRecovery() async {
     try {
       return await _fm.getToken();
     } catch (e) {
-      // optional: copy the same recovery path from PushNotificationService
+      final msg = e.toString();
+      final isFisAuthError = msg.contains('FIS_AUTH_ERROR') ||
+          msg.contains('Firebase Installations Service is unavailable');
+
+      if (isFisAuthError) {
+        try { await _fm.deleteToken(); } catch (_) {}
+
+        for (int i = 0; i < 3; i++) {
+          await Future<void>.delayed(Duration(milliseconds: 400 * (1 << i)));
+          try {
+            final t = await _fm.getToken();
+            if (t != null) return t;
+          } catch (_) {}
+        }
+      }
+      debugPrint('FCM Token recovery failed: $e');
       return null;
     }
   }
@@ -54,6 +66,13 @@ class FCMService {
     try {
       final prefs = await SharedPreferences.getInstance();
       final userId = prefs.getString('user_id') ?? '';
+
+      // If there is no user logged in, you might want to return early here,
+      // depending on if your backend tracks anonymous devices.
+      if (userId.isEmpty) {
+        debugPrint('No user ID found, skipping token sync.');
+        return;
+      }
 
       final deviceInfo = await _deviceInfoService.getDeviceInfo();
       final deviceInfoJson = jsonEncode(deviceInfo);
@@ -70,13 +89,13 @@ class FCMService {
         data: data,
       );
 
-      if (res.statusCode == 200) {
-        debugPrint('FCM token sent successfully.');
+      if (res.statusCode == 200 || res.statusCode == 201) {
+        debugPrint('FCM token synced with backend successfully.');
       } else {
-        debugPrint('Failed to send FCM token: ${res.statusCode}');
+        debugPrint('Failed to sync FCM token: ${res.statusCode}');
       }
     } catch (e) {
-      debugPrint('Error sending FCM token: $e');
+      debugPrint('Error sending FCM token to backend: $e');
     }
   }
 }

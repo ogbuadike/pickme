@@ -1,4 +1,3 @@
-// lib/ui/splash_screen.dart
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -8,10 +7,10 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../services/firebase_service.dart';
 import '../services/push_notification_service.dart';
 import '../services/fcm_service.dart';
-import '../themes/app_theme.dart'; // AppTheme, AppColors
+import '../themes/app_theme.dart';
 import '../routes/routes.dart';
 import '../utility/notification.dart';
-import '../firebase_options.dart'; // <-- use generated options
+import '../firebase_options.dart';
 
 class SplashScreen extends StatefulWidget {
   const SplashScreen({super.key});
@@ -20,16 +19,11 @@ class SplashScreen extends StatefulWidget {
   State<SplashScreen> createState() => _SplashScreenState();
 }
 
-/// Minimal, premium, dark splash (theme-driven).
-/// • Center logo (prefers images/pickme.png; falls back gracefully)
-/// • Indeterminate bottom progress bar (gradient sweep + glow)
-/// • Small caption under the bar
 class _SplashScreenState extends State<SplashScreen>
     with SingleTickerProviderStateMixin {
   static const Duration _minSplash = Duration(milliseconds: 1200);
   late DateTime _start;
 
-  // Progress bar animation (indeterminate sweep)
   late final AnimationController _barCtrl =
   AnimationController(vsync: this, duration: const Duration(milliseconds: 1600))
     ..repeat();
@@ -49,18 +43,16 @@ class _SplashScreenState extends State<SplashScreen>
 
   Future<void> _bootstrap() async {
     try {
-      // NOTE: WidgetsFlutterBinding.ensureInitialized() belongs in main().
-      // Only initialize Firebase here if it wasn't already.
       if (Firebase.apps.isEmpty) {
         await Firebase.initializeApp(
           options: DefaultFirebaseOptions.currentPlatform,
         );
       }
 
-      // Core app services that must succeed to proceed
       await FirebaseService.instance.initialize();
 
-      // Best-effort: push + FCM should NOT block navigation if they fail
+      // Execute push and token sync concurrently.
+      // This ensures the backend gets the token on EVERY load without blocking.
       await Future.wait<void>([
         PushNotificationService().initialize().catchError((e, st) {
           debugPrint('PushNotificationService init warning: $e');
@@ -70,7 +62,6 @@ class _SplashScreenState extends State<SplashScreen>
         }),
       ], eagerError: false);
 
-      // Respect minimum splash duration
       final elapsed = DateTime.now().difference(_start);
       if (elapsed < _minSplash) {
         await Future<void>.delayed(_minSplash - elapsed);
@@ -79,7 +70,6 @@ class _SplashScreenState extends State<SplashScreen>
       if (!mounted) return;
       await _navigateNext();
     } catch (e, st) {
-      // Only truly fatal things (e.g., Firebase core init) should land here
       debugPrint('Splash init error: $e\n$st');
       if (!mounted) return;
       showRetryNotification(
@@ -99,23 +89,18 @@ class _SplashScreenState extends State<SplashScreen>
     if (!mounted) return;
 
     if (userId == null || userId.isEmpty) {
-      // User is not logged in
       Navigator.of(context).pushReplacementNamed(AppRoutes.onboarding);
     } else if (userPin == null || userPin.isEmpty) {
-      // EVERYONE must set up a PIN on first login
       Navigator.of(context).pushReplacementNamed(AppRoutes.set_user_pin);
     } else if (isDriver) {
-      // ONLY drivers are forced to authenticate via PIN on app launch
       Navigator.of(context).pushReplacementNamed(AppRoutes.authentication);
     } else {
-      // Riders bypass the PIN authentication screen completely
       Navigator.of(context).pushReplacementNamed(AppRoutes.home);
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    // Force this screen to use your dark theme palette/typography.
     final dark = AppTheme.dark();
 
     return Theme(
@@ -126,10 +111,8 @@ class _SplashScreenState extends State<SplashScreen>
           final size = MediaQuery.of(context).size;
           final shortest = size.shortestSide;
 
-          // Small-but-readable logo sizing (fully responsive):
-          // phone ~120–160px, tablets ~160–200px.
           final logoSide = shortest
-              .clamp(320.0, 900.0) // normalize
+              .clamp(320.0, 900.0)
               .map(320.0, 900.0, 120.0, 200.0);
 
           final overlay = SystemUiOverlayStyle.light.copyWith(
@@ -145,7 +128,6 @@ class _SplashScreenState extends State<SplashScreen>
               body: SafeArea(
                 child: Stack(
                   children: [
-                    // Center logo (asset with robust fallback)
                     Center(
                       child: Padding(
                         padding: const EdgeInsets.symmetric(horizontal: 24),
@@ -161,8 +143,6 @@ class _SplashScreenState extends State<SplashScreen>
                         ),
                       ),
                     ),
-
-                    // Bottom: premium indeterminate bar + small caption
                     Align(
                       alignment: Alignment.bottomCenter,
                       child: Padding(
@@ -170,7 +150,6 @@ class _SplashScreenState extends State<SplashScreen>
                         child: Column(
                           mainAxisSize: MainAxisSize.min,
                           children: [
-                            // Custom mint/emerald sweep bar with glow
                             RepaintBoundary(
                               child: AnimatedBuilder(
                                 animation: _barCtrl,
@@ -214,8 +193,6 @@ class _SplashScreenState extends State<SplashScreen>
   }
 }
 
-/// Picks the brand image; tries `images/pickme.png`, then `image/pickme.png`,
-/// then a vector icon fallback. Keeps memory footprint small.
 class _PickMeLogo extends StatelessWidget {
   const _PickMeLogo({required this.size});
   final double size;
@@ -237,27 +214,23 @@ class _PickMeLogo extends StatelessWidget {
       child: Icon(icon, size: size * 0.45, color: cs.onSurface.withOpacity(.85)),
     );
 
-    // First attempt
     return Image.asset(
       'images/pickme.png',
       fit: BoxFit.contain,
       errorBuilder: (_, __, ___) {
-        // Second attempt (alternate folder naming)
         return Image.asset(
           'image/pickme.png',
           fit: BoxFit.contain,
           errorBuilder: (_, __, ___) => fallbackBox(Icons.directions_car_filled_rounded),
         );
       },
-      cacheWidth: (size * 2).round(), // crisp but still small
+      cacheWidth: (size * 2).round(),
       cacheHeight: (size * 2).round(),
       filterQuality: FilterQuality.medium,
     );
   }
 }
 
-/// Premium indeterminate progress bar with gradient sweep + glow.
-/// t animates 0..1 (controller repeats).
 class _IndeterminateBarPainter extends CustomPainter {
   _IndeterminateBarPainter({
     required this.t,
@@ -275,13 +248,11 @@ class _IndeterminateBarPainter extends CustomPainter {
   void paint(Canvas canvas, Size size) {
     final r = RRect.fromRectAndRadius(Offset.zero & size, const Radius.circular(12));
 
-    // Track
     final trackPaint = Paint()
       ..color = track
       ..style = PaintingStyle.fill;
     canvas.drawRRect(r, trackPaint);
 
-    // Base fill (subtle)
     final basePaint = Paint()
       ..shader = LinearGradient(
         colors: [base.withOpacity(.28), base.withOpacity(.40)],
@@ -290,8 +261,7 @@ class _IndeterminateBarPainter extends CustomPainter {
       ).createShader(Offset.zero & size);
     canvas.drawRRect(r, basePaint);
 
-    // Moving highlight (sweep)
-    final sweepWidth = size.width * 0.28; // highlight width
+    final sweepWidth = size.width * 0.28;
     final startX = (size.width + sweepWidth) * t - sweepWidth;
     final rect = Rect.fromLTWH(startX, 0, sweepWidth, size.height);
 
@@ -313,7 +283,6 @@ class _IndeterminateBarPainter extends CustomPainter {
     canvas.drawRect(rect, sweepPaint);
     canvas.restore();
 
-    // Soft outer glow
     final glow = Paint()
       ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 6)
       ..color = accent.withOpacity(.25);
@@ -325,9 +294,6 @@ class _IndeterminateBarPainter extends CustomPainter {
       old.t != t || old.track != track || old.base != base || old.accent != accent;
 }
 
-// ─────────────────────────────────────────────────────────────────────────
-// Small mapping helper (avoid importing extra libs)
-// ─────────────────────────────────────────────────────────────────────────
 extension _MapRange on num {
   double map(double inMin, double inMax, double outMin, double outMax) {
     final v = (this - inMin) / (inMax - inMin);

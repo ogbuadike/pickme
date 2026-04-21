@@ -42,3 +42,5 @@ class ApiConstants {
   static const String kDirectionsUrl = "https://maps.googleapis.com/maps/api/directions/json";
   static const String kHereApiKey = 'V7bxswfVHsva9-1rMXXmkmQ-ukRwxHJ3eLb6A0NC2vE';
 }
+
+

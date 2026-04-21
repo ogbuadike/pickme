@@ -1,3 +1,8 @@
+plugins {
+    // Change "4.4.4" to "4.3.15" to match the classpath requirement
+    id("com.google.gms.google-services") version "4.3.15" apply false
+}
+
 allprojects {
     repositories {
         google()

@@ -1,30 +1,24 @@
-// lib/main.dart
 import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
-import 'firebase_options.dart'; // flutterfire configure output
+import 'firebase_options.dart';
 
 import 'themes/app_theme.dart';
 import 'routes/routes.dart';
-// import your root widget(s)
 
-@pragma('vm:entry-point') // required so Android can find it in background isolate
+// 1. Create a global key for navigation
+final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
+
+@pragma('vm:entry-point')
 Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
-  // Firebase must be initialized in the background isolate
   await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
-  // TODO: handle the background message (logging / analytics / schedule local notif)
+  debugPrint('Handling a background message: ${message.messageId}');
 }
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-
-  // Always initialize with DefaultFirebaseOptions
   await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
-
-  // Register the background handler ONCE here (not in any service/widget)
   FirebaseMessaging.onBackgroundMessage(firebaseMessagingBackgroundHandler);
-
-  // Optional but helpful to avoid racing getToken():
   await FirebaseMessaging.instance.setAutoInitEnabled(true);
 
   runApp(const MyApp());
@@ -39,6 +33,8 @@ class MyApp extends StatelessWidget {
       debugShowCheckedModeBanner: false,
       title: 'Pick Me',
       theme: Theme.of(context),
+      // 2. Attach the key to your MaterialApp
+      navigatorKey: navigatorKey,
       initialRoute: AppRoutes.loading,
       routes: AppRoutes.getRoutes(),
     );

@@ -1,18 +1,24 @@
 // lib/screens/profile.dart
 import 'dart:convert';
 import 'dart:io';
+import 'dart:ui';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:http/http.dart' as http;
+import 'package:package_info_plus/package_info_plus.dart';
+import 'package:url_launcher/url_launcher.dart';
+import 'package:intl/intl.dart' hide TextDirection;
 
-import '../../api/api_client.dart';
-import '../../api/url.dart';
-import '../../utility/notification.dart';
-import '../../themes/app_theme.dart';
-import '../../widgets/inner_background.dart';
+import '../api/api_client.dart';
+import '../api/url.dart';
+import '../routes/routes.dart';
+import '../themes/app_theme.dart';
+import '../ui/ui_scale.dart';
+import '../utility/notification.dart';
+import '../widgets/inner_background.dart';
 
 class ProfileScreen extends StatefulWidget {
   const ProfileScreen({Key? key}) : super(key: key);
@@ -21,7 +27,7 @@ class ProfileScreen extends StatefulWidget {
   State<ProfileScreen> createState() => _ProfileScreenState();
 }
 
-class _ProfileScreenState extends State<ProfileScreen> {
+class _ProfileScreenState extends State<ProfileScreen> with SingleTickerProviderStateMixin {
   late ApiClient _api;
   late SharedPreferences _prefs;
 
@@ -32,11 +38,19 @@ class _ProfileScreenState extends State<ProfileScreen> {
   bool _hasError = false;
 
   Map<String, dynamic> _user = {};
-  File? _imageFile;
+  String _appVersion = '1.0.0';
+  String _privacyPolicyUrl = 'https://phantomphones.store/pick_me/privacy';
+
+  // Make this nullable to prevent LateInitializationError crashes
+  AnimationController? _shimmerController;
 
   @override
   void initState() {
     super.initState();
+    _shimmerController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1500),
+    )..repeat();
     _bootstrap();
   }
 
@@ -44,10 +58,25 @@ class _ProfileScreenState extends State<ProfileScreen> {
     try {
       _prefs = await SharedPreferences.getInstance();
       _api = ApiClient(http.Client(), context);
+
+      // Fetch App Version safely
+      try {
+        final packageInfo = await PackageInfo.fromPlatform();
+        _appVersion = '${packageInfo.version} (${packageInfo.buildNumber})';
+      } catch (_) {
+        _appVersion = '1.0.0';
+      }
+
       await _fetchUser();
     } catch (e) {
       _fail('Failed to initialize: $e');
     }
+  }
+
+  @override
+  void dispose() {
+    _shimmerController?.dispose(); // Safe dispose
+    super.dispose();
   }
 
   Future<void> _fetchUser() async {
@@ -59,7 +88,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
     try {
       final uid = _prefs.getString('user_id');
-      if (uid == null) throw Exception('User ID missing');
+      if (uid == null) throw Exception('User session missing');
 
       final res = await _api.request(
         ApiConstants.userInfoEndpoint,
@@ -68,17 +97,20 @@ class _ProfileScreenState extends State<ProfileScreen> {
       );
 
       final data = jsonDecode(res.body);
-      if (res.statusCode == 200 && data is Map && data['error'] == false) {
+      if (res.statusCode == 200 && data['error'] == false) {
         setState(() {
           _user = (data['user'] as Map).map(
                 (k, v) => MapEntry<String, dynamic>(k.toString(), v),
           );
+          if (data['app_settings'] != null) {
+            _privacyPolicyUrl = data['app_settings']['privacy_policy_url'] ?? _privacyPolicyUrl;
+          }
         });
       } else {
         throw Exception(data['error_msg'] ?? 'Unable to load profile');
       }
     } catch (e) {
-      _fail('Failed to load profile: $e');
+      _fail('Failed to load profile. Check connection.');
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }
@@ -100,16 +132,43 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
       final data = jsonDecode(res.body);
       if (res.statusCode == 200 && data['error'] == false) {
-        if (data['user'] is Map<String, dynamic>) {
-          setState(() => _user = Map<String, dynamic>.from(data['user']));
-        }
-        _ok(data['message'] ?? 'Updated');
+        _ok(data['message'] ?? 'Profile updated successfully');
+        _fetchUser();
       } else {
-        throw Exception(data['error_msg'] ?? 'Update failed');
+        throw Exception(data['message'] ?? data['error_msg'] ?? 'Update failed');
       }
     } catch (e) {
-      _fail('Update failed: $e');
+      _fail(e.toString().replaceAll('Exception: ', ''));
     } finally {
+      if (mounted) setState(() => _isLoading = false);
+    }
+  }
+
+  Future<void> _deleteAccount() async {
+    if (!mounted) return;
+    setState(() => _isLoading = true);
+
+    try {
+      final uid = _prefs.getString('user_id');
+      if (uid == null) throw Exception('User ID missing');
+
+      final res = await _api.request(
+        ApiConstants.updateUserInfoEndpoint,
+        method: 'POST',
+        data: {'user': uid, 'action': 'delete_account'},
+      );
+
+      final data = jsonDecode(res.body);
+      if (res.statusCode == 200 && data['error'] == false) {
+        await _prefs.clear();
+        if (!mounted) return;
+        _ok('Account deleted successfully');
+        Navigator.of(context).pushNamedAndRemoveUntil(AppRoutes.login, (route) => false);
+      } else {
+        throw Exception(data['message'] ?? 'Failed to delete account');
+      }
+    } catch (e) {
+      _fail(e.toString().replaceAll('Exception: ', ''));
       if (mounted) setState(() => _isLoading = false);
     }
   }
@@ -117,48 +176,52 @@ class _ProfileScreenState extends State<ProfileScreen> {
   Future<void> _pickAndUploadImage() async {
     if (_isUploadingImage) return;
     try {
-      setState(() => _isUploadingImage = true);
-
       final x = await _picker.pickImage(
         source: ImageSource.gallery,
         maxWidth: 1024,
         maxHeight: 1024,
-        imageQuality: 85,
+        imageQuality: 80,
       );
-      if (x == null) throw Exception('No image selected');
+      if (x == null) return;
 
-      _imageFile = File(x.path);
-      if (await _imageFile!.length() > 5 * 1024 * 1024) {
-        throw Exception('Image must be < 5MB');
+      setState(() => _isUploadingImage = true);
+
+      final imageFile = File(x.path);
+      if (await imageFile.length() > 5 * 1024 * 1024) {
+        throw Exception('Image size must be less than 5MB');
       }
 
       final uid = _prefs.getString('user_id');
-      if (uid == null) throw Exception('User ID missing');
+      if (uid == null) throw Exception('User session missing');
 
       final res = await _api.request(
         ApiConstants.updateProfilePictureEndpoint,
         method: 'POST',
         data: {'user': uid, 'action': 'update_profile_picture'},
-        files: {'profile_picture': _imageFile!},
+        files: {'profile_picture': imageFile},
       );
 
       final data = jsonDecode(res.body);
       if (res.statusCode == 200 && data['error'] == false) {
         setState(() => _user['user_logo'] = data['user_logo']);
-        _ok('Profile picture updated');
+        _ok('Profile picture updated!');
+        _fetchUser();
       } else {
-        throw Exception(data['error_msg'] ?? 'Upload failed');
+        throw Exception(data['message'] ?? data['error_msg'] ?? 'Upload failed');
       }
     } catch (e) {
-      _fail('Image upload failed: $e');
+      _fail(e.toString().replaceAll('Exception: ', ''));
     } finally {
       if (mounted) setState(() => _isUploadingImage = false);
     }
   }
 
-  // ────────────────────────────────────────────────────────────────────────
-  // UI HELPERS
-  // ────────────────────────────────────────────────────────────────────────
+  Future<void> _launchUrl(String urlString) async {
+    final Uri url = Uri.parse(urlString);
+    if (!await launchUrl(url)) {
+      _fail('Could not launch $urlString');
+    }
+  }
 
   void _fail(String msg) {
     if (!mounted) return;
@@ -167,401 +230,486 @@ class _ProfileScreenState extends State<ProfileScreen> {
   }
 
   void _ok(String msg) {
+    if (!mounted) return;
     showToastNotification(context: context, title: 'Success', message: msg, isSuccess: true);
   }
 
-  TextStyle get _title => Theme.of(context).textTheme.titleLarge!;
-  TextStyle get _label => Theme.of(context).textTheme.labelMedium!;
-  TextStyle get _body => Theme.of(context).textTheme.bodyMedium!;
-
-  BoxDecoration _sectionBox(ColorScheme cs) => BoxDecoration(
-    color: cs.surface,
-    borderRadius: BorderRadius.circular(16),
-    border: Border.all(color: AppColors.mintBgLight, width: 1),
-    boxShadow: [
-      BoxShadow(
-        color: Colors.black.withOpacity(.04),
-        blurRadius: 14,
-        offset: const Offset(0, 6),
-      ),
-    ],
-  );
+  // ────────────────────────────────────────────────────────────────────────
+  // WIDGET BUILDERS
+  // ────────────────────────────────────────────────────────────────────────
 
   @override
   Widget build(BuildContext context) {
+    final ui = UIScale.of(context);
     final cs = Theme.of(context).colorScheme;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
 
     return Scaffold(
+      extendBodyBehindAppBar: true,
+      appBar: AppBar(
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        centerTitle: true,
+        title: Text(
+          'Profile',
+          style: TextStyle(
+            fontSize: ui.font(18),
+            fontWeight: FontWeight.w900,
+            color: isDark ? Colors.white : AppColors.textPrimary,
+          ),
+        ),
+        leading: IconButton(
+          icon: Icon(Icons.arrow_back_ios_new_rounded, size: ui.icon(20), color: isDark ? Colors.white : AppColors.textPrimary),
+          onPressed: () => Navigator.of(context).pop(),
+        ),
+      ),
       body: Stack(
         children: [
-          const BackgroundWidget(showGrid: true, intensity: 1.0),
+          const BackgroundWidget(style: HoloStyle.vapor, intensity: 0.5, animate: false),
           SafeArea(
-            child: _isLoading
-                ? Center(child: CircularProgressIndicator(color: cs.primary))
-                : _hasError
-                ? _errorState(cs)
-                : SingleChildScrollView(
-              padding: const EdgeInsets.fromLTRB(12, 8, 12, 24),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  _appBar(cs),
-                  const SizedBox(height: 8),
-                  _header(cs),
-                  const SizedBox(height: 12),
-                  _verification(cs),
-                  const SizedBox(height: 12),
-                  _savedPlaces(cs),
-                  const SizedBox(height: 12),
-                  _ridePreferences(cs),
-                  const SizedBox(height: 12),
-                  _payment(cs),
-                  const SizedBox(height: 12),
-                  _safety(cs),
-                  const SizedBox(height: 12),
-                  _account(cs),
-                ],
-              ),
-            ),
+            child: _isLoading && _user.isEmpty
+                ? _buildPremiumSkeleton(ui, isDark)
+                : _hasError && _user.isEmpty
+                ? _buildErrorState(ui, isDark)
+                : _buildContent(ui, isDark),
           ),
-          if (_isUploadingImage)
+          if (_isUploadingImage || (_isLoading && _user.isNotEmpty))
             Container(
-              color: Colors.black45,
-              child: Center(child: CircularProgressIndicator(color: cs.primary)),
+              color: Colors.black.withOpacity(0.4),
+              child: Center(
+                child: Container(
+                  padding: EdgeInsets.all(ui.inset(20)),
+                  decoration: BoxDecoration(
+                    color: cs.surface,
+                    borderRadius: BorderRadius.circular(ui.radius(16)),
+                  ),
+                  child: const CircularProgressIndicator(color: AppColors.primary),
+                ),
+              ),
             ),
         ],
       ),
     );
   }
 
-  // ── APP BAR ─────────────────────────────────────────────────────────────
-  Widget _appBar(ColorScheme cs) {
-    return Row(
-      children: [
-        IconButton(
-          icon: Icon(Icons.arrow_back_rounded, color: cs.onBackground),
-          onPressed: () => Navigator.of(context).pop(),
+  Widget _buildContent(UIScale ui, bool isDark) {
+    return SingleChildScrollView(
+      physics: const BouncingScrollPhysics(),
+      padding: EdgeInsets.fromLTRB(ui.inset(16), ui.gap(10), ui.inset(16), ui.gap(40)),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          _buildHeader(ui, isDark),
+          SizedBox(height: ui.gap(24)),
+
+          _buildCardContainer(
+            ui: ui,
+            isDark: isDark,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                _buildSectionHeader(ui, 'Safety & Security', Icons.shield_rounded),
+                _buildSafety(ui, isDark),
+              ],
+            ),
+          ),
+
+          SizedBox(height: ui.gap(16)),
+
+          _buildCardContainer(
+            ui: ui,
+            isDark: isDark,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                _buildSectionHeader(ui, 'Account Management', Icons.manage_accounts_rounded),
+                _buildAccount(ui, isDark),
+              ],
+            ),
+          ),
+
+          SizedBox(height: ui.gap(16)),
+
+          _buildCardContainer(
+            ui: ui,
+            isDark: isDark,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                _buildSectionHeader(ui, 'About & Legal', Icons.info_outline_rounded),
+                _buildAbout(ui, isDark),
+              ],
+            ),
+          ),
+
+          SizedBox(height: ui.gap(32)),
+          _buildDangerZone(ui, isDark),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildCardContainer({required UIScale ui, required bool isDark, required Widget child}) {
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(ui.radius(20)),
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 16, sigmaY: 16),
+        child: Container(
+          decoration: BoxDecoration(
+            color: isDark ? AppColors.darkColor.withOpacity(0.7) : Colors.white.withOpacity(0.85),
+            borderRadius: BorderRadius.circular(ui.radius(20)),
+            border: Border.all(color: AppColors.mintBgLight.withOpacity(0.3)),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(0.04),
+                blurRadius: 20,
+                offset: const Offset(0, 8),
+              ),
+            ],
+          ),
+          child: child,
         ),
-        const Spacer(),
-        Text('Profile', style: _title.copyWith(fontWeight: FontWeight.w800)),
-        const Spacer(),
-        const SizedBox(width: 48),
+      ),
+    );
+  }
+
+  Widget _buildSectionHeader(UIScale ui, String title, IconData icon) {
+    return Padding(
+      padding: EdgeInsets.fromLTRB(ui.inset(16), ui.inset(16), ui.inset(16), ui.inset(8)),
+      child: Row(
+        children: [
+          Icon(icon, size: ui.icon(18), color: AppColors.primary),
+          SizedBox(width: ui.gap(8)),
+          Text(title, style: TextStyle(fontSize: ui.font(14), fontWeight: FontWeight.w800, color: AppColors.primary)),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildHeader(UIScale ui, bool isDark) {
+    final avatarUrl = _user['user_logo']?.toString() ?? '';
+    final fName = _user['user_fname']?.toString() ?? '';
+    final lName = _user['user_lname']?.toString() ?? '';
+    final name = '$fName $lName'.trim();
+    final initials = name.isNotEmpty ? '${fName.isNotEmpty ? fName[0] : ''}${lName.isNotEmpty ? lName[0] : ''}' : 'U';
+    final email = _user['user_email']?.toString() ?? '';
+    final phone = _user['user_phone']?.toString() ?? '';
+    final dateReg = _user['user_date_registered']?.toString() ?? '';
+
+    // Dynamic Stats parsing
+    final totalTrips = int.tryParse(_user['total_trips']?.toString() ?? '0') ?? 0;
+    final ratingVal = double.tryParse(_user['user_rating']?.toString() ?? '5.0') ?? 5.0;
+    final rating = ratingVal > 0 ? ratingVal.toStringAsFixed(1) : '5.0';
+
+    String memberSince = 'Recently';
+    if (dateReg.isNotEmpty) {
+      try {
+        final d = DateTime.parse(dateReg);
+        memberSince = DateFormat('MMM yyyy').format(d);
+      } catch (_) {}
+    }
+
+    return Column(
+      children: [
+        Stack(
+          alignment: Alignment.bottomRight,
+          children: [
+            GestureDetector(
+              onTap: avatarUrl.isNotEmpty ? _showProfilePicture : _pickAndUploadImage,
+              child: Container(
+                width: ui.inset(100),
+                height: ui.inset(100),
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: AppColors.mintBgLight.withOpacity(0.2),
+                  border: Border.all(color: AppColors.primary, width: 3),
+                  boxShadow: [
+                    BoxShadow(color: AppColors.primary.withOpacity(0.3), blurRadius: 20, offset: const Offset(0, 8)),
+                  ],
+                  image: avatarUrl.isNotEmpty ? DecorationImage(image: NetworkImage(avatarUrl), fit: BoxFit.cover) : null,
+                ),
+                child: avatarUrl.isEmpty
+                    ? Center(child: Text(initials.toUpperCase(), style: TextStyle(fontSize: ui.font(32), fontWeight: FontWeight.w900, color: AppColors.primary)))
+                    : null,
+              ),
+            ),
+            InkWell(
+              onTap: _pickAndUploadImage,
+              borderRadius: BorderRadius.circular(999),
+              child: Container(
+                padding: EdgeInsets.all(ui.inset(8)),
+                decoration: BoxDecoration(
+                  color: AppColors.secondary,
+                  shape: BoxShape.circle,
+                  border: Border.all(color: isDark ? AppColors.darkColor : Colors.white, width: 3),
+                ),
+                child: Icon(Icons.camera_alt_rounded, size: ui.icon(16), color: Colors.white),
+              ),
+            ),
+          ],
+        ),
+        SizedBox(height: ui.gap(16)),
+        Text(
+          name.isNotEmpty ? name : 'Pick Me User',
+          style: TextStyle(fontSize: ui.font(22), fontWeight: FontWeight.w900, color: isDark ? Colors.white : AppColors.textPrimary),
+        ),
+        if (email.isNotEmpty || phone.isNotEmpty) ...[
+          SizedBox(height: ui.gap(4)),
+          Text(
+            [if (phone.isNotEmpty) phone, if (email.isNotEmpty) email].join(' • '),
+            style: TextStyle(fontSize: ui.font(13), fontWeight: FontWeight.w600, color: AppColors.textSecondary),
+          ),
+        ],
+        SizedBox(height: ui.gap(20)),
+
+        // Premium Dashboard Stats Row
+        Container(
+          padding: EdgeInsets.symmetric(vertical: ui.gap(16), horizontal: ui.inset(16)),
+          decoration: BoxDecoration(
+            color: AppColors.primary.withOpacity(0.05),
+            borderRadius: BorderRadius.circular(ui.radius(20)),
+            border: Border.all(color: AppColors.primary.withOpacity(0.15)),
+          ),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+            children: [
+              _buildDashboardStat(ui, isDark, Icons.local_taxi_rounded, totalTrips.toString(), 'Trips'),
+              Container(width: 1, height: 40, color: AppColors.primary.withOpacity(0.2)),
+              _buildDashboardStat(ui, isDark, Icons.star_rounded, rating, 'Rating', color: const Color(0xFFFFD54F)),
+              Container(width: 1, height: 40, color: AppColors.primary.withOpacity(0.2)),
+              _buildDashboardStat(ui, isDark, Icons.calendar_month_rounded, memberSince, 'Joined', color: AppColors.secondary),
+            ],
+          ),
+        )
       ],
     );
   }
 
-  // ── HEADER (avatar + name + stats) ──────────────────────────────────────
-  Widget _header(ColorScheme cs) {
-    final initials =
-        '${(_user['user_fname'] ?? 'U').toString().substring(0, 1)}${(_user['user_lname'] ?? 'N').toString().substring(0, 1)}';
-    final rating = (_user['user_rating'] ?? 4.8).toString();
+  Widget _buildDashboardStat(UIScale ui, bool isDark, IconData icon, String val, String label, {Color color = AppColors.primary}) {
+    return Column(
+      children: [
+        Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: ui.icon(18), color: color),
+            SizedBox(width: ui.gap(6)),
+            Text(val, style: TextStyle(fontSize: ui.font(16), fontWeight: FontWeight.w900, color: isDark ? Colors.white : AppColors.textPrimary)),
+          ],
+        ),
+        SizedBox(height: ui.gap(2)),
+        Text(label, style: TextStyle(fontSize: ui.font(11), color: AppColors.textSecondary, fontWeight: FontWeight.w700)),
+      ],
+    );
+  }
 
-    return Container(
-      padding: const EdgeInsets.symmetric(vertical: 16),
-      decoration: _sectionBox(cs),
+  Widget _buildSafety(UIScale ui, bool isDark) {
+    final contact = (_user['emergency_contact']?.toString() ?? '').trim();
+    final hasContact = contact.isNotEmpty;
+
+    return Column(
+      children: [
+        Divider(color: AppColors.mintBgLight.withOpacity(0.2), height: 1),
+        ListTile(
+          contentPadding: EdgeInsets.symmetric(horizontal: ui.inset(16), vertical: ui.inset(4)),
+          leading: Container(
+            padding: EdgeInsets.all(ui.inset(10)),
+            decoration: BoxDecoration(color: AppColors.error.withOpacity(0.1), shape: BoxShape.circle),
+            child: Icon(Icons.contact_phone_rounded, color: AppColors.error, size: ui.icon(20)),
+          ),
+          title: Text('Emergency Contact', style: TextStyle(fontWeight: FontWeight.w800, fontSize: ui.font(14), color: isDark ? Colors.white : AppColors.textPrimary)),
+          subtitle: Text(hasContact ? contact : 'Not set for emergencies', style: TextStyle(fontSize: ui.font(12), color: AppColors.textSecondary, fontWeight: FontWeight.w600)),
+          trailing: TextButton(
+            onPressed: () => _showEditBottomSheet(
+              title: 'Emergency Contact',
+              dbKey: 'emergency_contact',
+              initialValue: contact,
+              hint: 'e.g. John Doe - 08012345678',
+              icon: Icons.contact_phone_rounded,
+            ),
+            style: TextButton.styleFrom(foregroundColor: AppColors.error, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
+            child: Text(hasContact ? 'Edit' : 'Add', style: const TextStyle(fontWeight: FontWeight.w800)),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildAccount(UIScale ui, bool isDark) {
+    return Column(
+      children: [
+        Divider(color: AppColors.mintBgLight.withOpacity(0.2), height: 1),
+        _buildListTile(ui, isDark, 'Change Password', Icons.lock_outline_rounded, AppColors.secondary, onTap: _showPasswordBottomSheet),
+        Divider(color: AppColors.mintBgLight.withOpacity(0.2), height: 1),
+        _buildListTile(ui, isDark, 'Update Transaction Code', Icons.pin_rounded, const Color(0xFFB8860B), onTap: _showTransactionCodeBottomSheet),
+        Divider(color: AppColors.mintBgLight.withOpacity(0.2), height: 1),
+        _buildListTile(ui, isDark, 'Sign Out', Icons.logout_rounded, AppColors.textSecondary, onTap: _showLogoutBottomSheet),
+      ],
+    );
+  }
+
+  Widget _buildAbout(UIScale ui, bool isDark) {
+    return Column(
+      children: [
+        Divider(color: AppColors.mintBgLight.withOpacity(0.2), height: 1),
+        ListTile(
+          contentPadding: EdgeInsets.symmetric(horizontal: ui.inset(16), vertical: ui.inset(4)),
+          leading: Container(
+            padding: EdgeInsets.all(ui.inset(10)),
+            decoration: BoxDecoration(color: AppColors.primary.withOpacity(0.1), shape: BoxShape.circle),
+            child: Icon(Icons.info_outline_rounded, color: AppColors.primary, size: ui.icon(20)),
+          ),
+          title: Text('App Version', style: TextStyle(fontWeight: FontWeight.w800, fontSize: ui.font(14), color: isDark ? Colors.white : AppColors.textPrimary)),
+          trailing: Text(_appVersion, style: TextStyle(fontWeight: FontWeight.w900, color: AppColors.textSecondary)),
+        ),
+        Divider(color: AppColors.mintBgLight.withOpacity(0.2), height: 1),
+        _buildListTile(ui, isDark, 'Privacy Policy', Icons.privacy_tip_outlined, const Color(0xFF1E8E3E), onTap: () => _launchUrl(_privacyPolicyUrl)),
+      ],
+    );
+  }
+
+  Widget _buildListTile(UIScale ui, bool isDark, String title, IconData icon, Color iconColor, {VoidCallback? onTap}) {
+    return ListTile(
+      contentPadding: EdgeInsets.symmetric(horizontal: ui.inset(16), vertical: ui.inset(4)),
+      leading: Container(
+        padding: EdgeInsets.all(ui.inset(10)),
+        decoration: BoxDecoration(color: iconColor.withOpacity(0.1), shape: BoxShape.circle),
+        child: Icon(icon, color: iconColor, size: ui.icon(20)),
+      ),
+      title: Text(title, style: TextStyle(fontWeight: FontWeight.w800, fontSize: ui.font(14), color: isDark ? Colors.white : AppColors.textPrimary)),
+      trailing: Icon(Icons.chevron_right_rounded, color: AppColors.textSecondary.withOpacity(0.5)),
+      onTap: () {
+        HapticFeedback.lightImpact();
+        if (onTap != null) onTap();
+      },
+    );
+  }
+
+  Widget _buildDangerZone(UIScale ui, bool isDark) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: EdgeInsets.only(left: ui.inset(16), bottom: ui.gap(8)),
+          child: Text('DANGER ZONE', style: TextStyle(color: AppColors.error, fontWeight: FontWeight.w900, fontSize: ui.font(12), letterSpacing: 1.2)),
+        ),
+        Container(
+          width: double.infinity,
+          decoration: BoxDecoration(
+            color: AppColors.error.withOpacity(0.05),
+            borderRadius: BorderRadius.circular(ui.radius(20)),
+            border: Border.all(color: AppColors.error.withOpacity(0.3)),
+          ),
+          child: Material(
+            color: Colors.transparent,
+            child: InkWell(
+              onTap: () {
+                HapticFeedback.heavyImpact();
+                _showDeleteAccountBottomSheet();
+              },
+              borderRadius: BorderRadius.circular(ui.radius(20)),
+              child: Padding(
+                padding: EdgeInsets.all(ui.inset(16)),
+                child: Row(
+                  children: [
+                    Container(
+                      padding: EdgeInsets.all(ui.inset(10)),
+                      decoration: BoxDecoration(color: AppColors.error.withOpacity(0.15), shape: BoxShape.circle),
+                      child: Icon(Icons.delete_forever_rounded, color: AppColors.error, size: ui.icon(20)),
+                    ),
+                    SizedBox(width: ui.gap(16)),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text('Delete Account', style: TextStyle(fontSize: ui.font(15), fontWeight: FontWeight.w900, color: AppColors.error)),
+                          SizedBox(height: ui.gap(4)),
+                          Text('Permanently remove all data.', style: TextStyle(fontSize: ui.font(12), color: AppColors.error.withOpacity(0.8), fontWeight: FontWeight.w700)),
+                        ],
+                      ),
+                    ),
+                    Icon(Icons.chevron_right_rounded, color: AppColors.error.withOpacity(0.5)),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  // ── PREMIUM SKELETON LOADER ─────────────────────────────────────────
+  Widget _buildPremiumSkeleton(UIScale ui, bool isDark) {
+    if (_shimmerController == null) return const SizedBox();
+
+    final baseColor = isDark ? Colors.white.withOpacity(0.05) : Colors.black.withOpacity(0.05);
+    final highlightColor = isDark ? Colors.white.withOpacity(0.15) : Colors.black.withOpacity(0.12);
+
+    return AnimatedBuilder(
+      animation: _shimmerController!,
+      builder: (context, child) {
+        return ShaderMask(
+          blendMode: BlendMode.srcATop,
+          shaderCallback: (bounds) {
+            return LinearGradient(
+              colors: [baseColor, highlightColor, baseColor],
+              stops: const [0.1, 0.5, 0.9],
+              transform: SlideGradientTransform(_shimmerController!.value),
+            ).createShader(bounds);
+          },
+          child: SingleChildScrollView(
+            padding: EdgeInsets.all(ui.inset(16)),
+            child: Column(
+              children: [
+                SizedBox(height: ui.gap(20)),
+                Container(width: ui.inset(100), height: ui.inset(100), decoration: const BoxDecoration(color: Colors.white, shape: BoxShape.circle)),
+                SizedBox(height: ui.gap(16)),
+                Container(width: 180, height: 24, decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(8))),
+                SizedBox(height: ui.gap(8)),
+                Container(width: 120, height: 16, decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(8))),
+                SizedBox(height: ui.gap(24)),
+                Container(width: double.infinity, height: 80, decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(20))),
+                SizedBox(height: ui.gap(24)),
+                Container(width: double.infinity, height: 120, decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(20))),
+                SizedBox(height: ui.gap(16)),
+                Container(width: double.infinity, height: 180, decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(20))),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildErrorState(UIScale ui, bool isDark) {
+    return Center(
       child: Column(
-        mainAxisSize: MainAxisSize.min,
+        mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          Stack(
-            alignment: Alignment.bottomRight,
-            children: [
-              GestureDetector(
-                onTap: _user['user_logo'] != null ? _showProfilePicture : null,
-                child: CircleAvatar(
-                  radius: 42,
-                  backgroundColor: AppColors.mintBgLight,
-                  backgroundImage:
-                  _user['user_logo'] != null ? NetworkImage(_user['user_logo']) : null,
-                  child: _user['user_logo'] == null
-                      ? Text(initials,
-                      style: Theme.of(context)
-                          .textTheme
-                          .headlineMedium
-                          ?.copyWith(color: cs.primary, fontWeight: FontWeight.w800))
-                      : null,
-                ),
-              ),
-              InkWell(
-                onTap: _pickAndUploadImage,
-                child: Container(
-                  padding: const EdgeInsets.all(6),
-                  decoration:
-                  BoxDecoration(color: cs.primary, shape: BoxShape.circle, boxShadow: [
-                    BoxShadow(color: cs.primary.withOpacity(.4), blurRadius: 12),
-                  ]),
-                  child: Icon(Icons.camera_alt_rounded, size: 18, color: cs.onPrimary),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 10),
-          Text(
-            '${_user['user_fname'] ?? ''} ${_user['user_lname'] ?? ''}'.trim(),
-            style: _title.copyWith(fontWeight: FontWeight.w800),
-          ),
-          const SizedBox(height: 6),
-          Wrap(
-            alignment: WrapAlignment.center,
-            spacing: 12,
-            children: [
-              _chipStat(Icons.star_rounded, '$rating', cs),
-              _chipStat(Icons.directions_car_rounded, '${_user['total_trips'] ?? 0} trips', cs),
-              _chipStat(Icons.calendar_today_rounded, 'Since ${(_user['user_date_registered'] ?? '').toString().split(' ').first}', cs),
-            ],
-          ),
+          Icon(Icons.wifi_off_rounded, size: ui.icon(60), color: AppColors.error.withOpacity(0.5)),
+          SizedBox(height: ui.gap(16)),
+          Text('Connection Error', style: TextStyle(fontSize: ui.font(20), fontWeight: FontWeight.w900, color: isDark ? Colors.white : AppColors.textPrimary)),
+          SizedBox(height: ui.gap(8)),
+          Text('Unable to load your profile data.', style: TextStyle(color: AppColors.textSecondary, fontWeight: FontWeight.w600)),
+          SizedBox(height: ui.gap(24)),
+          ElevatedButton.icon(
+            onPressed: _fetchUser,
+            icon: const Icon(Icons.refresh_rounded),
+            label: const Text('Try Again', style: TextStyle(fontWeight: FontWeight.w800)),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppColors.primary,
+              foregroundColor: Colors.white,
+              padding: EdgeInsets.symmetric(horizontal: ui.inset(24), vertical: ui.inset(12)),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(ui.radius(30))),
+            ),
+          )
         ],
       ),
     );
   }
 
-  Widget _chipStat(IconData icon, String text, ColorScheme cs) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-      decoration: BoxDecoration(
-        color: AppColors.mintBgLight,
-        borderRadius: BorderRadius.circular(20),
-      ),
-      child: Row(mainAxisSize: MainAxisSize.min, children: [
-        Icon(icon, size: 16, color: cs.primary),
-        const SizedBox(width: 6),
-        Text(text, style: _label.copyWith(color: AppColors.textPrimary)),
-      ]),
-    );
-  }
+  // ── DIALOGS & BOTTOM SHEETS ──────────────────────────────────────────
 
-  // ── VERIFICATION (identity) ─────────────────────────────────────────────
-  Widget _verification(ColorScheme cs) {
-    //final progress = ((_user['kyc_progress'] ?? 0.66) as num).toDouble().clamp(0, 1);
-
-    final dynamic raw = _user['kyc_progress'];
-    final double progress = (() {
-      if (raw is num) return raw.toDouble();
-      if (raw is String) return double.tryParse(raw) ?? 0.66;
-      return 0.66;
-    })().clamp(0.0, 1.0).toDouble();
-
-
-    return Container(
-      padding: const EdgeInsets.all(12),
-      decoration: _sectionBox(cs),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-          Text('Identity verification', style: _title.copyWith(fontSize: 16)),
-          IconButton(
-            icon: Icon(Icons.info_outline_rounded, color: cs.primary, size: 20),
-            onPressed: _showKycInfo,
-          ),
-        ]),
-        const SizedBox(height: 6),
-        LinearProgressIndicator(
-          value: progress,
-          backgroundColor: AppColors.mintBgLight,
-          color: cs.primary,
-          minHeight: 8,
-          borderRadius: BorderRadius.circular(8),
-        ),
-        const SizedBox(height: 8),
-        Wrap(spacing: 12, runSpacing: 6, children: [
-          _step('ID', true, cs),
-          _step('Selfie', true, cs),
-          _step('Address', progress >= .66, cs),
-          _step('Doc upload', progress >= .90, cs),
-        ]),
-        const SizedBox(height: 10),
-        FilledButton(
-          onPressed: _startKycUpgrade,
-          child: const Text('Continue verification'),
-        ),
-      ]),
-    );
-  }
-
-  Widget _step(String label, bool done, ColorScheme cs) {
-    return Row(mainAxisSize: MainAxisSize.min, children: [
-      Icon(done ? Icons.check_circle_rounded : Icons.radio_button_unchecked,
-          size: 18, color: done ? cs.primary : AppColors.textSecondary),
-      const SizedBox(width: 6),
-      Text(label, style: _body),
-    ]);
-  }
-
-  // ── SAVED PLACES (Home / Work) ─────────────────────────────────────────
-  Widget _savedPlaces(ColorScheme cs) {
-    return Container(
-      padding: const EdgeInsets.all(12),
-      decoration: _sectionBox(cs),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Text('Saved places', style: _title.copyWith(fontSize: 16)),
-        const SizedBox(height: 8),
-        _placeRow(
-          cs,
-          label: 'Home',
-          value: (_user['place_home'] ?? 'Add your home address') as String,
-          icon: Icons.home_rounded,
-          onEdit: () => _editText('Home address', 'place_home'),
-        ),
-        const Divider(height: 16),
-        _placeRow(
-          cs,
-          label: 'Work',
-          value: (_user['place_work'] ?? 'Add your work address') as String,
-          icon: Icons.work_rounded,
-          onEdit: () => _editText('Work address', 'place_work'),
-        ),
-      ]),
-    );
-  }
-
-  Widget _placeRow(ColorScheme cs,
-      {required String label,
-        required String value,
-        required IconData icon,
-        required VoidCallback onEdit}) {
-    return Row(children: [
-      Container(
-        width: 36,
-        height: 36,
-        decoration: BoxDecoration(
-          color: AppColors.mintBgLight,
-          borderRadius: BorderRadius.circular(10),
-        ),
-        child: Icon(icon, size: 20, color: cs.primary),
-      ),
-      const SizedBox(width: 10),
-      Expanded(
-        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text(label, style: _label.copyWith(color: AppColors.textSecondary)),
-          const SizedBox(height: 2),
-          Text(value, style: _body.copyWith(fontWeight: FontWeight.w600)),
-        ]),
-      ),
-      IconButton(icon: Icon(Icons.edit_rounded, color: cs.primary), onPressed: onEdit),
-    ]);
-  }
-
-  // ── RIDE PREFERENCES (Bike/Car/XL/Dispatch) ────────────────────────────
-  Widget _ridePreferences(ColorScheme cs) {
-    final selected = (_user['ride_pref'] ?? 'Car') as String;
-    final opts = const ['Bike', 'Car', 'XL', 'Dispatch'];
-
-    return Container(
-      padding: const EdgeInsets.all(12),
-      decoration: _sectionBox(cs),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Text('Ride preferences', style: _title.copyWith(fontSize: 16)),
-        const SizedBox(height: 8),
-        Wrap(spacing: 8, runSpacing: 8, children: [
-          for (final o in opts)
-            ChoiceChip(
-              label: Text(o),
-              selected: selected == o,
-              onSelected: (v) {
-                if (v) _update({'ride_pref': o}, 'update_ride_pref');
-              },
-              selectedColor: cs.primary,
-              labelStyle: TextStyle(
-                color: selected == o ? cs.onPrimary : AppColors.textPrimary,
-                fontWeight: FontWeight.w700,
-              ),
-              backgroundColor: AppColors.mintBgLight,
-              shape: const StadiumBorder(),
-            ),
-        ]),
-      ]),
-    );
-  }
-
-  // ── PAYMENT (default method) ───────────────────────────────────────────
-  Widget _payment(ColorScheme cs) {
-    final method = (_user['default_payment'] ?? '**** 6628 • Card') as String;
-
-    return Container(
-      padding: const EdgeInsets.all(12),
-      decoration: _sectionBox(cs),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Text('Payment', style: _title.copyWith(fontSize: 16)),
-        const SizedBox(height: 8),
-        Row(children: [
-          Container(
-            width: 36,
-            height: 36,
-            decoration: BoxDecoration(
-              color: AppColors.mintBgLight,
-              borderRadius: BorderRadius.circular(10),
-            ),
-            child: Icon(Icons.credit_card_rounded, size: 20, color: cs.primary),
-          ),
-          const SizedBox(width: 10),
-          Expanded(child: Text(method, style: _body.copyWith(fontWeight: FontWeight.w600))),
-          TextButton(
-            onPressed: () => _editText('Default payment (e.g. **** 1234 • Card)', 'default_payment'),
-            child: const Text('Change'),
-          ),
-        ]),
-      ]),
-    );
-  }
-
-  // ── SAFETY (emergency contact + ride PIN) ──────────────────────────────
-  Widget _safety(ColorScheme cs) {
-    final contact = (_user['emergency_contact'] ?? 'Add emergency contact') as String;
-    final pinSet = (_user['ride_pin_set'] ?? false) as bool;
-
-    return Container(
-      padding: const EdgeInsets.all(12),
-      decoration: _sectionBox(cs),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Text('Safety & privacy', style: _title.copyWith(fontSize: 16)),
-        const SizedBox(height: 8),
-        ListTile(
-          dense: true,
-          contentPadding: EdgeInsets.zero,
-          leading: Icon(Icons.contact_phone_rounded, color: cs.primary),
-          title: Text('Emergency contact', style: _body),
-          subtitle: Text(contact, style: _label),
-          trailing: TextButton(
-            onPressed: () => _editText('Emergency contact (name + phone)', 'emergency_contact'),
-            child: const Text('Set'),
-          ),
-        ),
-        const Divider(height: 12),
-        ListTile(
-          dense: true,
-          contentPadding: EdgeInsets.zero,
-          leading: Icon(Icons.password_rounded, color: cs.primary),
-          title: Text('Ride safety PIN', style: _body),
-          subtitle: Text(pinSet ? 'PIN enabled' : 'Protect rides with a PIN', style: _label),
-          trailing: TextButton(
-            onPressed: _changeRidePin,
-            child: Text(pinSet ? 'Change' : 'Enable'),
-          ),
-        ),
-      ]),
-    );
-  }
-
-  // ── ACCOUNT (password/logout) ──────────────────────────────────────────
-  Widget _account(ColorScheme cs) {
-    return Container(
-      decoration: _sectionBox(cs),
-      child: Column(children: [
-        ListTile(
-          leading: Icon(Icons.lock_outline_rounded, color: cs.primary),
-          title: Text('Change password', style: _body),
-          trailing: const Icon(Icons.chevron_right_rounded),
-          onTap: _changePassword,
-        ),
-        const Divider(height: 1),
-        ListTile(
-          leading: Icon(Icons.logout_rounded, color: AppColors.error),
-          title: Text('Log out', style: _body.copyWith(color: AppColors.error)),
-          onTap: () => _logoutConfirm(cs),
-        ),
-      ]),
-    );
-  }
-
-  // ── DIALOGS / EDITORS ──────────────────────────────────────────────────
   void _showProfilePicture() {
     showDialog(
       context: context,
@@ -570,163 +718,297 @@ class _ProfileScreenState extends State<ProfileScreen> {
         insetPadding: const EdgeInsets.all(20),
         child: GestureDetector(
           onTap: () => Navigator.pop(c),
-          child: Container(
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(20),
-              image: DecorationImage(image: NetworkImage(_user['user_logo']), fit: BoxFit.cover),
-            ),
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(20),
+            child: Image.network(_user['user_logo'], fit: BoxFit.contain),
           ),
         ),
       ),
     );
   }
 
-  void _showKycInfo() {
-    showDialog(
+  Widget _bottomSheetHeader(String title, String subtitle, IconData icon, Color color, bool isDark) {
+    return Column(
+      children: [
+        Container(width: 40, height: 4, decoration: BoxDecoration(color: Colors.grey.withOpacity(0.3), borderRadius: BorderRadius.circular(2))),
+        const SizedBox(height: 24),
+        Container(
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(color: color.withOpacity(0.1), shape: BoxShape.circle),
+          child: Icon(icon, size: 36, color: color),
+        ),
+        const SizedBox(height: 16),
+        Text(title, style: TextStyle(fontSize: 22, fontWeight: FontWeight.w900, color: isDark ? Colors.white : AppColors.textPrimary)),
+        const SizedBox(height: 8),
+        Text(subtitle, textAlign: TextAlign.center, style: TextStyle(fontSize: 14, color: AppColors.textSecondary, fontWeight: FontWeight.w600)),
+        const SizedBox(height: 24),
+      ],
+    );
+  }
+
+  void _showEditBottomSheet({required String title, required String dbKey, required String initialValue, required String hint, required IconData icon}) {
+    final ctrl = TextEditingController(text: initialValue);
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+
+    showModalBottomSheet(
       context: context,
-      builder: (c) => AlertDialog(
-        title: const Text('Verification'),
-        content: const Text('Verify your identity to book and send packages with confidence.'),
-        actions: [TextButton(onPressed: () => Navigator.pop(c), child: const Text('Close'))],
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (c) => Container(
+        decoration: BoxDecoration(color: isDark ? AppColors.darkColor : Colors.white, borderRadius: const BorderRadius.vertical(top: Radius.circular(28))),
+        padding: EdgeInsets.fromLTRB(24, 16, 24, MediaQuery.of(context).viewInsets.bottom + 24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            _bottomSheetHeader(title, 'Update your information below.', icon, AppColors.primary, isDark),
+            TextField(
+              controller: ctrl,
+              autofocus: true,
+              style: TextStyle(color: isDark ? Colors.white : AppColors.textPrimary, fontWeight: FontWeight.w600),
+              decoration: InputDecoration(
+                hintText: hint,
+                hintStyle: TextStyle(color: AppColors.textSecondary.withOpacity(0.5)),
+                filled: true,
+                fillColor: isDark ? Colors.white.withOpacity(0.05) : AppColors.mintBgLight.withOpacity(0.3),
+                border: OutlineInputBorder(borderRadius: BorderRadius.circular(16), borderSide: BorderSide.none),
+                contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 18),
+              ),
+            ),
+            const SizedBox(height: 24),
+            SizedBox(
+              width: double.infinity,
+              height: 54,
+              child: ElevatedButton(
+                onPressed: () {
+                  Navigator.pop(c);
+                  if (ctrl.text.trim() != initialValue) {
+                    _update({dbKey: ctrl.text.trim()}, 'update_profile');
+                  }
+                },
+                style: ElevatedButton.styleFrom(backgroundColor: AppColors.primary, foregroundColor: Colors.white, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)), elevation: 0),
+                child: const Text('Save Changes', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 16)),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
 
-  void _startKycUpgrade() {
-    // You can deep link to your KYC flow here.
-    _ok('Starting verification…');
-  }
-
-  void _editText(String title, String key) {
-    final ctrl = TextEditingController(text: (_user[key] ?? '').toString());
-    showDialog(
-      context: context,
-      builder: (c) => AlertDialog(
-        title: Text(title),
-        content: TextField(controller: ctrl, autofocus: true),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(c), child: const Text('Cancel')),
-          TextButton(
-            onPressed: () {
-              Navigator.pop(c);
-              _update({key: ctrl.text.trim()}, 'update_profile');
-            },
-            child: const Text('Save'),
-          ),
-        ],
-      ),
-    );
-  }
-
-  void _changePassword() {
+  void _showPasswordBottomSheet() {
     final oldC = TextEditingController();
     final newC = TextEditingController();
     final confC = TextEditingController();
+    final isDark = Theme.of(context).brightness == Brightness.dark;
 
-    showDialog(
+    showModalBottomSheet(
       context: context,
-      builder: (c) => AlertDialog(
-        title: const Text('Change password'),
-        content: Column(
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (c) => Container(
+        decoration: BoxDecoration(color: isDark ? AppColors.darkColor : Colors.white, borderRadius: const BorderRadius.vertical(top: Radius.circular(28))),
+        padding: EdgeInsets.fromLTRB(24, 16, 24, MediaQuery.of(context).viewInsets.bottom + 24),
+        child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            TextField(controller: oldC, decoration: const InputDecoration(labelText: 'Old password'), obscureText: true),
-            TextField(controller: newC, decoration: const InputDecoration(labelText: 'New password'), obscureText: true),
-            TextField(controller: confC, decoration: const InputDecoration(labelText: 'Confirm new password'), obscureText: true),
+            _bottomSheetHeader('Change Password', 'Secure your account with a new password.', Icons.lock_outline_rounded, AppColors.secondary, isDark),
+            _buildDialogTextField(oldC, 'Old Password', isDark),
+            const SizedBox(height: 12),
+            _buildDialogTextField(newC, 'New Password', isDark),
+            const SizedBox(height: 12),
+            _buildDialogTextField(confC, 'Confirm New Password', isDark),
+            const SizedBox(height: 24),
+            SizedBox(
+              width: double.infinity,
+              height: 54,
+              child: ElevatedButton(
+                onPressed: () {
+                  if (newC.text.isEmpty || oldC.text.isEmpty) return _fail('Fields cannot be empty');
+                  if (newC.text != confC.text) return _fail('New passwords do not match');
+                  Navigator.pop(c);
+                  _update({'old_password': oldC.text, 'new_password': newC.text}, 'update_password');
+                },
+                style: ElevatedButton.styleFrom(backgroundColor: AppColors.primary, foregroundColor: Colors.white, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)), elevation: 0),
+                child: const Text('Update Password', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 16)),
+              ),
+            ),
           ],
         ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(c), child: const Text('Cancel')),
-          TextButton(
-            onPressed: () {
-              if (newC.text != confC.text) return _fail('Passwords do not match');
-              Navigator.pop(c);
-              _update({'old_password': oldC.text, 'new_password': newC.text}, 'update_password');
-            },
-            child: const Text('Save'),
-          ),
-        ],
       ),
     );
   }
 
-  void _changeRidePin() {
+  void _showTransactionCodeBottomSheet() {
+    final oldC = TextEditingController();
     final newC = TextEditingController();
     final confC = TextEditingController();
+    final isDark = Theme.of(context).brightness == Brightness.dark;
 
-    showDialog(
+    showModalBottomSheet(
       context: context,
-      builder: (c) => AlertDialog(
-        title: const Text('Ride safety PIN'),
-        content: Column(
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (c) => Container(
+        decoration: BoxDecoration(color: isDark ? AppColors.darkColor : Colors.white, borderRadius: const BorderRadius.vertical(top: Radius.circular(28))),
+        padding: EdgeInsets.fromLTRB(24, 16, 24, MediaQuery.of(context).viewInsets.bottom + 24),
+        child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            TextField(
-              controller: newC,
-              decoration: const InputDecoration(labelText: 'New PIN (4–6 digits)'),
-              obscureText: true,
-              keyboardType: TextInputType.number,
-              inputFormatters: [FilteringTextInputFormatter.digitsOnly, LengthLimitingTextInputFormatter(6)],
-            ),
-            TextField(
-              controller: confC,
-              decoration: const InputDecoration(labelText: 'Confirm PIN'),
-              obscureText: true,
-              keyboardType: TextInputType.number,
-              inputFormatters: [FilteringTextInputFormatter.digitsOnly, LengthLimitingTextInputFormatter(6)],
+            _bottomSheetHeader('Transaction Code', 'Update your 4-digit security code.', Icons.pin_rounded, const Color(0xFFB8860B), isDark),
+            _buildDialogTextField(oldC, 'Old 4-Digit Code', isDark, isNumber: true),
+            const SizedBox(height: 12),
+            _buildDialogTextField(newC, 'New 4-Digit Code', isDark, isNumber: true),
+            const SizedBox(height: 12),
+            _buildDialogTextField(confC, 'Confirm New Code', isDark, isNumber: true),
+            const SizedBox(height: 24),
+            SizedBox(
+              width: double.infinity,
+              height: 54,
+              child: ElevatedButton(
+                onPressed: () {
+                  if (newC.text.isEmpty || oldC.text.isEmpty) return _fail('Fields cannot be empty');
+                  if (newC.text.length != 4) return _fail('Code must be exactly 4 digits');
+                  if (newC.text != confC.text) return _fail('New codes do not match');
+                  Navigator.pop(c);
+                  _update({'old_transaction_code': oldC.text, 'new_transaction_code': newC.text}, 'update_transaction_code');
+                },
+                style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFFB8860B), foregroundColor: Colors.white, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)), elevation: 0),
+                child: const Text('Update Code', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 16)),
+              ),
             ),
           ],
         ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(c), child: const Text('Cancel')),
-          TextButton(
-            onPressed: () {
-              if (newC.text != confC.text) return _fail('PINs do not match');
-              Navigator.pop(c);
-              _update({'ride_pin': newC.text}, 'update_ride_pin');
-            },
-            child: const Text('Save'),
-          ),
-        ],
       ),
     );
   }
 
-  void _logoutConfirm(ColorScheme cs) {
-    showDialog(
+  void _showLogoutBottomSheet() {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+
+    showModalBottomSheet(
       context: context,
-      builder: (c) => AlertDialog(
-        title: const Text('Log out'),
-        content: const Text('You will need to sign in again to book rides.'),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(c), child: const Text('Cancel')),
-          TextButton(
-            onPressed: () async {
-              Navigator.pop(c);
-              await _prefs.remove('user_id');
-              await _prefs.remove('user_pin');
-              if (!mounted) return;
-              Navigator.of(context).pop(); // or navigate to onboarding
-            },
-            child: Text('Log out', style: TextStyle(color: AppColors.error)),
-          ),
-        ],
+      backgroundColor: Colors.transparent,
+      builder: (c) => Container(
+        decoration: BoxDecoration(color: isDark ? AppColors.darkColor : Colors.white, borderRadius: const BorderRadius.vertical(top: Radius.circular(28))),
+        padding: const EdgeInsets.fromLTRB(24, 16, 24, 40),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            _bottomSheetHeader('Sign Out', 'You will need your password to log back in.', Icons.logout_rounded, AppColors.textSecondary, isDark),
+            Row(
+              children: [
+                Expanded(
+                  child: TextButton(
+                    onPressed: () => Navigator.pop(c),
+                    style: TextButton.styleFrom(padding: const EdgeInsets.symmetric(vertical: 16), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16))),
+                    child: Text('Cancel', style: TextStyle(color: AppColors.textSecondary, fontWeight: FontWeight.w800, fontSize: 16)),
+                  ),
+                ),
+                const SizedBox(width: 16),
+                Expanded(
+                  child: ElevatedButton(
+                    onPressed: () async {
+                      Navigator.pop(c);
+                      await _prefs.clear();
+                      if (mounted) Navigator.of(context).pushNamedAndRemoveUntil(AppRoutes.login, (route) => false);
+                    },
+                    style: ElevatedButton.styleFrom(backgroundColor: AppColors.error, foregroundColor: Colors.white, elevation: 0, padding: const EdgeInsets.symmetric(vertical: 16), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16))),
+                    child: const Text('Sign Out', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 16)),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
       ),
     );
   }
 
-  // ── ERROR STATE ────────────────────────────────────────────────────────
-  Widget _errorState(ColorScheme cs) {
-    return Center(
-      child: Container(
-        padding: const EdgeInsets.all(16),
-        decoration: _sectionBox(cs),
-        child: Column(mainAxisSize: MainAxisSize.min, children: [
-          Text('Failed to load profile', style: _title.copyWith(fontSize: 16)),
-          const SizedBox(height: 8),
-          FilledButton(onPressed: _fetchUser, child: const Text('Retry')),
-        ]),
+  void _showDeleteAccountBottomSheet() {
+    final confC = TextEditingController();
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (c) => Container(
+        decoration: BoxDecoration(color: isDark ? AppColors.darkColor : Colors.white, borderRadius: const BorderRadius.vertical(top: Radius.circular(28))),
+        padding: EdgeInsets.fromLTRB(24, 16, 24, MediaQuery.of(context).viewInsets.bottom + 24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            _bottomSheetHeader('Delete Account', 'This action is permanent and cannot be undone. All your ride history, wallet balance, and profile data will be permanently wiped.', Icons.warning_amber_rounded, AppColors.error, isDark),
+            TextField(
+              controller: confC,
+              style: const TextStyle(fontWeight: FontWeight.w900, color: AppColors.error, letterSpacing: 2),
+              decoration: InputDecoration(
+                hintText: 'Type DELETE to confirm',
+                hintStyle: TextStyle(color: AppColors.error.withOpacity(0.5), letterSpacing: 0, fontWeight: FontWeight.w600),
+                filled: true,
+                fillColor: AppColors.error.withOpacity(0.05),
+                border: OutlineInputBorder(borderRadius: BorderRadius.circular(16), borderSide: BorderSide(color: AppColors.error.withOpacity(0.3))),
+                focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(16), borderSide: const BorderSide(color: AppColors.error, width: 2)),
+                contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 18),
+              ),
+            ),
+            const SizedBox(height: 24),
+            Row(
+              children: [
+                Expanded(
+                  child: TextButton(
+                    onPressed: () => Navigator.pop(c),
+                    style: TextButton.styleFrom(padding: const EdgeInsets.symmetric(vertical: 16), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16))),
+                    child: Text('Cancel', style: TextStyle(color: AppColors.textSecondary, fontWeight: FontWeight.w800, fontSize: 16)),
+                  ),
+                ),
+                const SizedBox(width: 16),
+                Expanded(
+                  child: ElevatedButton(
+                    onPressed: () {
+                      if (confC.text.trim() == 'DELETE') {
+                        Navigator.pop(c);
+                        _deleteAccount();
+                      } else {
+                        _fail('You must type DELETE to confirm.');
+                      }
+                    },
+                    style: ElevatedButton.styleFrom(backgroundColor: AppColors.error, foregroundColor: Colors.white, elevation: 0, padding: const EdgeInsets.symmetric(vertical: 16), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16))),
+                    child: const Text('Delete Forever', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 16)),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
       ),
     );
+  }
+
+  Widget _buildDialogTextField(TextEditingController ctrl, String hint, bool isDark, {bool isNumber = false}) {
+    return TextField(
+      controller: ctrl,
+      obscureText: true,
+      style: TextStyle(color: isDark ? Colors.white : AppColors.textPrimary, fontWeight: FontWeight.w700, letterSpacing: 2),
+      keyboardType: isNumber ? TextInputType.number : TextInputType.text,
+      inputFormatters: isNumber ? [FilteringTextInputFormatter.digitsOnly, LengthLimitingTextInputFormatter(4)] : null,
+      decoration: InputDecoration(
+        hintText: hint,
+        hintStyle: TextStyle(color: AppColors.textSecondary.withOpacity(0.5), letterSpacing: 0, fontWeight: FontWeight.w500),
+        filled: true,
+        fillColor: isDark ? Colors.white.withOpacity(0.05) : AppColors.mintBgLight.withOpacity(0.3),
+        border: OutlineInputBorder(borderRadius: BorderRadius.circular(16), borderSide: BorderSide.none),
+        contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 18),
+      ),
+    );
+  }
+}
+
+class SlideGradientTransform extends GradientTransform {
+  final double percent;
+  const SlideGradientTransform(this.percent);
+  @override
+  Matrix4? transform(Rect bounds, {TextDirection? textDirection}) {
+    return Matrix4.translationValues(bounds.width * (percent * 2 - 1), 0, 0);
   }
 }

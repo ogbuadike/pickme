@@ -41,49 +41,49 @@ class DefaultFirebaseOptions {
   }
 
   static const FirebaseOptions web = FirebaseOptions(
-    apiKey: 'AIzaSyAErpykXQQ_I1uQxSkXuX4Fwy5ZVr09Wkc',
-    appId: '1:836831611903:web:a2a238575ad7eb0f7af5ca',
-    messagingSenderId: '836831611903',
-    projectId: 'pick-me-46b4e',
-    authDomain: 'pick-me-46b4e.firebaseapp.com',
-    storageBucket: 'pick-me-46b4e.firebasestorage.app',
-    measurementId: 'G-7G42F7HWC5',
+    apiKey: 'AIzaSyAMnNh8v1TThZglP5x2EWnC-fdMq4m4sgQ',
+    appId: '1:1060404560463:web:f37621334cd4cd8c09a03a',
+    messagingSenderId: '1060404560463',
+    projectId: 'pick-me-fafe2',
+    authDomain: 'pick-me-fafe2.firebaseapp.com',
+    storageBucket: 'pick-me-fafe2.firebasestorage.app',
+    measurementId: 'G-YC46SRR0B4',
   );
 
   static const FirebaseOptions android = FirebaseOptions(
-    apiKey: 'AIzaSyA5crvDMblFtfSBWuJ2A63dpuOw4GC1ZcM',
-    appId: '1:836831611903:android:7f342987af72bcfd7af5ca',
-    messagingSenderId: '836831611903',
-    projectId: 'pick-me-46b4e',
-    storageBucket: 'pick-me-46b4e.firebasestorage.app',
+    apiKey: 'AIzaSyD95bi4gnTKCsFNl76fJcSVrWFQ-3tLOwc',
+    appId: '1:1060404560463:android:cf076d5303f0fa8b09a03a',
+    messagingSenderId: '1060404560463',
+    projectId: 'pick-me-fafe2',
+    storageBucket: 'pick-me-fafe2.firebasestorage.app',
   );
 
   static const FirebaseOptions ios = FirebaseOptions(
-    apiKey: 'AIzaSyBnuyJziSXqcG07oojHjlUQ_XZeRHDvYLc',
-    appId: '1:836831611903:ios:dac61bf8b5e6b63f7af5ca',
-    messagingSenderId: '836831611903',
-    projectId: 'pick-me-46b4e',
-    storageBucket: 'pick-me-46b4e.firebasestorage.app',
-    iosBundleId: 'com.pickme.pickme',
+    apiKey: 'AIzaSyA7bmApuiES601EgZ4LWSi2nXfJkLtyN0k',
+    appId: '1:1060404560463:ios:52e521914774ddf309a03a',
+    messagingSenderId: '1060404560463',
+    projectId: 'pick-me-fafe2',
+    storageBucket: 'pick-me-fafe2.firebasestorage.app',
+    iosBundleId: 'com.pickme.pickmeride',
   );
 
   static const FirebaseOptions macos = FirebaseOptions(
-    apiKey: 'AIzaSyBnuyJziSXqcG07oojHjlUQ_XZeRHDvYLc',
-    appId: '1:836831611903:ios:dac61bf8b5e6b63f7af5ca',
-    messagingSenderId: '836831611903',
-    projectId: 'pick-me-46b4e',
-    storageBucket: 'pick-me-46b4e.firebasestorage.app',
+    apiKey: 'AIzaSyA7bmApuiES601EgZ4LWSi2nXfJkLtyN0k',
+    appId: '1:1060404560463:ios:cebe3308c38f687609a03a',
+    messagingSenderId: '1060404560463',
+    projectId: 'pick-me-fafe2',
+    storageBucket: 'pick-me-fafe2.firebasestorage.app',
     iosBundleId: 'com.pickme.pickme',
   );
 
   static const FirebaseOptions windows = FirebaseOptions(
-    apiKey: 'AIzaSyAErpykXQQ_I1uQxSkXuX4Fwy5ZVr09Wkc',
-    appId: '1:836831611903:web:fdabdaf7ea6ae5397af5ca',
-    messagingSenderId: '836831611903',
-    projectId: 'pick-me-46b4e',
-    authDomain: 'pick-me-46b4e.firebaseapp.com',
-    storageBucket: 'pick-me-46b4e.firebasestorage.app',
-    measurementId: 'G-S6JTKDDG0N',
+    apiKey: 'AIzaSyAMnNh8v1TThZglP5x2EWnC-fdMq4m4sgQ',
+    appId: '1:1060404560463:web:203cabd443ee8eb709a03a',
+    messagingSenderId: '1060404560463',
+    projectId: 'pick-me-fafe2',
+    authDomain: 'pick-me-fafe2.firebaseapp.com',
+    storageBucket: 'pick-me-fafe2.firebasestorage.app',
+    measurementId: 'G-WWVZCEZMS0',
   );
 
 }

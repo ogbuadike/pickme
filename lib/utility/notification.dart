@@ -32,14 +32,92 @@ String numberFormat(dynamic number) {
 
 /// ----------------------------------------------------------------------------
 /// Full-screen image dialog with a delayed close button (default 5s)
-class _DelayedCloseButtonDialog extends StatefulWidget {
+///
+///
+///
+
+/// A premium, full-screen dialog with an animated, delayed close button.
+///
+/// **Usage Examples:**
+///
+/// **1. Text-Only Alert (e.g., Important Announcement)**
+/// ```dart
+/// showDialog(
+///   context: context,
+///   barrierDismissible: false,
+///   builder: (context) => const DelayedCloseButtonDialog(
+///     title: 'System Update',
+///     message: 'We are performing routine maintenance. Some features may be offline.',
+///     textColor: Colors.white,
+///     countdown: Duration(seconds: 3), // Faster 3-second close
+///   ),
+/// );
+/// ```
+///
+/// **2. Promotional Image / Asset (e.g., Holiday Promo)**
+/// ```dart
+/// showDialog(
+///   context: context,
+///   barrierDismissible: false,
+///   useSafeArea: false, // Allows image to fill the notch/status bar area
+///   builder: (context) => const DelayedCloseButtonDialog(
+///     title: 'Flash Sale!',
+///     message: 'Get 20% off your next ride today.',
+///     textColor: Colors.white,
+///     image: AssetImage('images/promo_banner.png'), // Using local asset
+///     countdown: Duration(seconds: 5),
+///   ),
+/// );
+/// ```
+///
+/// **3. Network Image (e.g., Dynamic Ad from backend)**
+/// ```dart
+/// showDialog(
+///   context: context,
+///   barrierDismissible: false,
+///   useSafeArea: false,
+///   builder: (context) => const DelayedCloseButtonDialog(
+///     textColor: Colors.white,
+///     image: NetworkImage('[https://yourdomain.com/ad_image.jpg](https://yourdomain.com/ad_image.jpg)'),
+///     // Omit title and message if the image already contains the text
+///   ),
+/// );
+/// ```
+
+// 1. The Global Helper Function
+void showInAppNotification(
+    BuildContext context, {
+      required String title,
+      required String message,
+      String? imageUrl,
+    }) {
+  showDialog(
+    context: context,
+    barrierDismissible: false, // Prevents closing by tapping outside
+    useSafeArea: false, // Allows the dialog to go edge-to-edge if there's an image
+    builder: (BuildContext context) {
+      return DelayedCloseButtonDialog(
+        title: title,
+        message: message,
+        // Since the background overlay is black, we force white text for contrast
+        textColor: Colors.white,
+        image: imageUrl != null ? NetworkImage(imageUrl) : null,
+        countdown: const Duration(seconds: 5),
+      );
+    },
+  );
+}
+
+// 2. The Main Stateful Widget
+class DelayedCloseButtonDialog extends StatefulWidget {
   final ImageProvider? image;
   final String? title;
   final String? message;
   final Color textColor;
   final Duration countdown;
 
-  const _DelayedCloseButtonDialog({
+  const DelayedCloseButtonDialog({
+    super.key,
     this.image,
     this.title,
     this.message,
@@ -48,61 +126,66 @@ class _DelayedCloseButtonDialog extends StatefulWidget {
   });
 
   @override
-  State<_DelayedCloseButtonDialog> createState() => __DelayedCloseButtonDialogState();
+  State<DelayedCloseButtonDialog> createState() => _DelayedCloseButtonDialogState();
 }
 
-class __DelayedCloseButtonDialogState extends State<_DelayedCloseButtonDialog> {
-  late Timer _timer;
-  double _progress = 1.0;
+class _DelayedCloseButtonDialogState extends State<DelayedCloseButtonDialog>
+    with SingleTickerProviderStateMixin {
+  late AnimationController _controller;
   bool _isButtonEnabled = false;
 
   @override
   void initState() {
     super.initState();
-    final totalMs = widget.countdown.inMilliseconds;
-    const tick = 50;
-    final steps = (totalMs / tick).clamp(1, 100000).floor();
-    _timer = Timer.periodic(const Duration(milliseconds: tick), (t) {
-      setState(() {
-        _progress = (_progress - (1 / steps)).clamp(0.0, 1.0);
-        if (_progress <= 0) {
+    // Using AnimationController for native 60/120fps performance instead of Timer
+    _controller = AnimationController(
+      vsync: this,
+      duration: widget.countdown,
+    )..reverse(from: 1.0).then((_) {
+      if (mounted) {
+        setState(() {
           _isButtonEnabled = true;
-          t.cancel();
-        }
-      });
+        });
+      }
     });
   }
 
   @override
   void dispose() {
-    _timer.cancel();
+    _controller.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
     final Size screen = MediaQuery.of(context).size;
-    return WillPopScope(
-      onWillPop: () async => false,
+
+    return PopScope(
+      canPop: false, // Modern replacement for WillPopScope
       child: Dialog(
         backgroundColor: Colors.transparent,
         insetPadding: EdgeInsets.zero,
         child: Stack(
           fit: StackFit.expand,
           children: [
+            // Background Layer
             if (widget.image != null)
               Container(
                 color: Colors.black,
                 alignment: Alignment.center,
                 child: FittedBox(
                   fit: BoxFit.contain,
-                  child: Image(image: widget.image!, width: screen.width, height: screen.height),
+                  child: Image(
+                    image: widget.image!,
+                    width: screen.width,
+                    height: screen.height,
+                  ),
                 ),
               )
             else
               Container(color: Colors.black.withOpacity(0.85)),
 
-            // Overlay text container
+            // Text Content Overlay
             Positioned.fill(
               child: Center(
                 child: ConstrainedBox(
@@ -144,9 +227,9 @@ class __DelayedCloseButtonDialogState extends State<_DelayedCloseButtonDialog> {
               ),
             ),
 
-            // Progress + close
+            // Top Right Controls (Progress + Close Button)
             Positioned(
-              top: 20,
+              top: 40, // Increased slightly to clear SafeArea/Notch
               right: 20,
               child: Stack(
                 alignment: Alignment.center,
@@ -154,20 +237,30 @@ class __DelayedCloseButtonDialogState extends State<_DelayedCloseButtonDialog> {
                   SizedBox(
                     width: 40,
                     height: 40,
-                    child: CircularProgressIndicator(
-                      value: _progress,
-                      strokeWidth: 3.5,
-                      valueColor: const AlwaysStoppedAnimation<Color>(Colors.white),
-                      backgroundColor: Colors.white24,
+                    // AnimatedBuilder isolates rebuilds strictly to the ring
+                    child: AnimatedBuilder(
+                      animation: _controller,
+                      builder: (context, child) {
+                        return CircularProgressIndicator(
+                          value: _controller.value,
+                          strokeWidth: 3.5,
+                          valueColor: const AlwaysStoppedAnimation<Color>(Colors.white),
+                          backgroundColor: Colors.white24,
+                        );
+                      },
                     ),
                   ),
                   if (_isButtonEnabled)
                     Container(
                       width: 40,
                       height: 40,
-                      decoration: const BoxDecoration(shape: BoxShape.circle, color: Colors.red),
+                      decoration: const BoxDecoration(
+                        shape: BoxShape.circle,
+                        color: Colors.red,
+                      ),
                       child: IconButton(
-                        icon: const Icon(Icons.close, color: Colors.white),
+                        icon: const Icon(Icons.close, color: Colors.white, size: 20),
+                        padding: EdgeInsets.zero, // Centers icon perfectly
                         onPressed: () => Navigator.of(context).pop(),
                         tooltip: 'Close',
                       ),
@@ -525,8 +618,8 @@ void showAdvancedNotification({
   showDialog(
     context: context,
     barrierDismissible: false,
-    builder: (_) => WillPopScope(
-      onWillPop: () async => false,
+    builder: (_) => PopScope(
+      canPop: false,
       child: AlertDialog(
         backgroundColor: bg,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
@@ -642,8 +735,8 @@ void showFullScreenOverlayNotification({
   showDialog(
     context: context,
     barrierDismissible: false,
-    builder: (_) => WillPopScope(
-      onWillPop: () async => false,
+    builder: (_) => PopScope(
+      canPop: false,
       child: Dialog(
         backgroundColor: bg,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
@@ -686,7 +779,7 @@ void showFullScreenImageNotification({
   showDialog(
     context: context,
     barrierDismissible: false,
-    builder: (_) => _DelayedCloseButtonDialog(
+    builder: (_) => DelayedCloseButtonDialog( // <-- Fixed the underscore here!
       image: image,
       title: title,
       message: message,

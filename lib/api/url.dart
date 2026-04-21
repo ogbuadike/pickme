@@ -14,6 +14,8 @@ class ApiConstants {
   static const String updatePasswordEndpoint = 'user_info.php';
   static const String updateTransactionCodeEndpoint = 'user_info.php';
 
+  static const String updateSettingsEndpoint = 'user_settings.php';
+
 
   static const String rideOffersEndpoint = 'ride_offers.php';
   static const String driversNearbyEndpoint = 'drivers_nearby.php';

@@ -1503,11 +1503,7 @@ class _HomePageState extends State<HomePage>
         distanceFilter: distanceFilter,
         intervalDuration: Duration(milliseconds: gp.intervalMs),
         forceLocationManager: false,
-        foregroundNotificationConfig: const ForegroundNotificationConfig(
-          notificationTitle: 'Pick Me',
-          notificationText: 'Tracking location…',
-          enableWakeLock: false,
-        ),
+        // Removed foregroundNotificationConfig to stop the "Tracking location..." notification
       );
     } else if (tp == TargetPlatform.iOS) {
       return AppleSettings(
@@ -1588,13 +1584,16 @@ class _HomePageState extends State<HomePage>
 
     _logLocationDiagnostic('Location services OFF');
     await _showLocationPromptModal(
-      title: 'Turn On Location',
-      message:
-      'To find drivers and show accurate pickups, please turn on your device location.',
+      title: 'Enable Location',
+      message: 'To find the best drivers and ensure accurate pickups, Pick Me needs your device location.',
       isServiceIssue: true,
     );
-    _toast('Location Services Off', 'Please turn on GPS / location services.');
-    return false;
+
+    final checkAgain = await Geolocator.isLocationServiceEnabled();
+    if (!checkAgain) {
+      _toast('Location Services Off', 'Please turn on GPS / location services.');
+    }
+    return checkAgain;
   }
 
   Future<LocationPermission> _ensurePermission({required bool userTriggered}) async {
@@ -1609,13 +1608,241 @@ class _HomePageState extends State<HomePage>
       _logLocationDiagnostic('Permission denied: $perm');
       await _showLocationPromptModal(
         title: 'Allow Location Access',
-        message:
-        'We use your location to match you with nearby drivers and calculate accurate ETAs. Please allow location access in your device settings.',
+        message: 'We use your location to match you with nearby drivers and calculate accurate ETAs. Please allow location access in your device settings.',
         isServiceIssue: false,
       );
-      _toast('Location Required', 'Please grant location access in Settings.');
+
+      // Re-check after returning from modal/settings
+      perm = await Geolocator.checkPermission();
+      if (perm == LocationPermission.denied || perm == LocationPermission.deniedForever) {
+        _toast('Location Required', 'Please grant location access in Settings.');
+      }
     }
     return perm;
+  }
+
+  Future<void> _showLocationPromptModal({
+    required String title,
+    required String message,
+    required bool isServiceIssue,
+  }) async {
+    if (!mounted) return;
+
+    final uiScale = UIScale.of(context);
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      barrierColor: Colors.black.withOpacity(isDark ? 0.75 : 0.55),
+      builder: (BuildContext ctx) {
+        return SafeArea(
+          child: Container(
+            margin: EdgeInsets.all(uiScale.inset(16)),
+            decoration: BoxDecoration(
+              color: isDark ? AppColors.darkColor.withOpacity(0.85) : Colors.white.withOpacity(0.90),
+              borderRadius: BorderRadius.circular(uiScale.radius(28)),
+              border: Border.all(
+                color: isDark ? Colors.white.withOpacity(0.1) : AppColors.primary.withOpacity(0.2),
+                width: 1.5,
+              ),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withOpacity(0.25),
+                  blurRadius: 40,
+                  offset: const Offset(0, 15),
+                ),
+              ],
+            ),
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(uiScale.radius(28)),
+              child: BackdropFilter(
+                filter: ui.ImageFilter.blur(sigmaX: 20, sigmaY: 20), // <--- FIXED: Added ui. prefix back here
+                child: Padding(
+                  padding: EdgeInsets.all(uiScale.inset(24)),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      // ── Drag Handle ──
+                      Container(
+                        width: uiScale.inset(48),
+                        height: uiScale.inset(5),
+                        decoration: BoxDecoration(
+                          color: isDark ? Colors.white.withOpacity(0.2) : Colors.black.withOpacity(0.1),
+                          borderRadius: BorderRadius.circular(uiScale.radius(10)),
+                        ),
+                      ),
+                      SizedBox(height: uiScale.gap(32)),
+
+                      // ── Premium Illustrated Icon ──
+                      Stack(
+                        alignment: Alignment.center,
+                        children: [
+                          // Outer glow ring
+                          Container(
+                            width: uiScale.inset(90),
+                            height: uiScale.inset(90),
+                            decoration: BoxDecoration(
+                              shape: BoxShape.circle,
+                              color: AppColors.primary.withOpacity(0.12),
+                            ),
+                          ),
+                          // Inner vibrant circle
+                          Container(
+                            width: uiScale.inset(65),
+                            height: uiScale.inset(65),
+                            decoration: BoxDecoration(
+                              shape: BoxShape.circle,
+                              gradient: const LinearGradient(
+                                colors: [AppColors.primary, AppColors.secondary],
+                                begin: Alignment.topLeft,
+                                end: Alignment.bottomRight,
+                              ),
+                              boxShadow: [
+                                BoxShadow(
+                                  color: AppColors.primary.withOpacity(0.4),
+                                  blurRadius: 18,
+                                  offset: const Offset(0, 8),
+                                ),
+                              ],
+                            ),
+                            child: Icon(
+                              isServiceIssue ? Icons.gps_off_rounded : Icons.my_location_rounded,
+                              color: Colors.white,
+                              size: uiScale.icon(32),
+                            ),
+                          ),
+                        ],
+                      ),
+                      SizedBox(height: uiScale.gap(24)),
+
+                      // ── Main Text ──
+                      Text(
+                        title,
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          fontSize: uiScale.font(24),
+                          fontWeight: FontWeight.w900,
+                          color: isDark ? Colors.white : AppColors.textPrimary,
+                          letterSpacing: -0.5,
+                        ),
+                      ),
+                      SizedBox(height: uiScale.gap(12)),
+                      Text(
+                        message,
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          fontSize: uiScale.font(14),
+                          fontWeight: FontWeight.w600,
+                          color: AppColors.textSecondary,
+                          height: 1.4,
+                        ),
+                      ),
+
+                      SizedBox(height: uiScale.gap(28)),
+
+                      // ── Smart Info Bullets ──
+                      Container(
+                        padding: EdgeInsets.all(uiScale.inset(16)),
+                        decoration: BoxDecoration(
+                          color: isDark ? Colors.white.withOpacity(0.04) : AppColors.mintBgLight.withOpacity(0.4),
+                          borderRadius: BorderRadius.circular(uiScale.radius(16)),
+                          border: Border.all(color: AppColors.primary.withOpacity(0.05)),
+                        ),
+                        child: Column(
+                          children: [
+                            _buildInfoBullet(uiScale, isDark, Icons.flash_on_rounded, 'Find nearby drivers instantly'),
+                            SizedBox(height: uiScale.gap(12)),
+                            _buildInfoBullet(uiScale, isDark, Icons.timer_rounded, 'Get highly accurate ETAs'),
+                            SizedBox(height: uiScale.gap(12)),
+                            _buildInfoBullet(uiScale, isDark, Icons.shield_rounded, 'Share live trips for safety'),
+                          ],
+                        ),
+                      ),
+
+                      SizedBox(height: uiScale.gap(36)),
+
+                      // ── Action Buttons ──
+                      Row(
+                        children: [
+                          Expanded(
+                            child: TextButton(
+                              onPressed: () => Navigator.of(ctx).pop(),
+                              style: TextButton.styleFrom(
+                                padding: EdgeInsets.symmetric(vertical: uiScale.inset(16)),
+                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(uiScale.radius(16))),
+                              ),
+                              child: Text(
+                                'Not Now',
+                                style: TextStyle(
+                                  fontSize: uiScale.font(15),
+                                  fontWeight: FontWeight.w800,
+                                  color: AppColors.textSecondary,
+                                ),
+                              ),
+                            ),
+                          ),
+                          SizedBox(width: uiScale.gap(12)),
+                          Expanded(
+                            flex: 2,
+                            child: ElevatedButton(
+                              onPressed: () async {
+                                Navigator.of(ctx).pop();
+                                if (isServiceIssue) {
+                                  await Geolocator.openLocationSettings();
+                                } else {
+                                  await Geolocator.openAppSettings();
+                                }
+                              },
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: AppColors.primary,
+                                foregroundColor: Colors.white,
+                                elevation: 0,
+                                padding: EdgeInsets.symmetric(vertical: uiScale.inset(16)),
+                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(uiScale.radius(16))),
+                              ),
+                              child: Text(
+                                'Enable Location',
+                                style: TextStyle(
+                                  fontSize: uiScale.font(15),
+                                  fontWeight: FontWeight.w900,
+                                  letterSpacing: 0.5,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  // Helper Widget for the Smart Info Bullets
+  Widget _buildInfoBullet(UIScale uiScale, bool isDark, IconData icon, String text) {
+    return Row(
+      children: [
+        Icon(icon, size: uiScale.icon(18), color: AppColors.primary),
+        SizedBox(width: uiScale.gap(12)),
+        Expanded(
+          child: Text(
+            text,
+            style: TextStyle(
+              fontSize: uiScale.font(13),
+              fontWeight: FontWeight.w700,
+              color: isDark ? Colors.white.withOpacity(0.9) : AppColors.textPrimary.withOpacity(0.8),
+            ),
+          ),
+        ),
+      ],
+    );
   }
 
   Future<Position?> _acquirePositionRobust() async {
@@ -1831,162 +2058,6 @@ class _HomePageState extends State<HomePage>
     await Future.delayed(delay);
     if (!mounted) return;
     await _initLocation(userTriggered: false);
-  }
-
-  Future<void> _showLocationPromptModal({
-    required String title,
-    required String message,
-    required bool isServiceIssue,
-  }) async {
-    if (!mounted) return;
-
-    final theme = Theme.of(context);
-    final cs = theme.colorScheme;
-    final isDark = theme.brightness == Brightness.dark;
-
-    await showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      barrierColor: Colors.black.withOpacity(isDark ? 0.60 : 0.40),
-      builder: (ctx) {
-        final media = MediaQuery.of(ctx);
-        final bottomInset = media.viewInsets.bottom;
-        final surface = cs.surface;
-        final onSurface = theme.textTheme.bodyMedium?.color ?? cs.onSurface;
-        final divider = theme.dividerColor.withOpacity(isDark ? 0.28 : 0.18);
-
-        return SafeArea(
-          child: Padding(
-            padding: EdgeInsets.fromLTRB(12, 0, 12, 12 + bottomInset),
-            child: Center(
-              child: ConstrainedBox(
-                constraints: const BoxConstraints(maxWidth: 560),
-                child: DecoratedBox(
-                  decoration: BoxDecoration(
-                    borderRadius: BorderRadius.circular(22),
-                    color: surface,
-                    border: Border.all(color: divider, width: 0.8),
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.black.withOpacity(isDark ? 0.40 : 0.18),
-                        blurRadius: 26,
-                        offset: const Offset(0, 16),
-                      ),
-                    ],
-                  ),
-                  child: Padding(
-                    padding: const EdgeInsets.fromLTRB(18, 12, 18, 18),
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Container(
-                          width: 52,
-                          height: 4,
-                          margin: const EdgeInsets.only(bottom: 14),
-                          decoration: BoxDecoration(
-                            color: divider,
-                            borderRadius: BorderRadius.circular(999),
-                          ),
-                        ),
-                        Container(
-                          width: 60,
-                          height: 60,
-                          decoration: BoxDecoration(
-                            shape: BoxShape.circle,
-                            gradient: LinearGradient(
-                              begin: Alignment.topLeft,
-                              end: Alignment.bottomRight,
-                              colors: [
-                                cs.primary.withOpacity(0.95),
-                                cs.primary.withOpacity(0.65),
-                              ],
-                            ),
-                            boxShadow: [
-                              BoxShadow(
-                                color: cs.primary.withOpacity(0.22),
-                                blurRadius: 16,
-                                offset: const Offset(0, 8),
-                              ),
-                            ],
-                          ),
-                          child: Icon(
-                            isServiceIssue
-                                ? Icons.gps_off_rounded
-                                : Icons.my_location_rounded,
-                            color: cs.onPrimary,
-                            size: 28,
-                          ),
-                        ),
-                        const SizedBox(height: 12),
-                        Text(
-                          title,
-                          textAlign: TextAlign.center,
-                          style: theme.textTheme.titleLarge?.copyWith(
-                            fontWeight: FontWeight.w800,
-                            letterSpacing: -0.2,
-                          ),
-                        ),
-                        const SizedBox(height: 8),
-                        Text(
-                          message,
-                          textAlign: TextAlign.center,
-                          style: theme.textTheme.bodyMedium?.copyWith(
-                            color: onSurface.withOpacity(0.88),
-                            height: 1.36,
-                          ),
-                        ),
-                        const SizedBox(height: 18),
-                        Row(
-                          children: [
-                            Expanded(
-                              child: TextButton(
-                                onPressed: () => Navigator.of(ctx).pop(),
-                                style: TextButton.styleFrom(
-                                  foregroundColor: onSurface.withOpacity(0.92),
-                                  padding: const EdgeInsets.symmetric(vertical: 14),
-                                  shape: RoundedRectangleBorder(
-                                    borderRadius: BorderRadius.circular(14),
-                                  ),
-                                ),
-                                child: const Text('Not now'),
-                              ),
-                            ),
-                            const SizedBox(width: 10),
-                            Expanded(
-                              child: ElevatedButton(
-                                onPressed: () async {
-                                  Navigator.of(ctx).pop();
-                                  if (isServiceIssue) {
-                                    await Geolocator.openLocationSettings();
-                                  } else {
-                                    await Geolocator.openAppSettings();
-                                  }
-                                },
-                                style: ElevatedButton.styleFrom(
-                                  backgroundColor: cs.primary,
-                                  foregroundColor: cs.onPrimary,
-                                  elevation: 0,
-                                  padding: const EdgeInsets.symmetric(vertical: 14),
-                                  shape: RoundedRectangleBorder(
-                                    borderRadius: BorderRadius.circular(14),
-                                  ),
-                                ),
-                                child: const Text('Enable location'),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              ),
-            ),
-          ),
-        );
-      },
-    );
   }
 
   void _onGpsUpdate(Position pos) {

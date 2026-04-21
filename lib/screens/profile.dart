@@ -1,7 +1,7 @@
 // lib/screens/profile.dart
 import 'dart:convert';
 import 'dart:io';
-import 'dart:ui';
+import 'dart:ui'; // <--- Removed "as ui"
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -353,7 +353,7 @@ class _ProfileScreenState extends State<ProfileScreen> with SingleTickerProvider
     return ClipRRect(
       borderRadius: BorderRadius.circular(ui.radius(20)),
       child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: 16, sigmaY: 16),
+        filter: ImageFilter.blur(sigmaX: 16, sigmaY: 16), // <--- Fixed: Removed "ui." prefix
         child: Container(
           decoration: BoxDecoration(
             color: isDark ? AppColors.darkColor.withOpacity(0.7) : Colors.white.withOpacity(0.85),
@@ -522,6 +522,7 @@ class _ProfileScreenState extends State<ProfileScreen> with SingleTickerProvider
             onPressed: () => _showEditBottomSheet(
               title: 'Emergency Contact',
               dbKey: 'emergency_contact',
+              dbAction: 'update_emergency_contact',
               initialValue: contact,
               hint: 'e.g. John Doe - 08012345678',
               icon: Icons.contact_phone_rounded,
@@ -746,7 +747,7 @@ class _ProfileScreenState extends State<ProfileScreen> with SingleTickerProvider
     );
   }
 
-  void _showEditBottomSheet({required String title, required String dbKey, required String initialValue, required String hint, required IconData icon}) {
+  void _showEditBottomSheet({required String title, required String dbKey, required String dbAction, required String initialValue, required String hint, required IconData icon}) {
     final ctrl = TextEditingController(text: initialValue);
     final isDark = Theme.of(context).brightness == Brightness.dark;
 
@@ -782,7 +783,7 @@ class _ProfileScreenState extends State<ProfileScreen> with SingleTickerProvider
                 onPressed: () {
                   Navigator.pop(c);
                   if (ctrl.text.trim() != initialValue) {
-                    _update({dbKey: ctrl.text.trim()}, 'update_profile');
+                    _update({dbKey: ctrl.text.trim()}, dbAction);
                   }
                 },
                 style: ElevatedButton.styleFrom(backgroundColor: AppColors.primary, foregroundColor: Colors.white, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)), elevation: 0),

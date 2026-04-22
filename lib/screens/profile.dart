@@ -1,7 +1,7 @@
 // lib/screens/profile.dart
 import 'dart:convert';
 import 'dart:io';
-import 'dart:ui'; // <--- Removed "as ui"
+import 'dart:ui';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -10,6 +10,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:http/http.dart' as http;
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
+// Hiding TextDirection from intl to prevent the dart:ui conflict in the Skeleton Loader!
 import 'package:intl/intl.dart' hide TextDirection;
 
 import '../api/api_client.dart';
@@ -19,6 +20,7 @@ import '../themes/app_theme.dart';
 import '../ui/ui_scale.dart';
 import '../utility/notification.dart';
 import '../widgets/inner_background.dart';
+import '../widgets/bottom_navigation_bar.dart'; // Implemented Bottom Nav
 
 class ProfileScreen extends StatefulWidget {
   const ProfileScreen({Key? key}) : super(key: key);
@@ -41,7 +43,9 @@ class _ProfileScreenState extends State<ProfileScreen> with SingleTickerProvider
   String _appVersion = '1.0.0';
   String _privacyPolicyUrl = 'https://phantomphones.store/pick_me/privacy';
 
-  // Make this nullable to prevent LateInitializationError crashes
+  // Bottom Nav Index for Profile
+  int _currentIndex = 4;
+
   AnimationController? _shimmerController;
 
   @override
@@ -241,10 +245,12 @@ class _ProfileScreenState extends State<ProfileScreen> with SingleTickerProvider
   @override
   Widget build(BuildContext context) {
     final ui = UIScale.of(context);
-    final cs = Theme.of(context).colorScheme;
-    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final theme = Theme.of(context);
+    final cs = theme.colorScheme;
+    final isDark = theme.brightness == Brightness.dark;
 
     return Scaffold(
+      backgroundColor: isDark ? Colors.black : AppColors.offWhite,
       extendBodyBehindAppBar: true,
       appBar: AppBar(
         backgroundColor: Colors.transparent,
@@ -262,6 +268,18 @@ class _ProfileScreenState extends State<ProfileScreen> with SingleTickerProvider
           icon: Icon(Icons.arrow_back_ios_new_rounded, size: ui.icon(20), color: isDark ? cs.onSurface : AppColors.textPrimary),
           onPressed: () => Navigator.of(context).pop(),
         ),
+        // Added Settings Icon
+        actions: [
+          IconButton(
+            icon: Icon(Icons.settings_rounded, size: ui.icon(22), color: isDark ? cs.onSurface : AppColors.textPrimary),
+            tooltip: 'Settings',
+            onPressed: () {
+              HapticFeedback.selectionClick();
+              Navigator.pushNamed(context, AppRoutes.settings);
+            },
+          ),
+          SizedBox(width: ui.inset(8)),
+        ],
       ),
       body: Stack(
         children: [
@@ -280,8 +298,11 @@ class _ProfileScreenState extends State<ProfileScreen> with SingleTickerProvider
                 child: Container(
                   padding: EdgeInsets.all(ui.inset(20)),
                   decoration: BoxDecoration(
-                    color: isDark ? cs.surface : Colors.white,
-                    borderRadius: BorderRadius.circular(ui.radius(16)),
+                      color: isDark ? cs.surface : Colors.white,
+                      borderRadius: BorderRadius.circular(ui.radius(16)),
+                      boxShadow: [
+                        BoxShadow(color: Colors.black.withOpacity(0.2), blurRadius: 20, offset: const Offset(0, 10)),
+                      ]
                   ),
                   child: CircularProgressIndicator(color: isDark ? cs.primary : AppColors.primary),
                 ),
@@ -289,8 +310,40 @@ class _ProfileScreenState extends State<ProfileScreen> with SingleTickerProvider
             ),
         ],
       ),
+
+      // Added CustomBottomNavBar
+      bottomNavigationBar: CustomBottomNavBar(
+        currentIndex: _currentIndex,
+        onTap: (i) {
+          HapticFeedback.selectionClick();
+          if (i == _currentIndex) return;
+
+          setState(() => _currentIndex = i);
+
+          switch (i) {
+            case 0:
+              Navigator.pushNamedAndRemoveUntil(context, AppRoutes.home, (route) => false);
+              break;
+            case 1:
+              Navigator.pushReplacementNamed(context, AppRoutes.rideHistory);
+              break;
+            case 2:
+              Navigator.pushNamedAndRemoveUntil(context, AppRoutes.home, (route) => false);
+              break;
+            case 3:
+            // Navigator.pushReplacementNamed(context, AppRoutes.dispatch);
+              break;
+            case 4:
+            // Already here
+              break;
+          }
+        },
+      ),
+
     );
   }
+
+
 
   Widget _buildContent(UIScale ui, ColorScheme cs, bool isDark) {
     return SingleChildScrollView(
@@ -599,7 +652,7 @@ class _ProfileScreenState extends State<ProfileScreen> with SingleTickerProvider
         Container(
           width: double.infinity,
           decoration: BoxDecoration(
-            color: cs.error.withOpacity(0.05),
+            color: isDark ? cs.surfaceVariant.withOpacity(0.4) : cs.error.withOpacity(0.05),
             borderRadius: BorderRadius.circular(ui.radius(20)),
             border: Border.all(color: cs.error.withOpacity(0.3)),
           ),
@@ -735,7 +788,7 @@ class _ProfileScreenState extends State<ProfileScreen> with SingleTickerProvider
   Widget _bottomSheetHeader(String title, String subtitle, IconData icon, Color color, bool isDark, ColorScheme cs) {
     return Column(
       children: [
-        Container(width: 40, height: 4, decoration: BoxDecoration(color: Colors.grey.withOpacity(0.3), borderRadius: BorderRadius.circular(2))),
+        Container(width: 40, height: 4, decoration: BoxDecoration(color: isDark ? cs.onSurfaceVariant.withOpacity(0.5) : Colors.grey.withOpacity(0.3), borderRadius: BorderRadius.circular(2))),
         const SizedBox(height: 24),
         Container(
           padding: const EdgeInsets.all(16),

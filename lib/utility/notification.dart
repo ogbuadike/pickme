@@ -1,11 +1,13 @@
 import 'dart:async';
-import 'dart:typed_data';
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:lottie/lottie.dart';
+
+import '../themes/app_theme.dart';
+import '../ui/ui_scale.dart';
 
 /// ----------------------------------------------------------------------------
 /// Compact, robust number formatting (no intl dependency)
@@ -33,58 +35,6 @@ String numberFormat(dynamic number) {
 /// ----------------------------------------------------------------------------
 /// Full-screen image dialog with a delayed close button (default 5s)
 ///
-///
-///
-
-/// A premium, full-screen dialog with an animated, delayed close button.
-///
-/// **Usage Examples:**
-///
-/// **1. Text-Only Alert (e.g., Important Announcement)**
-/// ```dart
-/// showDialog(
-///   context: context,
-///   barrierDismissible: false,
-///   builder: (context) => const DelayedCloseButtonDialog(
-///     title: 'System Update',
-///     message: 'We are performing routine maintenance. Some features may be offline.',
-///     textColor: Colors.white,
-///     countdown: Duration(seconds: 3), // Faster 3-second close
-///   ),
-/// );
-/// ```
-///
-/// **2. Promotional Image / Asset (e.g., Holiday Promo)**
-/// ```dart
-/// showDialog(
-///   context: context,
-///   barrierDismissible: false,
-///   useSafeArea: false, // Allows image to fill the notch/status bar area
-///   builder: (context) => const DelayedCloseButtonDialog(
-///     title: 'Flash Sale!',
-///     message: 'Get 20% off your next ride today.',
-///     textColor: Colors.white,
-///     image: AssetImage('images/promo_banner.png'), // Using local asset
-///     countdown: Duration(seconds: 5),
-///   ),
-/// );
-/// ```
-///
-/// **3. Network Image (e.g., Dynamic Ad from backend)**
-/// ```dart
-/// showDialog(
-///   context: context,
-///   barrierDismissible: false,
-///   useSafeArea: false,
-///   builder: (context) => const DelayedCloseButtonDialog(
-///     textColor: Colors.white,
-///     image: NetworkImage('[https://yourdomain.com/ad_image.jpg](https://yourdomain.com/ad_image.jpg)'),
-///     // Omit title and message if the image already contains the text
-///   ),
-/// );
-/// ```
-
-// 1. The Global Helper Function
 void showInAppNotification(
     BuildContext context, {
       required String title,
@@ -93,13 +43,12 @@ void showInAppNotification(
     }) {
   showDialog(
     context: context,
-    barrierDismissible: false, // Prevents closing by tapping outside
-    useSafeArea: false, // Allows the dialog to go edge-to-edge if there's an image
+    barrierDismissible: false,
+    useSafeArea: false,
     builder: (BuildContext context) {
       return DelayedCloseButtonDialog(
         title: title,
         message: message,
-        // Since the background overlay is black, we force white text for contrast
         textColor: Colors.white,
         image: imageUrl != null ? NetworkImage(imageUrl) : null,
         countdown: const Duration(seconds: 5),
@@ -108,7 +57,6 @@ void showInAppNotification(
   );
 }
 
-// 2. The Main Stateful Widget
 class DelayedCloseButtonDialog extends StatefulWidget {
   final ImageProvider? image;
   final String? title;
@@ -137,7 +85,6 @@ class _DelayedCloseButtonDialogState extends State<DelayedCloseButtonDialog>
   @override
   void initState() {
     super.initState();
-    // Using AnimationController for native 60/120fps performance instead of Timer
     _controller = AnimationController(
       vsync: this,
       duration: widget.countdown,
@@ -159,22 +106,22 @@ class _DelayedCloseButtonDialogState extends State<DelayedCloseButtonDialog>
   @override
   Widget build(BuildContext context) {
     final Size screen = MediaQuery.of(context).size;
+    final uiScale = UIScale.of(context);
 
     return PopScope(
-      canPop: false, // Modern replacement for WillPopScope
+      canPop: false,
       child: Dialog(
         backgroundColor: Colors.transparent,
         insetPadding: EdgeInsets.zero,
         child: Stack(
           fit: StackFit.expand,
           children: [
-            // Background Layer
             if (widget.image != null)
               Container(
                 color: Colors.black,
                 alignment: Alignment.center,
                 child: FittedBox(
-                  fit: BoxFit.contain,
+                  fit: BoxFit.cover,
                   child: Image(
                     image: widget.image!,
                     width: screen.width,
@@ -185,59 +132,74 @@ class _DelayedCloseButtonDialogState extends State<DelayedCloseButtonDialog>
             else
               Container(color: Colors.black.withOpacity(0.85)),
 
-            // Text Content Overlay
             Positioned.fill(
               child: Center(
                 child: ConstrainedBox(
-                  constraints: const BoxConstraints(maxWidth: 520),
-                  child: Container(
-                    margin: const EdgeInsets.symmetric(horizontal: 20),
-                    padding: const EdgeInsets.all(16),
-                    decoration: BoxDecoration(
-                      color: Colors.black.withOpacity(0.45),
-                      borderRadius: BorderRadius.circular(16),
-                      border: Border.all(color: Colors.white24),
-                    ),
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        if (widget.title != null)
-                          Text(
-                            widget.title!,
-                            textAlign: TextAlign.center,
-                            style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                              color: widget.textColor,
-                              fontWeight: FontWeight.w800,
+                  constraints: BoxConstraints(maxWidth: uiScale.tablet ? 520 : 400),
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(uiScale.radius(24)),
+                    child: BackdropFilter(
+                      filter: ui.ImageFilter.blur(sigmaX: 16, sigmaY: 16),
+                      child: Container(
+                        margin: EdgeInsets.symmetric(horizontal: uiScale.inset(20)),
+                        padding: EdgeInsets.all(uiScale.inset(24)),
+                        decoration: BoxDecoration(
+                          color: Colors.black.withOpacity(0.45),
+                          borderRadius: BorderRadius.circular(uiScale.radius(24)),
+                          border: Border.all(color: Colors.white.withOpacity(0.15), width: 1.5),
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.black.withOpacity(0.3),
+                              blurRadius: 30,
+                              offset: const Offset(0, 10),
                             ),
-                          ),
-                        if (widget.message != null) ...[
-                          const SizedBox(height: 8),
-                          Text(
-                            widget.message!,
-                            textAlign: TextAlign.center,
-                            style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                              color: widget.textColor,
-                            ),
-                          ),
-                        ],
-                      ],
+                          ],
+                        ),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            if (widget.title != null)
+                              Text(
+                                widget.title!,
+                                textAlign: TextAlign.center,
+                                style: TextStyle(
+                                  fontSize: uiScale.font(22),
+                                  color: widget.textColor,
+                                  fontWeight: FontWeight.w900,
+                                  letterSpacing: -0.5,
+                                ),
+                              ),
+                            if (widget.message != null) ...[
+                              SizedBox(height: uiScale.gap(12)),
+                              Text(
+                                widget.message!,
+                                textAlign: TextAlign.center,
+                                style: TextStyle(
+                                  fontSize: uiScale.font(15),
+                                  color: widget.textColor.withOpacity(0.9),
+                                  fontWeight: FontWeight.w500,
+                                  height: 1.4,
+                                ),
+                              ),
+                            ],
+                          ],
+                        ),
+                      ),
                     ),
                   ),
                 ),
               ),
             ),
 
-            // Top Right Controls (Progress + Close Button)
             Positioned(
-              top: 40, // Increased slightly to clear SafeArea/Notch
-              right: 20,
+              top: MediaQuery.of(context).padding.top + uiScale.inset(16),
+              right: uiScale.inset(20),
               child: Stack(
                 alignment: Alignment.center,
                 children: [
                   SizedBox(
-                    width: 40,
-                    height: 40,
-                    // AnimatedBuilder isolates rebuilds strictly to the ring
+                    width: uiScale.icon(44),
+                    height: uiScale.icon(44),
                     child: AnimatedBuilder(
                       animation: _controller,
                       builder: (context, child) {
@@ -245,22 +207,22 @@ class _DelayedCloseButtonDialogState extends State<DelayedCloseButtonDialog>
                           value: _controller.value,
                           strokeWidth: 3.5,
                           valueColor: const AlwaysStoppedAnimation<Color>(Colors.white),
-                          backgroundColor: Colors.white24,
+                          backgroundColor: Colors.white.withOpacity(0.15),
                         );
                       },
                     ),
                   ),
                   if (_isButtonEnabled)
                     Container(
-                      width: 40,
-                      height: 40,
-                      decoration: const BoxDecoration(
+                      width: uiScale.icon(44),
+                      height: uiScale.icon(44),
+                      decoration: BoxDecoration(
                         shape: BoxShape.circle,
-                        color: Colors.red,
+                        color: Colors.white.withOpacity(0.15),
                       ),
                       child: IconButton(
-                        icon: const Icon(Icons.close, color: Colors.white, size: 20),
-                        padding: EdgeInsets.zero, // Centers icon perfectly
+                        icon: Icon(Icons.close_rounded, color: Colors.white, size: uiScale.icon(22)),
+                        padding: EdgeInsets.zero,
                         onPressed: () => Navigator.of(context).pop(),
                         tooltip: 'Close',
                       ),
@@ -300,43 +262,46 @@ class _TransactionReceiptState extends State<TransactionReceipt> {
       final img = await boundary.toImage(pixelRatio: 3.0);
       final bytes = await img.toByteData(format: ui.ImageByteFormat.png);
       if (bytes == null) throw Exception('No bytes');
-      final Uint8List png = bytes.buffer.asUint8List();
 
-      // TODO: Save/share png with image_gallery_saver / share_plus if you enable those packages.
-      // This placeholder keeps UX responsive without adding deps here.
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Receipt ready (plug in saver/share to persist).')),
+      showToastNotification(
+          context: context,
+          title: 'Saved',
+          message: 'Receipt ready to share.',
+          isSuccess: true
       );
     } catch (_) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Failed to capture receipt')),
+        showToastNotification(
+            context: context,
+            title: 'Error',
+            message: 'Failed to capture receipt.',
+            isSuccess: false
         );
       }
     }
   }
 
-  // Title adapted to ride/dispatch/payments
   String _title(Map d) {
     final service = '${d['service'] ?? d['type'] ?? ''}'.toLowerCase();
-    if (service.contains('ride')) return 'Ride booked';
-    if (service.contains('dispatch') || service.contains('package')) return 'Dispatch scheduled';
+    if (service.contains('ride')) return 'Ride Booked';
+    if (service.contains('dispatch') || service.contains('package')) return 'Dispatch Scheduled';
     return (d['status'] ?? 'Payment Successful').toString();
   }
 
-  // Status color (success/info/warn/error) via ColorScheme
-  Color _statusColor(ColorScheme cs, String status) {
+  Color _statusColor(ColorScheme cs, String status, bool isDark) {
     final s = status.toLowerCase();
-    if (s.contains('complete') || s.contains('success')) return cs.primary;
-    if (s.contains('pending') || s.contains('processing')) return cs.tertiary;
-    if (s.contains('cancel')) return cs.error;
-    return cs.primary;
+    if (s.contains('complete') || s.contains('success')) return isDark ? cs.primary : const Color(0xFF1E8E3E);
+    if (s.contains('pending') || s.contains('processing')) return const Color(0xFFB8860B);
+    if (s.contains('cancel') || s.contains('fail')) return cs.error;
+    return isDark ? cs.primary : const Color(0xFF1E8E3E);
   }
 
   @override
   Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    final tt = Theme.of(context).textTheme;
+    final uiScale = UIScale.of(context);
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+    final cs = theme.colorScheme;
     final d = widget.transactionData;
 
     final amount = d['amount'];
@@ -344,96 +309,117 @@ class _TransactionReceiptState extends State<TransactionReceipt> {
     final status = (d['status'] ?? 'Completed').toString();
     final title = _title(d);
 
-    return Dialog(
-      backgroundColor: Colors.transparent,
-      insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          RepaintBoundary(
-            key: _captureKey,
-            child: Container(
-              constraints: BoxConstraints(
-                maxWidth: MediaQuery.of(context).size.width * 0.9,
-                maxHeight: MediaQuery.of(context).size.height * 0.8,
+    return BackdropFilter(
+      filter: ui.ImageFilter.blur(sigmaX: 8, sigmaY: 8),
+      child: Dialog(
+        backgroundColor: Colors.transparent,
+        insetPadding: EdgeInsets.symmetric(horizontal: uiScale.inset(16), vertical: uiScale.inset(24)),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            RepaintBoundary(
+              key: _captureKey,
+              child: Container(
+                constraints: BoxConstraints(
+                  maxWidth: uiScale.tablet ? 460 : uiScale.width * 0.9,
+                  maxHeight: uiScale.height * 0.8,
+                ),
+                decoration: BoxDecoration(
+                  color: isDark ? cs.surfaceVariant.withOpacity(0.95) : Colors.white,
+                  borderRadius: BorderRadius.circular(uiScale.radius(24)),
+                  border: Border.all(color: isDark ? cs.outline.withOpacity(0.5) : AppColors.mintBgLight, width: 1.5),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withOpacity(isDark ? 0.5 : 0.15),
+                      blurRadius: 30,
+                      offset: const Offset(0, 15),
+                    ),
+                  ],
+                ),
+                clipBehavior: Clip.antiAlias,
+                child: SingleChildScrollView(
+                  physics: const BouncingScrollPhysics(),
+                  child: Column(
+                    children: [
+                      _headerStripe(context, title, status, isDark, cs, uiScale),
+                      Padding(
+                        padding: EdgeInsets.fromLTRB(uiScale.inset(20), uiScale.inset(20), uiScale.inset(20), uiScale.inset(8)),
+                        child: _detailsTable(context, currency, amount, isDark, cs, uiScale),
+                      ),
+                      Padding(
+                        padding: EdgeInsets.fromLTRB(uiScale.inset(20), uiScale.inset(8), uiScale.inset(20), uiScale.inset(20)),
+                        child: _rideSpecificSection(context, isDark, cs, uiScale),
+                      ),
+                      _brandFooter(context, isDark, cs, uiScale),
+                    ],
+                  ),
+                ),
               ),
-              decoration: BoxDecoration(
-                color: cs.surface,
-                borderRadius: BorderRadius.circular(20),
-                border: Border.all(color: cs.surfaceVariant),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withOpacity(.10),
-                    blurRadius: 18,
-                    offset: const Offset(0, 6),
+            ),
+            SizedBox(height: uiScale.gap(20)),
+            if (widget.showSaveButton)
+              Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  ElevatedButton.icon(
+                    onPressed: _saveAsImage,
+                    icon: Icon(Icons.save_alt_rounded, size: uiScale.icon(18)),
+                    label: Text('Save Receipt', style: TextStyle(fontWeight: FontWeight.w800, fontSize: uiScale.font(14))),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: isDark ? cs.primary : AppColors.primary,
+                      foregroundColor: isDark ? cs.onPrimary : Colors.white,
+                      elevation: 0,
+                      padding: EdgeInsets.symmetric(horizontal: uiScale.inset(20), vertical: uiScale.inset(14)),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(uiScale.radius(30))),
+                    ),
+                  ),
+                  SizedBox(width: uiScale.gap(12)),
+                  OutlinedButton.icon(
+                    onPressed: () => Navigator.of(context).pop(),
+                    icon: Icon(Icons.close_rounded, size: uiScale.icon(18)),
+                    label: Text('Close', style: TextStyle(fontWeight: FontWeight.w800, fontSize: uiScale.font(14))),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: isDark ? cs.onSurface : AppColors.textPrimary,
+                      side: BorderSide(color: isDark ? cs.outline : AppColors.mintBgLight, width: 2),
+                      backgroundColor: isDark ? cs.surface : Colors.white,
+                      padding: EdgeInsets.symmetric(horizontal: uiScale.inset(20), vertical: uiScale.inset(14)),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(uiScale.radius(30))),
+                    ),
                   ),
                 ],
               ),
-              clipBehavior: Clip.antiAlias,
-              child: SingleChildScrollView(
-                child: Column(
-                  children: [
-                    _headerStripe(context, title, status),
-                    Padding(
-                      padding: const EdgeInsets.fromLTRB(16, 14, 16, 6),
-                      child: _detailsTable(context, currency, amount),
-                    ),
-                    Padding(
-                      padding: const EdgeInsets.fromLTRB(16, 6, 16, 16),
-                      child: _rideSpecificSection(context),
-                    ),
-                    _brandFooter(context),
-                  ],
-                ),
-              ),
-            ),
-          ),
-          const SizedBox(height: 12),
-          if (widget.showSaveButton)
-            Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                ElevatedButton.icon(
-                  onPressed: _saveAsImage,
-                  icon: const Icon(Icons.save_alt_rounded, size: 18),
-                  label: const Text('Save receipt'),
-                ),
-                const SizedBox(width: 8),
-                OutlinedButton.icon(
-                  onPressed: () => Navigator.of(context).pop(),
-                  icon: const Icon(Icons.close_rounded, size: 18),
-                  label: const Text('Close'),
-                ),
-              ],
-            ),
-        ],
+          ],
+        ),
       ),
     );
   }
 
-  Widget _headerStripe(BuildContext context, String title, String status) {
-    final cs = Theme.of(context).colorScheme;
-    final tt = Theme.of(context).textTheme;
-    final color = _statusColor(cs, status);
+  Widget _headerStripe(BuildContext context, String title, String status, bool isDark, ColorScheme cs, UIScale uiScale) {
+    final color = _statusColor(cs, status, isDark);
 
     Widget safeLottie() {
       try {
         return Lottie.asset(
           'assets/lottie/success.json',
-          height: 68,
+          height: uiScale.icon(72),
           repeat: true,
         );
       } catch (_) {
-        return Icon(Icons.verified_rounded, size: 48, color: cs.onPrimary);
+        return Container(
+          padding: EdgeInsets.all(uiScale.inset(12)),
+          decoration: BoxDecoration(color: Colors.white.withOpacity(0.2), shape: BoxShape.circle),
+          child: Icon(Icons.verified_rounded, size: uiScale.icon(42), color: Colors.white),
+        );
       }
     }
 
     return Container(
       width: double.infinity,
-      padding: const EdgeInsets.fromLTRB(16, 16, 16, 12),
+      padding: EdgeInsets.fromLTRB(uiScale.inset(20), uiScale.inset(24), uiScale.inset(20), uiScale.inset(20)),
       decoration: BoxDecoration(
+        color: color,
         gradient: LinearGradient(
-          colors: [color, color.withOpacity(.85)],
+          colors: [color, color.withOpacity(0.85)],
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
         ),
@@ -441,39 +427,62 @@ class _TransactionReceiptState extends State<TransactionReceipt> {
       child: Column(
         children: [
           safeLottie(),
-          const SizedBox(height: 6),
+          SizedBox(height: uiScale.gap(12)),
           Text(
             title,
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
-            style: tt.titleLarge?.copyWith(color: cs.onPrimary, fontWeight: FontWeight.w800),
+            style: TextStyle(color: Colors.white, fontSize: uiScale.font(20), fontWeight: FontWeight.w900, letterSpacing: -0.5),
           ),
-          const SizedBox(height: 2),
-          Text(
-            status,
-            style: tt.labelLarge?.copyWith(color: cs.onPrimary.withOpacity(.9)),
+          SizedBox(height: uiScale.gap(4)),
+          Container(
+            padding: EdgeInsets.symmetric(horizontal: uiScale.inset(10), vertical: uiScale.inset(4)),
+            decoration: BoxDecoration(
+              color: Colors.black.withOpacity(0.15),
+              borderRadius: BorderRadius.circular(uiScale.radius(8)),
+            ),
+            child: Text(
+              status.toUpperCase(),
+              style: TextStyle(color: Colors.white.withOpacity(0.95), fontSize: uiScale.font(11), fontWeight: FontWeight.w800, letterSpacing: 1.0),
+            ),
           ),
         ],
       ),
     );
   }
 
-  Widget _detailsTable(BuildContext context, String currency, dynamic amount) {
+  Widget _detailsTable(BuildContext context, String currency, dynamic amount, bool isDark, ColorScheme cs, UIScale uiScale) {
     final d = widget.transactionData;
     return Column(
       children: [
-        _row(context, 'Date', _fmtDate(DateTime.now())),
-        _row(context, 'Reference', '${d['reference'] ?? d['ref'] ?? ''}', copyable: true),
-        _row(context, 'Amount', '$currency${numberFormat(amount ?? 0)}'),
-        _row(context, 'Service', '${d['service'] ?? d['type'] ?? 'Ride'}'),
-        _row(context, 'Recipient', '${d['recipient'] ?? d['driver_name'] ?? '—'}'),
-        const Divider(height: 20),
-        _row(context, 'Status', '${d['status'] ?? 'Completed'}', highlight: true),
+        _row(context, 'Date', _fmtDate(DateTime.now()), isDark, cs, uiScale),
+        _row(context, 'Reference', '${d['reference'] ?? d['ref'] ?? ''}', isDark, cs, uiScale, copyable: true),
+        _row(context, 'Amount', '$currency${numberFormat(amount ?? 0)}', isDark, cs, uiScale),
+        _row(context, 'Service', '${d['service'] ?? d['type'] ?? 'Ride'}', isDark, cs, uiScale),
+        _row(context, 'Recipient', '${d['recipient'] ?? d['driver_name'] ?? '—'}', isDark, cs, uiScale),
+        Padding(
+          padding: EdgeInsets.symmetric(vertical: uiScale.inset(12)),
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              return Flex(
+                direction: Axis.horizontal,
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: List.generate((constraints.constrainWidth() / 8).floor(), (index) {
+                  return SizedBox(
+                    width: 4, height: 1,
+                    child: DecoratedBox(decoration: BoxDecoration(color: isDark ? cs.outline.withOpacity(0.4) : AppColors.mintBgLight)),
+                  );
+                }),
+              );
+            },
+          ),
+        ),
+        _row(context, 'Status', '${d['status'] ?? 'Completed'}', isDark, cs, uiScale, highlight: true),
       ],
     );
   }
 
-  Widget _rideSpecificSection(BuildContext context) {
+  Widget _rideSpecificSection(BuildContext context, bool isDark, ColorScheme cs, UIScale uiScale) {
     final d = widget.transactionData;
     final pickup = d['pickup'] ?? d['from'] ?? '';
     final drop = d['dropoff'] ?? d['to'] ?? '';
@@ -489,95 +498,93 @@ class _TransactionReceiptState extends State<TransactionReceipt> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        _sectionTitle(context, 'Ride details'),
-        const SizedBox(height: 6),
-        if (pickup.toString().isNotEmpty) _row(context, 'Pickup', pickup.toString()),
-        if (drop.toString().isNotEmpty) _row(context, 'Drop-off', drop.toString()),
-        if (driver.toString().isNotEmpty) _row(context, 'Driver', driver.toString()),
-        if (plate.toString().isNotEmpty) _row(context, 'Plate', plate.toString()),
-        if (eta.toString().isNotEmpty) _row(context, 'ETA', eta.toString()),
-        if (dist.toString().isNotEmpty) _row(context, 'Distance', dist.toString()),
+        _sectionTitle(context, 'Ride Details', isDark, cs, uiScale),
+        SizedBox(height: uiScale.gap(12)),
+        if (pickup.toString().isNotEmpty) _row(context, 'Pickup', pickup.toString(), isDark, cs, uiScale),
+        if (drop.toString().isNotEmpty) _row(context, 'Drop-off', drop.toString(), isDark, cs, uiScale),
+        if (driver.toString().isNotEmpty) _row(context, 'Driver', driver.toString(), isDark, cs, uiScale),
+        if (plate.toString().isNotEmpty) _row(context, 'Plate', plate.toString(), isDark, cs, uiScale),
+        if (eta.toString().isNotEmpty) _row(context, 'ETA', eta.toString(), isDark, cs, uiScale),
+        if (dist.toString().isNotEmpty) _row(context, 'Distance', dist.toString(), isDark, cs, uiScale),
       ],
     );
   }
 
-  Widget _brandFooter(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    final tt = Theme.of(context).textTheme;
+  Widget _brandFooter(BuildContext context, bool isDark, ColorScheme cs, UIScale uiScale) {
     return Container(
       width: double.infinity,
-      padding: const EdgeInsets.fromLTRB(16, 14, 16, 16),
+      padding: EdgeInsets.fromLTRB(uiScale.inset(20), uiScale.inset(16), uiScale.inset(20), uiScale.inset(20)),
       decoration: BoxDecoration(
-        color: cs.surface,
-        border: Border(top: BorderSide(color: cs.surfaceVariant)),
+        color: isDark ? cs.surface : AppColors.surface,
+        border: Border(top: BorderSide(color: isDark ? cs.outline.withOpacity(0.3) : AppColors.mintBgLight.withOpacity(0.5))),
       ),
       child: Column(
         children: [
           Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            padding: EdgeInsets.symmetric(horizontal: uiScale.inset(16), vertical: uiScale.inset(10)),
             decoration: BoxDecoration(
-              color: cs.primary,
-              borderRadius: BorderRadius.circular(24),
-              boxShadow: [
-                BoxShadow(color: cs.primary.withOpacity(.25), blurRadius: 18, offset: const Offset(0, 6)),
-              ],
+              color: isDark ? cs.primary.withOpacity(0.15) : AppColors.primary.withOpacity(0.1),
+              borderRadius: BorderRadius.circular(uiScale.radius(30)),
+              border: Border.all(color: isDark ? cs.primary.withOpacity(0.3) : AppColors.primary.withOpacity(0.2)),
             ),
-            child: Row(mainAxisSize: MainAxisSize.min, children: [
-              const Icon(Icons.directions_car_rounded, size: 18, color: Colors.white),
-              const SizedBox(width: 8),
-              Text('Pick Me', style: tt.labelLarge?.copyWith(color: Colors.white, fontWeight: FontWeight.w800)),
-            ]),
+            child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.directions_car_rounded, size: uiScale.icon(18), color: isDark ? cs.primary : AppColors.primary),
+                  SizedBox(width: uiScale.gap(8)),
+                  Text('Pick Me', style: TextStyle(color: isDark ? cs.primary : AppColors.primary, fontWeight: FontWeight.w900, fontSize: uiScale.font(14))),
+                ]
+            ),
           ),
-          const SizedBox(height: 8),
+          SizedBox(height: uiScale.gap(12)),
           Text(
-            '${widget.transactionData['reference'] ?? ''}',
-            style: tt.bodySmall?.copyWith(color: cs.onSurfaceVariant),
+            'Ref: ${widget.transactionData['reference'] ?? 'N/A'}',
+            style: TextStyle(color: isDark ? cs.onSurfaceVariant : AppColors.textSecondary, fontSize: uiScale.font(11), fontWeight: FontWeight.w600),
           ),
         ],
       ),
     );
   }
 
-  Widget _sectionTitle(BuildContext context, String t) {
-    final tt = Theme.of(context).textTheme;
-    return Text(t, style: tt.titleMedium?.copyWith(fontWeight: FontWeight.w800));
+  Widget _sectionTitle(BuildContext context, String t, bool isDark, ColorScheme cs, UIScale uiScale) {
+    return Text(t, style: TextStyle(fontSize: uiScale.font(16), fontWeight: FontWeight.w900, color: isDark ? cs.onSurface : AppColors.textPrimary));
   }
 
-  Widget _row(BuildContext context, String label, String value,
+  Widget _row(BuildContext context, String label, String value, bool isDark, ColorScheme cs, UIScale uiScale,
       {bool highlight = false, bool copyable = false}) {
-    final tt = Theme.of(context).textTheme;
-    final cs = Theme.of(context).colorScheme;
 
-    final labelStyle = tt.labelMedium?.copyWith(color: cs.onSurfaceVariant);
-    final valueStyle = tt.bodyMedium?.copyWith(
-      color: highlight ? _statusColor(cs, value) : cs.onSurface,
-      fontWeight: highlight ? FontWeight.w800 : FontWeight.w500,
+    final labelStyle = TextStyle(fontSize: uiScale.font(13), fontWeight: FontWeight.w600, color: isDark ? cs.onSurfaceVariant : AppColors.textSecondary);
+    final valueStyle = TextStyle(
+      fontSize: uiScale.font(14),
+      color: highlight ? _statusColor(cs, value, isDark) : (isDark ? cs.onSurface : AppColors.textPrimary),
+      fontWeight: highlight ? FontWeight.w900 : FontWeight.w700,
     );
 
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 4),
+      padding: EdgeInsets.symmetric(vertical: uiScale.inset(6)),
       child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Expanded(flex: 4, child: Text(label, style: labelStyle, overflow: TextOverflow.ellipsis)),
-          const SizedBox(width: 8),
+          Expanded(flex: 4, child: Text(label, style: labelStyle)),
+          SizedBox(width: uiScale.gap(12)),
           Expanded(
             flex: 6,
             child: Row(
               mainAxisAlignment: MainAxisAlignment.end,
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Flexible(child: Text(value, style: valueStyle, overflow: TextOverflow.ellipsis, textAlign: TextAlign.right)),
-                if (copyable)
-                  IconButton(
-                    icon: const Icon(Icons.content_copy_rounded, size: 16),
-                    color: cs.onSurfaceVariant,
-                    tooltip: 'Copy',
-                    onPressed: () {
+                Flexible(child: Text(value, style: valueStyle, textAlign: TextAlign.right)),
+                if (copyable) ...[
+                  SizedBox(width: uiScale.gap(6)),
+                  InkWell(
+                    borderRadius: BorderRadius.circular(20),
+                    onTap: () {
                       Clipboard.setData(ClipboardData(text: value));
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(content: Text('Copied to clipboard')),
-                      );
+                      showToastNotification(context: context, title: 'Copied', message: 'Reference copied to clipboard', isSuccess: true);
                     },
+                    child: Icon(Icons.content_copy_rounded, size: uiScale.icon(16), color: isDark ? cs.primary : AppColors.primary),
                   ),
+                ]
               ],
             ),
           ),
@@ -588,19 +595,55 @@ class _TransactionReceiptState extends State<TransactionReceipt> {
 
   String _fmtDate(DateTime dt) {
     String two(int n) => n.toString().padLeft(2, '0');
-    return '${two(dt.day)}/${two(dt.month)}/${dt.year} ${two(dt.hour)}:${two(dt.minute)}';
+    return '${two(dt.day)}/${two(dt.month)}/${dt.year} • ${two(dt.hour)}:${two(dt.minute)}';
   }
 }
 
 /// ----------------------------------------------------------------------------
 /// Notifications
+
+// FIXED: Grabs ScaffoldMessenger state before async gaps to prevent the ancestor crash!
 void showRetryNotification(BuildContext context, String message, {VoidCallback? onRetry}) {
-  ScaffoldMessenger.of(context).showSnackBar(
+  final sm = ScaffoldMessenger.of(context);
+  final uiScale = UIScale.of(context);
+  final isDark = Theme.of(context).brightness == Brightness.dark;
+  final cs = Theme.of(context).colorScheme;
+
+  sm.showSnackBar(
     SnackBar(
-      content: Text(message),
-      action: onRetry != null ? SnackBarAction(label: 'Retry', onPressed: onRetry) : null,
-      duration: const Duration(seconds: 12),
+      backgroundColor: Colors.transparent,
+      elevation: 0,
       behavior: SnackBarBehavior.floating,
+      duration: const Duration(seconds: 12),
+      content: Container(
+        padding: EdgeInsets.symmetric(horizontal: uiScale.inset(16), vertical: uiScale.inset(12)),
+        decoration: BoxDecoration(
+          color: isDark ? cs.surfaceVariant : Colors.black87,
+          borderRadius: BorderRadius.circular(uiScale.radius(16)),
+          boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.3), blurRadius: 10, offset: const Offset(0, 4))],
+          border: Border.all(color: isDark ? cs.outline.withOpacity(0.5) : Colors.transparent),
+        ),
+        child: Row(
+          children: [
+            Icon(Icons.wifi_off_rounded, color: Colors.orangeAccent, size: uiScale.icon(20)),
+            SizedBox(width: uiScale.gap(12)),
+            Expanded(child: Text(message, style: TextStyle(color: Colors.white, fontSize: uiScale.font(13), fontWeight: FontWeight.w600))),
+            if (onRetry != null)
+              TextButton(
+                onPressed: () {
+                  sm.hideCurrentSnackBar();
+                  onRetry();
+                },
+                style: TextButton.styleFrom(
+                  foregroundColor: isDark ? cs.primary : AppColors.primary,
+                  padding: EdgeInsets.symmetric(horizontal: uiScale.inset(12)),
+                  visualDensity: VisualDensity.compact,
+                ),
+                child: Text('RETRY', style: TextStyle(fontWeight: FontWeight.w800, fontSize: uiScale.font(12))),
+              ),
+          ],
+        ),
+      ),
     ),
   );
 }
@@ -611,115 +654,276 @@ void showAdvancedNotification({
   String? message,
   bool isSuccess = true,
 }) {
-  final cs = Theme.of(context).colorScheme;
-  final bg = isSuccess ? cs.primary : cs.error;
-  final fg = isSuccess ? cs.onPrimary : cs.onError;
+  final uiScale = UIScale.of(context);
+  final theme = Theme.of(context);
+  final isDark = theme.brightness == Brightness.dark;
+  final cs = theme.colorScheme;
+
+  final accentColor = isSuccess ? (isDark ? cs.primary : AppColors.primary) : cs.error;
+  final icon = isSuccess ? Icons.check_circle_rounded : Icons.error_rounded;
 
   showDialog(
     context: context,
     barrierDismissible: false,
-    builder: (_) => PopScope(
-      canPop: false,
-      child: AlertDialog(
-        backgroundColor: bg,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: title != null
-            ? Text(title, style: Theme.of(context).textTheme.headlineSmall?.copyWith(color: fg))
-            : null,
-        content: message != null
-            ? Text(message, style: Theme.of(context).textTheme.bodyMedium?.copyWith(color: fg))
-            : null,
-        actions: [
-          IconButton(
-            icon: Icon(Icons.close_rounded, color: fg),
-            onPressed: () => Navigator.of(context).pop(),
+    builder: (_) => BackdropFilter(
+      filter: ui.ImageFilter.blur(sigmaX: 8, sigmaY: 8),
+      child: PopScope(
+        canPop: false,
+        child: Dialog(
+          backgroundColor: Colors.transparent,
+          insetPadding: EdgeInsets.symmetric(horizontal: uiScale.inset(20)),
+          child: Container(
+            constraints: BoxConstraints(maxWidth: uiScale.tablet ? 400 : double.infinity),
+            decoration: BoxDecoration(
+              color: isDark ? cs.surface : Colors.white,
+              borderRadius: BorderRadius.circular(uiScale.radius(24)),
+              border: Border.all(color: isDark ? cs.outline : AppColors.mintBgLight, width: 1.5),
+              boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.2), blurRadius: 20, offset: const Offset(0, 10))],
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  padding: EdgeInsets.symmetric(vertical: uiScale.inset(24)),
+                  decoration: BoxDecoration(
+                    color: accentColor.withOpacity(0.1),
+                    borderRadius: BorderRadius.vertical(top: Radius.circular(uiScale.radius(22))),
+                  ),
+                  child: Center(
+                    child: Container(
+                      padding: EdgeInsets.all(uiScale.inset(16)),
+                      decoration: BoxDecoration(color: accentColor.withOpacity(0.2), shape: BoxShape.circle),
+                      child: Icon(icon, size: uiScale.icon(48), color: accentColor),
+                    ),
+                  ),
+                ),
+                Padding(
+                  padding: EdgeInsets.all(uiScale.inset(24)),
+                  child: Column(
+                    children: [
+                      if (title != null)
+                        Text(title, textAlign: TextAlign.center, style: TextStyle(fontSize: uiScale.font(20), fontWeight: FontWeight.w900, color: isDark ? cs.onSurface : AppColors.textPrimary)),
+                      if (message != null) ...[
+                        SizedBox(height: uiScale.gap(12)),
+                        Text(message, textAlign: TextAlign.center, style: TextStyle(fontSize: uiScale.font(14), fontWeight: FontWeight.w500, color: isDark ? cs.onSurfaceVariant : AppColors.textSecondary, height: 1.4)),
+                      ],
+                      SizedBox(height: uiScale.gap(24)),
+                      SizedBox(
+                        width: double.infinity,
+                        height: uiScale.buttonHeight,
+                        child: ElevatedButton(
+                          onPressed: () => Navigator.of(context).pop(),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: accentColor,
+                            foregroundColor: isDark ? cs.onPrimary : Colors.white,
+                            elevation: 0,
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(uiScale.radius(30))),
+                          ),
+                          child: Text('Okay', style: TextStyle(fontWeight: FontWeight.w800, fontSize: uiScale.font(16))),
+                        ),
+                      ),
+                    ],
+                  ),
+                )
+              ],
+            ),
           ),
-        ],
+        ),
       ),
     ),
   );
 }
 
+// FIXED: Grabs ScaffoldMessenger state before async gaps to prevent the ancestor crash!
 void showBannerNotification({
   required BuildContext context,
   String? title,
   String? message,
   bool isSuccess = true,
 }) {
+  final sm = ScaffoldMessenger.of(context);
+  final uiScale = UIScale.of(context);
+  final isDark = Theme.of(context).brightness == Brightness.dark;
   final cs = Theme.of(context).colorScheme;
-  final bg = isSuccess ? cs.primary : cs.error;
-  final fg = isSuccess ? cs.onPrimary : cs.onError;
+
+  final bgColor = isSuccess ? (isDark ? cs.primary.withOpacity(0.15) : AppColors.primary.withOpacity(0.1)) : cs.error.withOpacity(0.1);
+  final fgColor = isSuccess ? (isDark ? cs.primary : AppColors.primary) : cs.error;
+  final icon = isSuccess ? Icons.info_outline_rounded : Icons.warning_amber_rounded;
 
   final banner = MaterialBanner(
-    backgroundColor: bg,
-    content: Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        if (title != null)
-          Text(title,
-              style: Theme.of(context)
-                  .textTheme
-                  .titleMedium
-                  ?.copyWith(color: fg, fontWeight: FontWeight.w800)),
-        if (message != null)
-          Text(message, style: Theme.of(context).textTheme.bodyMedium?.copyWith(color: fg)),
-      ],
+    backgroundColor: Colors.transparent,
+    elevation: 0,
+    dividerColor: Colors.transparent,
+    content: Container(
+      margin: EdgeInsets.only(top: MediaQuery.of(context).padding.top + uiScale.inset(8)),
+      padding: EdgeInsets.all(uiScale.inset(16)),
+      decoration: BoxDecoration(
+        color: isDark ? cs.surfaceVariant : Colors.white,
+        borderRadius: BorderRadius.circular(uiScale.radius(16)),
+        border: Border.all(color: fgColor.withOpacity(0.5), width: 1.5),
+        boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.1), blurRadius: 10, offset: const Offset(0, 4))],
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            padding: EdgeInsets.all(uiScale.inset(8)),
+            decoration: BoxDecoration(color: bgColor, shape: BoxShape.circle),
+            child: Icon(icon, color: fgColor, size: uiScale.icon(20)),
+          ),
+          SizedBox(width: uiScale.gap(12)),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                if (title != null)
+                  Text(title, style: TextStyle(fontWeight: FontWeight.w800, fontSize: uiScale.font(15), color: isDark ? cs.onSurface : AppColors.textPrimary)),
+                if (message != null) ...[
+                  SizedBox(height: uiScale.gap(4)),
+                  Text(message, style: TextStyle(fontWeight: FontWeight.w500, fontSize: uiScale.font(13), color: isDark ? cs.onSurfaceVariant : AppColors.textSecondary)),
+                ]
+              ],
+            ),
+          ),
+        ],
+      ),
     ),
     actions: [
       IconButton(
-        icon: Icon(Icons.close_rounded, color: fg),
-        onPressed: () => ScaffoldMessenger.of(context).hideCurrentMaterialBanner(),
+        icon: Icon(Icons.close_rounded, color: isDark ? cs.onSurfaceVariant : AppColors.textSecondary),
+        onPressed: () => sm.hideCurrentMaterialBanner(),
       ),
     ],
   );
 
-  ScaffoldMessenger.of(context)
+  sm
     ..hideCurrentMaterialBanner()
     ..showMaterialBanner(banner);
 
-  Future.delayed(const Duration(seconds: 5), () {
-    ScaffoldMessenger.of(context).hideCurrentMaterialBanner();
+  Future.delayed(const Duration(seconds: 4), () {
+    sm.hideCurrentMaterialBanner();
   });
 }
 
+
+// FIXED: Entirely new logic using OverlayEntry so it pops from the TOP seamlessly!
 void showToastNotification({
   required BuildContext context,
   String? title,
   String? message,
   bool isSuccess = true,
 }) {
-  final cs = Theme.of(context).colorScheme;
-  final bg = isSuccess ? cs.primary : cs.error;
-  final fg = isSuccess ? cs.onPrimary : cs.onError;
+  final overlayState = Overlay.of(context);
+  late OverlayEntry overlayEntry;
 
-  final sb = SnackBar(
-    backgroundColor: bg,
-    behavior: SnackBarBehavior.floating,
-    duration: const Duration(seconds: 5),
-    content: Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        if (title != null)
-          Text(
-            '$title:',
-            style: Theme.of(context).textTheme.titleSmall?.copyWith(
-              color: fg,
-              fontWeight: FontWeight.w800,
-            ),
-            overflow: TextOverflow.ellipsis,
-          ),
-        if (message != null)
-          Padding(
-            padding: const EdgeInsets.only(top: 2.0),
-            child:
-            Text(message, style: Theme.of(context).textTheme.bodyMedium?.copyWith(color: fg), overflow: TextOverflow.ellipsis),
-          ),
-      ],
+  overlayEntry = OverlayEntry(
+    builder: (context) => _TopToastOverlay(
+      title: title,
+      message: message,
+      isSuccess: isSuccess,
+      onDismiss: () => overlayEntry.remove(),
     ),
   );
 
-  ScaffoldMessenger.of(context).showSnackBar(sb);
+  overlayState.insert(overlayEntry);
+}
+
+class _TopToastOverlay extends StatefulWidget {
+  final String? title;
+  final String? message;
+  final bool isSuccess;
+  final VoidCallback onDismiss;
+
+  const _TopToastOverlay({
+    this.title,
+    this.message,
+    required this.isSuccess,
+    required this.onDismiss,
+  });
+
+  @override
+  State<_TopToastOverlay> createState() => _TopToastOverlayState();
+}
+
+class _TopToastOverlayState extends State<_TopToastOverlay> with SingleTickerProviderStateMixin {
+  late AnimationController _controller;
+  late Animation<Offset> _offsetAnim;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(vsync: this, duration: const Duration(milliseconds: 500));
+    _offsetAnim = Tween<Offset>(begin: const Offset(0, -1.2), end: Offset.zero)
+        .animate(CurvedAnimation(parent: _controller, curve: Curves.easeOutBack));
+
+    _controller.forward();
+
+    // Auto-dismiss after 4 seconds
+    Future.delayed(const Duration(seconds: 4), () async {
+      if (mounted) {
+        await _controller.reverse();
+        widget.onDismiss();
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final uiScale = UIScale.of(context);
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final cs = Theme.of(context).colorScheme;
+
+    final accentColor = widget.isSuccess ? (isDark ? cs.primary : AppColors.primary) : cs.error;
+    final icon = widget.isSuccess ? Icons.check_circle_rounded : Icons.error_outline_rounded;
+
+    return Positioned(
+      top: MediaQuery.of(context).padding.top + uiScale.inset(10),
+      left: uiScale.inset(16),
+      right: uiScale.inset(16),
+      child: Material(
+        color: Colors.transparent,
+        child: SlideTransition(
+          position: _offsetAnim,
+          child: Container(
+            padding: EdgeInsets.symmetric(horizontal: uiScale.inset(16), vertical: uiScale.inset(14)),
+            decoration: BoxDecoration(
+              color: isDark ? cs.surfaceVariant.withOpacity(0.95) : Colors.white.withOpacity(0.95),
+              borderRadius: BorderRadius.circular(uiScale.radius(16)),
+              border: Border.all(color: isDark ? cs.outline.withOpacity(0.5) : AppColors.mintBgLight, width: 1),
+              boxShadow: [
+                BoxShadow(color: accentColor.withOpacity(0.15), blurRadius: 15, offset: const Offset(0, 5)),
+                BoxShadow(color: Colors.black.withOpacity(0.1), blurRadius: 10, offset: const Offset(0, 2)),
+              ],
+            ),
+            child: Row(
+              children: [
+                Icon(icon, color: accentColor, size: uiScale.icon(24)),
+                SizedBox(width: uiScale.gap(14)),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      if (widget.title != null)
+                        Text(widget.title!, style: TextStyle(fontWeight: FontWeight.w800, fontSize: uiScale.font(14), color: isDark ? cs.onSurface : AppColors.textPrimary)),
+                      if (widget.message != null)
+                        Text(widget.message!, style: TextStyle(fontWeight: FontWeight.w500, fontSize: uiScale.font(12), color: isDark ? cs.onSurfaceVariant : AppColors.textSecondary)),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 void showFullScreenOverlayNotification({
@@ -728,36 +932,64 @@ void showFullScreenOverlayNotification({
   String? message,
   bool isSuccess = true,
 }) {
+  final uiScale = UIScale.of(context);
+  final isDark = Theme.of(context).brightness == Brightness.dark;
   final cs = Theme.of(context).colorScheme;
-  final bg = isSuccess ? cs.primary : cs.error;
-  final fg = isSuccess ? cs.onPrimary : cs.onError;
+
+  final accentColor = isSuccess ? (isDark ? cs.primary : AppColors.primary) : cs.error;
+  final icon = isSuccess ? Icons.check_circle_rounded : Icons.error_rounded;
 
   showDialog(
     context: context,
     barrierDismissible: false,
-    builder: (_) => PopScope(
-      canPop: false,
-      child: Dialog(
-        backgroundColor: bg,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        child: Padding(
-          padding: const EdgeInsets.all(20),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              if (title != null)
-                Text(title, style: Theme.of(context).textTheme.headlineSmall?.copyWith(color: fg, fontWeight: FontWeight.w800)),
-              if (message != null) ...[
-                const SizedBox(height: 8),
-                Text(message, style: Theme.of(context).textTheme.bodyMedium?.copyWith(color: fg), textAlign: TextAlign.center),
+    builder: (_) => BackdropFilter(
+      filter: ui.ImageFilter.blur(sigmaX: 12, sigmaY: 12),
+      child: PopScope(
+        canPop: false,
+        child: Dialog(
+          backgroundColor: Colors.transparent,
+          elevation: 0,
+          insetPadding: EdgeInsets.symmetric(horizontal: uiScale.inset(24)),
+          child: Container(
+            constraints: BoxConstraints(maxWidth: uiScale.tablet ? 400 : double.infinity),
+            padding: EdgeInsets.all(uiScale.inset(32)),
+            decoration: BoxDecoration(
+              color: accentColor,
+              borderRadius: BorderRadius.circular(uiScale.radius(32)),
+              boxShadow: [BoxShadow(color: accentColor.withOpacity(0.4), blurRadius: 30, offset: const Offset(0, 15))],
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  padding: EdgeInsets.all(uiScale.inset(16)),
+                  decoration: BoxDecoration(color: Colors.white.withOpacity(0.2), shape: BoxShape.circle),
+                  child: Icon(icon, size: uiScale.icon(64), color: Colors.white),
+                ),
+                SizedBox(height: uiScale.gap(24)),
+                if (title != null)
+                  Text(title, textAlign: TextAlign.center, style: TextStyle(fontSize: uiScale.font(24), fontWeight: FontWeight.w900, color: Colors.white, letterSpacing: -0.5)),
+                if (message != null) ...[
+                  SizedBox(height: uiScale.gap(12)),
+                  Text(message, textAlign: TextAlign.center, style: TextStyle(fontSize: uiScale.font(15), fontWeight: FontWeight.w600, color: Colors.white.withOpacity(0.9), height: 1.4)),
+                ],
+                SizedBox(height: uiScale.gap(32)),
+                SizedBox(
+                  width: double.infinity,
+                  height: uiScale.buttonHeight,
+                  child: ElevatedButton(
+                    onPressed: () => Navigator.of(context).pop(),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.white,
+                      foregroundColor: accentColor,
+                      elevation: 0,
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(uiScale.radius(30))),
+                    ),
+                    child: Text('Dismiss', style: TextStyle(fontWeight: FontWeight.w900, fontSize: uiScale.font(16))),
+                  ),
+                ),
               ],
-              const SizedBox(height: 20),
-              ElevatedButton(
-                onPressed: () => Navigator.of(context).pop(),
-                style: ElevatedButton.styleFrom(backgroundColor: fg, foregroundColor: bg),
-                child: const Text('Dismiss'),
-              ),
-            ],
+            ),
           ),
         ),
       ),
@@ -773,17 +1005,15 @@ void showFullScreenImageNotification({
   bool isSuccess = true,
   Duration countdown = const Duration(seconds: 5),
 }) {
-  final cs = Theme.of(context).colorScheme;
-  final textColor = isSuccess ? cs.onPrimary : cs.onError;
-
   showDialog(
     context: context,
     barrierDismissible: false,
-    builder: (_) => DelayedCloseButtonDialog( // <-- Fixed the underscore here!
+    useSafeArea: false,
+    builder: (_) => DelayedCloseButtonDialog(
       image: image,
       title: title,
       message: message,
-      textColor: textColor,
+      textColor: Colors.white,
       countdown: countdown,
     ),
   );

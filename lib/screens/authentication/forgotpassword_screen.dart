@@ -3,7 +3,6 @@ import 'dart:convert';
 import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:firebase_auth/firebase_auth.dart';
 import 'package:http/http.dart' as http;
 
 import '../../themes/app_theme.dart';
@@ -12,6 +11,7 @@ import '../../api/api_client.dart';
 import '../../api/url.dart';
 import '../../routes/routes.dart';
 import '../../widgets/inner_background.dart';
+import '../../ui/ui_scale.dart';
 
 class ForgotPasswordScreen extends StatefulWidget {
   const ForgotPasswordScreen({super.key});
@@ -24,7 +24,6 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
   final _emailController = TextEditingController();
   final _formKey = GlobalKey<FormState>();
   late ApiClient _apiClient;
-  final FirebaseAuth _auth = FirebaseAuth.instance;
 
   bool _busy = false;
 
@@ -47,7 +46,7 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
     final email = _emailController.text.trim();
 
     try {
-      // Call your backend
+      // Call your backend exclusively
       final response = await _apiClient.request(
         ApiConstants.restPwdEndpoint,
         method: 'POST',
@@ -57,15 +56,16 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
       final responseData = jsonDecode(response.body);
 
       if (response.statusCode == 200 && responseData['error'] == false) {
+        if (!mounted) return;
         showToastNotification(
           context: context,
           title: 'Success',
           message: responseData['message'] ?? 'Password reset link sent',
           isSuccess: true,
         );
-        if (!mounted) return;
         Navigator.pop(context);
       } else {
+        if (!mounted) return;
         showToastNotification(
           context: context,
           title: 'Error',
@@ -73,11 +73,8 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
           isSuccess: false,
         );
       }
-
-      // (Optional) Also send Firebase reset email if you use Firebase auth emails
-      // await _auth.sendPasswordResetEmail(email: email);
-
     } catch (e) {
+      if (!mounted) return;
       showToastNotification(
         context: context,
         title: 'Error',
@@ -91,63 +88,78 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final size = MediaQuery.of(context).size;
-    final isTablet = size.shortestSide > 600;
+    final uiScale = UIScale.of(context);
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+    final cs = theme.colorScheme;
 
     return Scaffold(
-      backgroundColor: Theme.of(context).colorScheme.background,
+      backgroundColor: isDark ? Colors.black : theme.colorScheme.background,
       body: Stack(
         children: [
-          const BackgroundWidget(
+          BackgroundWidget(
             style: HoloStyle.vapor,
             animate: true,
-            intensity: 0.8,
+            intensity: isDark ? 0.3 : 0.8,
           ),
           SafeArea(
             child: Center(
               child: SingleChildScrollView(
-                padding: EdgeInsets.symmetric(
-                  horizontal: isTablet ? 64 : 32,
-                  vertical: 24,
+                keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+                padding: uiScale.screenPadding.copyWith(
+                  bottom: uiScale.screenPadding.bottom + uiScale.viewInsets.bottom,
                 ),
                 child: ConstrainedBox(
-                  constraints: BoxConstraints(maxWidth: isTablet ? 520 : 420),
+                  constraints: BoxConstraints(maxWidth: uiScale.authCardMaxWidth),
                   child: _FrostedCard(
+                    uiScale: uiScale,
+                    isDark: isDark,
+                    cs: cs,
                     child: Form(
                       key: _formKey,
                       child: Column(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          _HeaderLogo(),
-                          const SizedBox(height: 18),
+                          _HeaderLogo(uiScale: uiScale, isDark: isDark, cs: cs),
+                          SizedBox(height: uiScale.gap(18)),
                           Text(
                             'Forgot Password',
                             style: TextStyle(
-                              fontSize: isTablet ? 30 : 26,
-                              fontWeight: FontWeight.w800,
-                              color: AppColors.textPrimary,
+                              fontSize: uiScale.font(uiScale.compact ? 24 : 28),
+                              fontWeight: FontWeight.w900,
+                              color: isDark ? cs.onSurface : AppColors.textPrimary,
+                              letterSpacing: -0.5,
                             ),
                           ),
-                          const SizedBox(height: 8),
-                          const Text(
+                          SizedBox(height: uiScale.gap(8)),
+                          Text(
                             'Enter your email address to receive a reset link',
                             textAlign: TextAlign.center,
                             style: TextStyle(
-                              color: AppColors.textSecondary,
-                              fontSize: 14,
+                              color: isDark ? cs.onSurfaceVariant : AppColors.textSecondary,
+                              fontSize: uiScale.font(13),
                             ),
                           ),
-                          const SizedBox(height: 24),
+                          SizedBox(height: uiScale.gap(24)),
 
                           _FieldWrapper(
+                            uiScale: uiScale,
+                            isDark: isDark,
                             child: TextFormField(
                               controller: _emailController,
                               keyboardType: TextInputType.emailAddress,
                               textInputAction: TextInputAction.done,
                               autofillHints: const [AutofillHints.email, AutofillHints.username],
+                              style: TextStyle(
+                                fontSize: uiScale.font(14),
+                                color: isDark ? cs.onSurface : AppColors.textPrimary,
+                              ),
                               decoration: _inputDecoration(
                                 label: 'Email Address',
                                 icon: Icons.email_rounded,
+                                uiScale: uiScale,
+                                isDark: isDark,
+                                cs: cs,
                               ),
                               validator: (v) {
                                 final s = (v ?? '').trim();
@@ -159,11 +171,14 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
                             ),
                           ),
 
-                          const SizedBox(height: 22),
+                          SizedBox(height: uiScale.gap(22)),
 
                           _PrimaryGradientButton(
                             label: 'Reset Password',
                             busy: _busy,
+                            uiScale: uiScale,
+                            isDark: isDark,
+                            cs: cs,
                             onPressed: _busy
                                 ? null
                                 : () {
@@ -172,17 +187,26 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
                             },
                           ),
 
-                          const SizedBox(height: 16),
+                          SizedBox(height: uiScale.gap(16)),
 
                           TextButton(
                             onPressed: _busy
                                 ? null
                                 : () => Navigator.pushReplacementNamed(context, AppRoutes.login),
                             style: TextButton.styleFrom(
-                              foregroundColor: AppColors.primary,
-                              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                              foregroundColor: isDark ? cs.primary : AppColors.primary,
+                              padding: EdgeInsets.symmetric(
+                                horizontal: uiScale.inset(12),
+                                vertical: uiScale.inset(8),
+                              ),
                             ),
-                            child: const Text('Back to Login'),
+                            child: Text(
+                              'Back to Login',
+                              style: TextStyle(
+                                fontWeight: FontWeight.w700,
+                                fontSize: uiScale.font(13.5),
+                              ),
+                            ),
                           ),
                         ],
                       ),
@@ -197,44 +221,57 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
     );
   }
 
-  // Shared UI bits (kept inline for this file)
-
-  InputDecoration _inputDecoration({required String label, required IconData icon}) {
+  InputDecoration _inputDecoration({
+    required String label,
+    required IconData icon,
+    required UIScale uiScale,
+    required bool isDark,
+    required ColorScheme cs,
+  }) {
     return InputDecoration(
+      isDense: uiScale.compact,
       labelText: label,
-      prefixIcon: Container(
-        margin: const EdgeInsets.all(12),
-        padding: const EdgeInsets.all(8),
-        decoration: BoxDecoration(
-          color: AppColors.primary.withOpacity(0.1),
-          shape: BoxShape.circle,
+      labelStyle: TextStyle(
+        color: isDark ? cs.onSurfaceVariant : AppColors.textSecondary.withOpacity(.9),
+      ),
+      contentPadding: EdgeInsets.symmetric(
+        horizontal: uiScale.inset(14),
+        vertical: uiScale.inputVerticalPadding,
+      ),
+      prefixIcon: Padding(
+        padding: EdgeInsets.all(uiScale.inset(8)),
+        child: Container(
+          decoration: BoxDecoration(
+            color: (isDark ? cs.primary : AppColors.primary).withOpacity(0.10),
+            shape: BoxShape.circle,
+          ),
+          child: Icon(icon, size: uiScale.icon(18), color: isDark ? cs.primary : AppColors.primary),
         ),
-        child: Icon(icon, size: 20, color: AppColors.primary),
       ),
       filled: true,
-      fillColor: AppColors.surface,
+      fillColor: isDark ? cs.surfaceVariant.withOpacity(0.5) : AppColors.surface,
       border: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(16),
+        borderRadius: BorderRadius.circular(uiScale.radius(16)),
         borderSide: BorderSide.none,
       ),
       enabledBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(16),
+        borderRadius: BorderRadius.circular(uiScale.radius(16)),
         borderSide: BorderSide(
-          color: AppColors.mintBgLight.withOpacity(0.3),
+          color: isDark ? cs.outline.withOpacity(0.5) : AppColors.mintBgLight.withOpacity(0.30),
           width: 1,
         ),
       ),
       focusedBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(16),
-        borderSide: const BorderSide(
-          color: AppColors.primary,
+        borderRadius: BorderRadius.circular(uiScale.radius(16)),
+        borderSide: BorderSide(
+          color: isDark ? cs.primary : AppColors.primary,
           width: 2,
         ),
       ),
       errorBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(16),
-        borderSide: const BorderSide(
-          color: AppColors.error,
+        borderRadius: BorderRadius.circular(uiScale.radius(16)),
+        borderSide: BorderSide(
+          color: cs.error,
           width: 1,
         ),
       ),
@@ -243,28 +280,41 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
 }
 
 class _HeaderLogo extends StatelessWidget {
+  final UIScale uiScale;
+  final bool isDark;
+  final ColorScheme cs;
+
+  const _HeaderLogo({
+    required this.uiScale,
+    required this.isDark,
+    required this.cs,
+  });
+
   @override
   Widget build(BuildContext context) {
+    final size = uiScale.compactLogoSize;
     return Container(
-      width: 84,
-      height: 84,
+      width: size,
+      height: size,
       decoration: BoxDecoration(
         shape: BoxShape.circle,
-        gradient: const LinearGradient(colors: [AppColors.primary, AppColors.secondary]),
+        gradient: LinearGradient(
+          colors: isDark ? [cs.primary, cs.secondary] : [AppColors.primary, AppColors.secondary],
+        ),
         boxShadow: [
           BoxShadow(
-            color: AppColors.primary.withOpacity(0.3),
-            blurRadius: 20,
-            spreadRadius: 2,
+            color: (isDark ? cs.primary : AppColors.primary).withOpacity(0.22),
+            blurRadius: uiScale.reduceFx ? 10 : 20,
+            spreadRadius: 1,
           ),
         ],
       ),
       child: Padding(
-        padding: const EdgeInsets.all(16),
+        padding: EdgeInsets.all(uiScale.inset(14)),
         child: Image.asset(
-          'image/pickme.png', // same asset used on Login/Registration
+          'image/pickme.png',
           fit: BoxFit.contain,
-          color: AppColors.surface,
+          color: isDark ? cs.onPrimary : AppColors.surface,
         ),
       ),
     );
@@ -272,33 +322,47 @@ class _HeaderLogo extends StatelessWidget {
 }
 
 class _FrostedCard extends StatelessWidget {
-  const _FrostedCard({required this.child});
   final Widget child;
+  final UIScale uiScale;
+  final bool isDark;
+  final ColorScheme cs;
+
+  const _FrostedCard({
+    required this.child,
+    required this.uiScale,
+    required this.isDark,
+    required this.cs,
+  });
 
   @override
   Widget build(BuildContext context) {
     return ClipRRect(
-      borderRadius: BorderRadius.circular(24),
+      borderRadius: BorderRadius.circular(uiScale.cardRadius),
       child: BackdropFilter(
-        filter: ui.ImageFilter.blur(sigmaX: 20, sigmaY: 20),
+        filter: ui.ImageFilter.blur(
+          sigmaX: uiScale.blur(20),
+          sigmaY: uiScale.blur(20),
+        ),
         child: Container(
-          padding: const EdgeInsets.all(32),
+          padding: EdgeInsets.all(uiScale.compact ? uiScale.inset(18) : uiScale.inset(28)),
           decoration: BoxDecoration(
             gradient: LinearGradient(
-              colors: [
-                AppColors.surface.withOpacity(0.9),
-                AppColors.mintBgLight.withOpacity(0.3),
-              ],
+              colors: isDark
+                  ? [cs.surface.withOpacity(0.95), cs.surfaceVariant.withOpacity(0.8)]
+                  : [AppColors.surface.withOpacity(0.92), AppColors.mintBgLight.withOpacity(0.28)],
               begin: Alignment.topLeft,
               end: Alignment.bottomRight,
             ),
-            borderRadius: BorderRadius.circular(24),
-            border: Border.all(color: AppColors.mintBgLight.withOpacity(0.5)),
+            borderRadius: BorderRadius.circular(uiScale.cardRadius),
+            border: Border.all(
+              color: isDark ? cs.outline.withOpacity(0.5) : AppColors.mintBgLight.withOpacity(0.45),
+              width: 1,
+            ),
             boxShadow: [
               BoxShadow(
-                color: AppColors.deep.withOpacity(0.1),
-                blurRadius: 20,
-                offset: const Offset(0, 10),
+                color: isDark ? Colors.black.withOpacity(0.5) : AppColors.deep.withOpacity(uiScale.reduceFx ? 0.05 : 0.10),
+                blurRadius: uiScale.reduceFx ? 12 : 20,
+                offset: const Offset(0, 8),
               ),
             ],
           ),
@@ -310,17 +374,25 @@ class _FrostedCard extends StatelessWidget {
 }
 
 class _FieldWrapper extends StatelessWidget {
-  const _FieldWrapper({required this.child});
   final Widget child;
+  final UIScale uiScale;
+  final bool isDark;
+
+  const _FieldWrapper({
+    required this.child,
+    required this.uiScale,
+    required this.isDark,
+  });
+
   @override
   Widget build(BuildContext context) {
     return Container(
       decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(16),
+        borderRadius: BorderRadius.circular(uiScale.radius(16)),
         boxShadow: [
           BoxShadow(
-            color: AppColors.deep.withOpacity(0.05),
-            blurRadius: 10,
+            color: isDark ? Colors.black.withOpacity(0.3) : AppColors.deep.withOpacity(0.05),
+            blurRadius: uiScale.reduceFx ? 6 : 10,
             offset: const Offset(0, 4),
           ),
         ],
@@ -331,28 +403,37 @@ class _FieldWrapper extends StatelessWidget {
 }
 
 class _PrimaryGradientButton extends StatelessWidget {
+  final String label;
+  final VoidCallback? onPressed;
+  final bool busy;
+  final UIScale uiScale;
+  final bool isDark;
+  final ColorScheme cs;
+
   const _PrimaryGradientButton({
     required this.label,
     required this.onPressed,
     required this.busy,
+    required this.uiScale,
+    required this.isDark,
+    required this.cs,
   });
-  final String label;
-  final VoidCallback? onPressed;
-  final bool busy;
 
   @override
   Widget build(BuildContext context) {
     return Container(
-      height: 52,
       width: double.infinity,
+      height: uiScale.buttonHeight,
       decoration: BoxDecoration(
-        gradient: const LinearGradient(colors: [AppColors.primary, AppColors.secondary]),
-        borderRadius: BorderRadius.circular(30),
+        gradient: LinearGradient(
+          colors: isDark ? [cs.primary, cs.secondary] : [AppColors.primary, AppColors.secondary],
+        ),
+        borderRadius: BorderRadius.circular(uiScale.radius(30)),
         boxShadow: [
           BoxShadow(
-            color: AppColors.primary.withOpacity(0.3),
-            blurRadius: 20,
-            offset: const Offset(0, 10),
+            color: (isDark ? cs.primary : AppColors.primary).withOpacity(uiScale.reduceFx ? 0.18 : 0.30),
+            blurRadius: uiScale.reduceFx ? 12 : 20,
+            offset: const Offset(0, 8),
           ),
         ],
       ),
@@ -361,23 +442,23 @@ class _PrimaryGradientButton extends StatelessWidget {
         style: ElevatedButton.styleFrom(
           backgroundColor: Colors.transparent,
           shadowColor: Colors.transparent,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(30)),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(uiScale.radius(30))),
         ),
         child: busy
-            ? const SizedBox(
+            ? SizedBox(
           height: 20,
           width: 20,
           child: CircularProgressIndicator(
             strokeWidth: 2,
-            valueColor: AlwaysStoppedAnimation<Color>(AppColors.surface),
+            valueColor: AlwaysStoppedAnimation<Color>(isDark ? cs.onPrimary : AppColors.surface),
           ),
         )
             : Text(
           label,
-          style: const TextStyle(
-            color: AppColors.surface,
+          style: TextStyle(
+            color: isDark ? cs.onPrimary : AppColors.surface,
             fontWeight: FontWeight.w700,
-            fontSize: 16,
+            fontSize: uiScale.font(15.5),
           ),
         ),
       ),

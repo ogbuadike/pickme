@@ -1,5 +1,5 @@
 import 'dart:math' as math;
-import 'dart:ui';
+import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -151,13 +151,13 @@ class _OnboardingScreenState extends State<OnboardingScreen>
       ),
     );
 
-    _rotateAnimation = Tween<double>(begin: -0.07, end: 0).animate(
+    _rotateAnimation = Tween<double>(begin: -0.05, end: 0).animate(
       CurvedAnimation(parent: _mainController, curve: Curves.easeOutBack),
     );
 
     _particleAnimation = Tween<double>(begin: 0, end: 1).animate(_particleController);
 
-    _pulseAnimation = Tween<double>(begin: 1, end: 1.08).animate(
+    _pulseAnimation = Tween<double>(begin: 1, end: 1.05).animate(
       CurvedAnimation(parent: _pulseController, curve: Curves.easeInOut),
     );
 
@@ -213,53 +213,60 @@ class _OnboardingScreenState extends State<OnboardingScreen>
 
   @override
   Widget build(BuildContext context) {
-    final ui = UIScale.of(context);
+    final uiScale = UIScale.of(context);
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+    final cs = theme.colorScheme;
 
     return Scaffold(
-      backgroundColor: AppColors.backgroundColor,
+      backgroundColor: isDark ? Colors.black : AppColors.offWhite,
       body: Stack(
         children: [
-          const BackgroundWidget(
+          // Background Depth Layer
+          BackgroundWidget(
             style: HoloStyle.flux,
             animate: true,
-            intensity: 0.5,
+            intensity: isDark ? 0.3 : 0.6,
           ),
-          if (!ui.reduceFx)
+
+          if (!uiScale.reduceFx)
             RepaintBoundary(
               child: AnimatedBuilder(
                 animation: _particleAnimation,
                 builder: (context, _) => CustomPaint(
                   painter: AdvancedParticlePainter(
                     progress: _particleAnimation.value,
-                    color: AppColors.primary,
+                    color: isDark ? cs.primary : AppColors.primary,
                   ),
                   size: Size.infinite,
                 ),
               ),
             ),
-          if (!ui.reduceFx)
+
+          if (!uiScale.reduceFx)
             RepaintBoundary(
               child: AnimatedBuilder(
                 animation: _waveAnimation,
                 builder: (context, _) => CustomPaint(
                   painter: WavePainter(
                     progress: _waveAnimation.value,
-                    color: AppColors.secondary.withOpacity(0.08),
+                    color: (isDark ? cs.secondary : AppColors.secondary).withOpacity(isDark ? 0.05 : 0.08),
                   ),
                   size: Size.infinite,
                 ),
               ),
             ),
+
           SafeArea(
             child: Column(
               children: [
-                _buildHeader(ui),
+                _buildHeader(uiScale, isDark, cs),
                 Expanded(
-                  child: ui.useSplitOnboarding
-                      ? _buildLandscapeLayout(ui)
-                      : _buildPortraitLayout(ui),
+                  child: uiScale.useSplitOnboarding
+                      ? _buildLandscapeLayout(uiScale, isDark, cs)
+                      : _buildPortraitLayout(uiScale, isDark, cs),
                 ),
-                _buildFooter(ui),
+                _buildFooter(uiScale, isDark, cs),
               ],
             ),
           ),
@@ -268,15 +275,15 @@ class _OnboardingScreenState extends State<OnboardingScreen>
     );
   }
 
-  Widget _buildHeader(UIScale ui) {
+  Widget _buildHeader(UIScale uiScale, bool isDark, ColorScheme cs) {
     return AnimatedBuilder(
       animation: _fadeAnimation,
       builder: (context, child) => Opacity(
         opacity: _fadeAnimation.value,
         child: Padding(
           padding: EdgeInsets.symmetric(
-            horizontal: ui.inset(ui.tablet ? 28 : 18),
-            vertical: ui.inset(ui.compact ? 10 : 14),
+            horizontal: uiScale.inset(uiScale.tablet ? 28 : 18),
+            vertical: uiScale.inset(uiScale.compact ? 10 : 14),
           ),
           child: Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -284,31 +291,29 @@ class _OnboardingScreenState extends State<OnboardingScreen>
               AnimatedBuilder(
                 animation: _pulseAnimation,
                 builder: (context, _) => Transform.scale(
-                  scale: ui.reduceFx ? 1 : _pulseAnimation.value,
+                  scale: uiScale.reduceFx ? 1 : _pulseAnimation.value,
                   child: Container(
-                    width: ui.compact ? 44 : 52,
-                    height: ui.compact ? 44 : 52,
+                    width: uiScale.compact ? 48 : 56,
+                    height: uiScale.compact ? 48 : 56,
                     decoration: BoxDecoration(
                       shape: BoxShape.circle,
-                      gradient: const LinearGradient(
-                        colors: [AppColors.primary, AppColors.secondary],
+                      gradient: LinearGradient(
+                        colors: isDark ? [cs.primary, cs.secondary] : [AppColors.primary, AppColors.secondary],
                       ),
                       boxShadow: [
                         BoxShadow(
-                          color: AppColors.primary.withOpacity(
-                            ui.reduceFx ? 0.16 : 0.28,
-                          ),
-                          blurRadius: ui.reduceFx ? 10 : 18,
+                          color: (isDark ? cs.primary : AppColors.primary).withOpacity(uiScale.reduceFx ? 0.16 : 0.35),
+                          blurRadius: uiScale.reduceFx ? 10 : 20,
                           offset: const Offset(0, 6),
                         ),
                       ],
                     ),
                     child: Padding(
-                      padding: EdgeInsets.all(ui.inset(10)),
+                      padding: EdgeInsets.all(uiScale.inset(12)),
                       child: Image.asset(
                         'image/pickme.png',
                         fit: BoxFit.contain,
-                        color: Colors.white,
+                        color: isDark ? cs.onPrimary : Colors.white,
                       ),
                     ),
                   ),
@@ -317,17 +322,17 @@ class _OnboardingScreenState extends State<OnboardingScreen>
               TextButton(
                 onPressed: () => Navigator.pushReplacementNamed(context, '/login'),
                 style: TextButton.styleFrom(
-                  foregroundColor: AppColors.primary,
+                  foregroundColor: isDark ? cs.onSurfaceVariant : AppColors.textSecondary,
                   padding: EdgeInsets.symmetric(
-                    horizontal: ui.inset(12),
-                    vertical: ui.inset(8),
+                    horizontal: uiScale.inset(16),
+                    vertical: uiScale.inset(8),
                   ),
                 ),
                 child: Text(
                   'Skip',
                   style: TextStyle(
-                    fontSize: ui.font(14),
-                    fontWeight: FontWeight.w700,
+                    fontSize: uiScale.font(15),
+                    fontWeight: FontWeight.w800,
                   ),
                 ),
               ),
@@ -338,15 +343,15 @@ class _OnboardingScreenState extends State<OnboardingScreen>
     );
   }
 
-  Widget _buildPortraitLayout(UIScale ui) {
+  Widget _buildPortraitLayout(UIScale uiScale, bool isDark, ColorScheme cs) {
     return Padding(
       padding: EdgeInsets.symmetric(
-        horizontal: ui.inset(ui.tiny ? 6 : 10),
-        vertical: ui.inset(6),
+        horizontal: uiScale.inset(uiScale.tiny ? 4 : 8),
+        vertical: uiScale.inset(6),
       ),
       child: PageView.builder(
         controller: _pageController,
-        padEnds: false,
+        padEnds: true, // Center the card perfectly
         onPageChanged: (index) {
           setState(() => _currentPage = index);
           _mainController
@@ -363,27 +368,27 @@ class _OnboardingScreenState extends State<OnboardingScreen>
               if (_pageController.position.haveDimensions) {
                 final page = _pageController.page ?? _currentPage.toDouble();
                 value = page - index.toDouble();
-                value = (1 - (value.abs() * 0.18)).clamp(0.86, 1.0);
+                value = (1 - (value.abs() * 0.15)).clamp(0.85, 1.0);
               }
               return Transform.scale(
                 scale: value,
                 child: Opacity(
-                  opacity: (0.55 + (value * 0.45)).clamp(0.0, 1.0),
+                  opacity: (0.5 + (value * 0.5)).clamp(0.0, 1.0),
                   child: child,
                 ),
               );
             },
-            child: _buildCard(_pages[index], ui),
+            child: _buildPremiumCard(_pages[index], uiScale, isDark, cs),
           );
         },
       ),
     );
   }
 
-  Widget _buildLandscapeLayout(UIScale ui) {
+  Widget _buildLandscapeLayout(UIScale uiScale, bool isDark, ColorScheme cs) {
     final data = _pages[_currentPage];
     return Padding(
-      padding: ui.screenPadding.copyWith(top: ui.gap(4), bottom: ui.gap(4)),
+      padding: uiScale.screenPadding.copyWith(top: uiScale.gap(4), bottom: uiScale.gap(4)),
       child: Row(
         children: [
           Expanded(
@@ -391,18 +396,18 @@ class _OnboardingScreenState extends State<OnboardingScreen>
             child: Center(
               child: ConstrainedBox(
                 constraints: BoxConstraints(
-                  maxWidth: ui.compact ? 360 : 460,
-                  maxHeight: ui.height * 0.76,
+                  maxWidth: uiScale.compact ? 360 : 460,
+                  maxHeight: uiScale.height * 0.8,
                 ),
-                child: _buildCard(data, ui),
+                child: _buildPremiumCard(data, uiScale, isDark, cs),
               ),
             ),
           ),
-          SizedBox(width: ui.gap(20)),
+          SizedBox(width: uiScale.gap(32)),
           Expanded(
             flex: 10,
             child: SingleChildScrollView(
-              padding: EdgeInsets.all(ui.inset(ui.compact ? 10 : 18)),
+              padding: EdgeInsets.all(uiScale.inset(uiScale.compact ? 10 : 24)),
               child: AnimatedBuilder(
                 animation: _fadeAnimation,
                 builder: (context, child) => Opacity(
@@ -416,33 +421,33 @@ class _OnboardingScreenState extends State<OnboardingScreen>
                     Text(
                       data.title,
                       style: TextStyle(
-                        fontSize: ui.font(ui.compact ? 26 : 36),
+                        fontSize: uiScale.font(uiScale.compact ? 28 : 40),
                         fontWeight: FontWeight.w900,
-                        color: AppColors.textPrimary,
+                        color: isDark ? cs.onSurface : AppColors.textPrimary,
                         height: 1.08,
-                        letterSpacing: -0.8,
+                        letterSpacing: -1.0,
                       ),
                     ),
-                    SizedBox(height: ui.gap(8)),
+                    SizedBox(height: uiScale.gap(8)),
                     Text(
                       data.subtitle,
                       style: TextStyle(
-                        fontSize: ui.font(ui.compact ? 16 : 22),
-                        color: AppColors.primary,
-                        fontWeight: FontWeight.w700,
+                        fontSize: uiScale.font(uiScale.compact ? 16 : 22),
+                        color: data.gradient.first,
+                        fontWeight: FontWeight.w800,
                       ),
                     ),
-                    SizedBox(height: ui.gap(16)),
+                    SizedBox(height: uiScale.gap(16)),
                     Text(
                       data.description,
                       style: TextStyle(
-                        fontSize: ui.font(ui.compact ? 13.5 : 16),
-                        color: AppColors.textSecondary,
-                        height: 1.45,
+                        fontSize: uiScale.font(uiScale.compact ? 14 : 16),
+                        color: isDark ? cs.onSurfaceVariant : AppColors.textSecondary,
+                        height: 1.5,
                       ),
                     ),
-                    SizedBox(height: ui.gap(18)),
-                    ...data.features.map((f) => _buildFeatureBullet(f, ui)),
+                    SizedBox(height: uiScale.gap(24)),
+                    ...data.features.map((f) => _buildFeatureBullet(f, uiScale, data.gradient.first, isDark, cs)),
                   ],
                 ),
               ),
@@ -453,20 +458,16 @@ class _OnboardingScreenState extends State<OnboardingScreen>
     );
   }
 
-  Widget _buildCard(OnboardingData data, UIScale ui) {
-    final borderRadius = ui.compact ? ui.radius(24) : ui.radius(36);
+  Widget _buildPremiumCard(OnboardingData data, UIScale uiScale, bool isDark, ColorScheme cs) {
+    final borderRadius = uiScale.compact ? uiScale.radius(28) : uiScale.radius(40);
 
     return AnimatedBuilder(
-      animation: Listenable.merge([
-        _scaleAnimation,
-        _slideAnimation,
-        _rotateAnimation,
-      ]),
+      animation: Listenable.merge([_scaleAnimation, _slideAnimation, _rotateAnimation]),
       builder: (context, _) {
-        final double translateY = ui.reduceFx ? 0.0 : _slideAnimation.value;
-        final double perspective = ui.reduceFx ? 0.0 : 0.001;
-        final double rotationZ = ui.reduceFx ? 0.0 : (_rotateAnimation.value * 0.5);
-        final double scale = ui.reduceFx ? 1.0 : _scaleAnimation.value;
+        final double translateY = uiScale.reduceFx ? 0.0 : _slideAnimation.value;
+        final double perspective = uiScale.reduceFx ? 0.0 : 0.001;
+        final double rotationZ = uiScale.reduceFx ? 0.0 : (_rotateAnimation.value * 0.5);
+        final double scale = uiScale.reduceFx ? 1.0 : _scaleAnimation.value;
 
         return Transform.translate(
           offset: Offset(0, translateY),
@@ -477,169 +478,156 @@ class _OnboardingScreenState extends State<OnboardingScreen>
               ..rotateZ(rotationZ)
               ..scale(scale, scale, 1.0),
             child: Container(
-              margin: EdgeInsets.symmetric(
-                horizontal: ui.gap(4),
-                vertical: ui.gap(8),
-              ),
+              margin: EdgeInsets.symmetric(horizontal: uiScale.gap(8), vertical: uiScale.gap(12)),
               child: Stack(
                 children: [
-                  if (!ui.reduceFx)
+                  // Under-glow shadow layer
+                  if (!uiScale.reduceFx)
                     Positioned.fill(
-                      child: AnimatedBuilder(
-                        animation: _shimmerAnimation,
-                        builder: (context, child) => DecoratedBox(
-                          decoration: BoxDecoration(
-                            borderRadius: BorderRadius.circular(borderRadius),
-                            gradient: LinearGradient(
-                              begin: Alignment(-1 + _shimmerAnimation.value, -1),
-                              end: Alignment(1 + _shimmerAnimation.value, 1),
-                              colors: [
-                                data.gradient.first.withOpacity(0.22),
-                                data.gradient.last.withOpacity(0.08),
-                                data.gradient.first.withOpacity(0.22),
-                              ],
+                      child: Container(
+                        decoration: BoxDecoration(
+                          borderRadius: BorderRadius.circular(borderRadius),
+                          boxShadow: [
+                            BoxShadow(
+                              color: data.gradient.first.withOpacity(isDark ? 0.3 : 0.2),
+                              blurRadius: 40,
+                              spreadRadius: -10,
+                              offset: const Offset(0, 20),
                             ),
-                          ),
+                          ],
                         ),
                       ),
                     ),
+
+                  // Glassmorphism Card
                   ClipRRect(
                     borderRadius: BorderRadius.circular(borderRadius),
                     child: BackdropFilter(
-                      filter: ImageFilter.blur(
-                        sigmaX: ui.blur(20),
-                        sigmaY: ui.blur(20),
-                      ),
+                      filter: ui.ImageFilter.blur(sigmaX: 30, sigmaY: 30),
                       child: Container(
                         decoration: BoxDecoration(
-                          gradient: LinearGradient(
-                            begin: Alignment.topLeft,
-                            end: Alignment.bottomRight,
-                            colors: [
-                              data.gradient.first.withOpacity(0.92),
-                              data.gradient.last.withOpacity(0.78),
-                            ],
-                          ),
+                          color: isDark ? cs.surface.withOpacity(0.7) : Colors.white.withOpacity(0.85),
                           borderRadius: BorderRadius.circular(borderRadius),
                           border: Border.all(
-                            color: Colors.white.withOpacity(0.22),
+                            color: data.gradient.first.withOpacity(isDark ? 0.4 : 0.2),
                             width: 1.5,
                           ),
-                          boxShadow: [
-                            BoxShadow(
-                              color: data.gradient.first.withOpacity(
-                                ui.reduceFx ? 0.16 : 0.35,
-                              ),
-                              blurRadius: ui.reduceFx ? 14 : 32,
-                              offset: const Offset(0, 12),
-                            ),
-                          ],
                         ),
                         child: LayoutBuilder(
                           builder: (context, constraints) {
                             final imageHeight = math.max(
-                              110.0,
-                              math.min(
-                                constraints.maxHeight * 0.26,
-                                ui.compact ? 132.0 : 180.0,
-                              ),
+                              120.0,
+                              math.min(constraints.maxHeight * 0.28, uiScale.compact ? 140.0 : 200.0),
                             );
 
                             return SingleChildScrollView(
                               physics: const ClampingScrollPhysics(),
-                              padding: EdgeInsets.all(
-                                ui.inset(ui.compact ? 18 : 28),
-                              ),
+                              padding: EdgeInsets.all(uiScale.inset(uiScale.compact ? 20 : 28)),
                               child: Column(
                                 mainAxisSize: MainAxisSize.min,
                                 children: [
-                                  ClipRRect(
-                                    borderRadius: BorderRadius.circular(ui.radius(18)),
-                                    child: SizedBox(
-                                      width: double.infinity,
-                                      height: imageHeight,
+                                  // Image Header
+                                  Container(
+                                    width: double.infinity,
+                                    height: imageHeight,
+                                    decoration: BoxDecoration(
+                                        borderRadius: BorderRadius.circular(uiScale.radius(20)),
+                                        boxShadow: [
+                                          BoxShadow(
+                                            color: Colors.black.withOpacity(isDark ? 0.4 : 0.1),
+                                            blurRadius: 20,
+                                            offset: const Offset(0, 10),
+                                          )
+                                        ]
+                                    ),
+                                    child: ClipRRect(
+                                      borderRadius: BorderRadius.circular(uiScale.radius(20)),
                                       child: Image.asset(
                                         data.imagePath,
                                         fit: BoxFit.cover,
                                         errorBuilder: (_, __, ___) => Container(
-                                          color: Colors.white.withOpacity(0.10),
+                                          color: data.gradient.first.withOpacity(0.1),
                                           child: Icon(
                                             data.icon,
-                                            size: ui.icon(ui.compact ? 56 : 72),
-                                            color: Colors.white.withOpacity(0.65),
+                                            size: uiScale.icon(uiScale.compact ? 56 : 72),
+                                            color: data.gradient.first,
                                           ),
                                         ),
                                       ),
                                     ),
                                   ),
-                                  SizedBox(height: ui.gap(18)),
+
+                                  SizedBox(height: uiScale.gap(24)),
+
+                                  // Typography
                                   Text(
                                     data.title,
                                     textAlign: TextAlign.center,
                                     style: TextStyle(
-                                      fontSize: ui.font(ui.compact ? 24 : 32),
+                                      fontSize: uiScale.font(uiScale.compact ? 24 : 30),
                                       fontWeight: FontWeight.w900,
-                                      color: Colors.white,
-                                      height: 1.08,
-                                      letterSpacing: -0.4,
+                                      color: isDark ? cs.onSurface : AppColors.textPrimary,
+                                      height: 1.1,
+                                      letterSpacing: -0.5,
                                     ),
                                   ),
-                                  SizedBox(height: ui.gap(8)),
+                                  SizedBox(height: uiScale.gap(8)),
                                   Text(
                                     data.subtitle,
                                     textAlign: TextAlign.center,
                                     style: TextStyle(
-                                      fontSize: ui.font(ui.compact ? 15.5 : 20),
-                                      fontWeight: FontWeight.w700,
-                                      color: Colors.white.withOpacity(0.95),
+                                      fontSize: uiScale.font(uiScale.compact ? 15 : 18),
+                                      fontWeight: FontWeight.w800,
+                                      color: data.gradient.first,
                                     ),
                                   ),
-                                  SizedBox(height: ui.gap(14)),
+                                  SizedBox(height: uiScale.gap(16)),
                                   Text(
                                     data.description,
                                     textAlign: TextAlign.center,
                                     style: TextStyle(
-                                      fontSize: ui.font(ui.compact ? 13 : 15),
+                                      fontSize: uiScale.font(uiScale.compact ? 13.5 : 15),
                                       fontWeight: FontWeight.w600,
-                                      color: Colors.white,
+                                      color: isDark ? cs.onSurfaceVariant : AppColors.textSecondary,
                                       height: 1.45,
                                     ),
                                   ),
-                                  SizedBox(height: ui.gap(16)),
+                                  SizedBox(height: uiScale.gap(24)),
+
+                                  // Features Pills
                                   Wrap(
                                     alignment: WrapAlignment.center,
-                                    spacing: ui.gap(8),
-                                    runSpacing: ui.gap(8),
+                                    spacing: uiScale.gap(10),
+                                    runSpacing: uiScale.gap(10),
                                     children: data.features.map((feature) {
                                       return Container(
                                         padding: EdgeInsets.symmetric(
-                                          horizontal: ui.inset(12),
-                                          vertical: ui.inset(7),
+                                          horizontal: uiScale.inset(14),
+                                          vertical: uiScale.inset(8),
                                         ),
                                         decoration: BoxDecoration(
-                                          color: Colors.white.withOpacity(0.18),
-                                          borderRadius: BorderRadius.circular(
-                                            ui.radius(20),
-                                          ),
+                                          color: data.gradient.first.withOpacity(isDark ? 0.15 : 0.1),
+                                          borderRadius: BorderRadius.circular(uiScale.radius(24)),
                                           border: Border.all(
-                                            color: Colors.white.withOpacity(0.35),
+                                            color: data.gradient.first.withOpacity(0.3),
                                             width: 1,
                                           ),
                                         ),
                                         child: Text(
                                           feature,
                                           style: TextStyle(
-                                            fontSize: ui.font(12),
-                                            color: Colors.white,
-                                            fontWeight: FontWeight.w800,
+                                            fontSize: uiScale.font(12.5),
+                                            color: isDark ? cs.onSurface : AppColors.textPrimary,
+                                            fontWeight: FontWeight.w700,
                                           ),
                                         ),
                                       );
                                     }).toList(),
                                   ),
+
                                   if (data.isSafety) ...[
-                                    SizedBox(height: ui.gap(18)),
-                                    _buildSafetyCard(ui),
+                                    SizedBox(height: uiScale.gap(24)),
+                                    _buildSafetyCard(uiScale, isDark, cs, data.gradient.first),
                                   ],
                                 ],
                               ),
@@ -658,14 +646,14 @@ class _OnboardingScreenState extends State<OnboardingScreen>
     );
   }
 
-  Widget _buildSafetyCard(UIScale ui) {
+  Widget _buildSafetyCard(UIScale uiScale, bool isDark, ColorScheme cs, Color accentColor) {
     return Container(
-      padding: EdgeInsets.all(ui.inset(ui.compact ? 16 : 20)),
+      padding: EdgeInsets.all(uiScale.inset(uiScale.compact ? 16 : 20)),
       decoration: BoxDecoration(
-        color: Colors.white.withOpacity(0.15),
-        borderRadius: BorderRadius.circular(ui.radius(18)),
+        color: accentColor.withOpacity(0.1),
+        borderRadius: BorderRadius.circular(uiScale.radius(20)),
         border: Border.all(
-          color: Colors.white.withOpacity(0.30),
+          color: accentColor.withOpacity(0.4),
           width: 1.5,
         ),
       ),
@@ -674,47 +662,46 @@ class _OnboardingScreenState extends State<OnboardingScreen>
           Row(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              Icon(
-                Icons.favorite_rounded,
-                color: Colors.white,
-                size: ui.icon(ui.compact ? 20 : 22),
-              ),
-              SizedBox(width: ui.gap(10)),
+              Icon(Icons.favorite_rounded, color: accentColor, size: uiScale.icon(uiScale.compact ? 20 : 24)),
+              SizedBox(width: uiScale.gap(10)),
               Text(
                 'Our Commitment to You',
                 style: TextStyle(
-                  color: Colors.white,
-                  fontWeight: FontWeight.w800,
-                  fontSize: ui.font(ui.compact ? 15 : 16),
+                  color: isDark ? cs.onSurface : AppColors.textPrimary,
+                  fontWeight: FontWeight.w900,
+                  fontSize: uiScale.font(uiScale.compact ? 15 : 17),
                 ),
               ),
             ],
           ),
-          SizedBox(height: ui.gap(14)),
+          SizedBox(height: uiScale.gap(16)),
           ...const [
             'Treat everyone with kindness & respect',
             'Help keep one another safe; follow local laws',
             'Report any abuse or misconduct immediately',
           ].map(
                 (text) => Padding(
-              padding: EdgeInsets.only(bottom: ui.gap(8)),
+              padding: EdgeInsets.only(bottom: uiScale.gap(10)),
               child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Container(
-                    width: ui.icon(7),
-                    height: ui.icon(7),
-                    decoration: const BoxDecoration(
-                      color: Colors.white,
+                    margin: EdgeInsets.only(top: uiScale.gap(4)),
+                    width: uiScale.icon(8),
+                    height: uiScale.icon(8),
+                    decoration: BoxDecoration(
+                      color: accentColor,
                       shape: BoxShape.circle,
                     ),
                   ),
-                  SizedBox(width: ui.gap(12)),
+                  SizedBox(width: uiScale.gap(12)),
                   Expanded(
                     child: Text(
                       text,
                       style: TextStyle(
-                        fontSize: ui.font(13),
-                        color: Colors.white.withOpacity(0.95),
+                        fontSize: uiScale.font(13.5),
+                        color: isDark ? cs.onSurfaceVariant : AppColors.textSecondary,
+                        fontWeight: FontWeight.w600,
                         height: 1.4,
                       ),
                     ),
@@ -728,36 +715,27 @@ class _OnboardingScreenState extends State<OnboardingScreen>
     );
   }
 
-  Widget _buildFeatureBullet(String feature, UIScale ui) {
+  Widget _buildFeatureBullet(String feature, UIScale uiScale, Color accentColor, bool isDark, ColorScheme cs) {
     return Padding(
-      padding: EdgeInsets.only(bottom: ui.gap(12)),
+      padding: EdgeInsets.only(bottom: uiScale.gap(14)),
       child: Row(
         children: [
           Container(
-            width: ui.icon(ui.compact ? 9 : 10),
-            height: ui.icon(ui.compact ? 9 : 10),
+            padding: EdgeInsets.all(uiScale.inset(6)),
             decoration: BoxDecoration(
-              gradient: const LinearGradient(
-                colors: [AppColors.primary, AppColors.secondary],
-              ),
+              color: accentColor.withOpacity(0.15),
               shape: BoxShape.circle,
-              boxShadow: [
-                BoxShadow(
-                  color: AppColors.primary.withOpacity(0.35),
-                  blurRadius: 8,
-                  spreadRadius: 1,
-                ),
-              ],
             ),
+            child: Icon(Icons.check_rounded, size: uiScale.icon(14), color: accentColor),
           ),
-          SizedBox(width: ui.gap(12)),
+          SizedBox(width: uiScale.gap(14)),
           Expanded(
             child: Text(
               feature,
               style: TextStyle(
-                color: AppColors.textPrimary,
-                fontSize: ui.font(ui.compact ? 14 : 16),
-                fontWeight: FontWeight.w600,
+                color: isDark ? cs.onSurface : AppColors.textPrimary,
+                fontSize: uiScale.font(uiScale.compact ? 15 : 17),
+                fontWeight: FontWeight.w700,
               ),
             ),
           ),
@@ -766,22 +744,25 @@ class _OnboardingScreenState extends State<OnboardingScreen>
     );
   }
 
-  Widget _buildFooter(UIScale ui) {
+  Widget _buildFooter(UIScale uiScale, bool isDark, ColorScheme cs) {
     return AnimatedBuilder(
       animation: _fadeAnimation,
       builder: (context, child) => Opacity(
         opacity: _fadeAnimation.value,
         child: Padding(
           padding: EdgeInsets.symmetric(
-            horizontal: ui.inset(ui.tablet ? 28 : 18),
-            vertical: ui.inset(ui.compact ? 16 : 22),
+            horizontal: uiScale.inset(uiScale.tablet ? 32 : 24),
+            vertical: uiScale.inset(uiScale.compact ? 16 : 24),
           ),
           child: Column(
             children: [
+              // Premium Progress Indicators
               Row(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: List.generate(_pages.length, (index) {
                   final isActive = index == _currentPage;
+                  final activeColor = _pages[_currentPage].gradient.first;
+
                   return GestureDetector(
                     onTap: () {
                       HapticFeedback.lightImpact();
@@ -794,25 +775,17 @@ class _OnboardingScreenState extends State<OnboardingScreen>
                     child: AnimatedContainer(
                       duration: const Duration(milliseconds: 300),
                       curve: Curves.easeOutCubic,
-                      margin: EdgeInsets.symmetric(horizontal: ui.gap(4)),
-                      width: isActive ? ui.inset(34) : ui.inset(10),
-                      height: ui.inset(9),
+                      margin: EdgeInsets.symmetric(horizontal: uiScale.gap(6)),
+                      width: isActive ? uiScale.inset(36) : uiScale.inset(12),
+                      height: uiScale.inset(10),
                       decoration: BoxDecoration(
-                        gradient: isActive
-                            ? const LinearGradient(
-                          colors: [
-                            AppColors.primary,
-                            AppColors.secondary,
-                          ],
-                        )
-                            : null,
-                        color: isActive ? null : AppColors.mintBgLight,
-                        borderRadius: BorderRadius.circular(ui.radius(8)),
+                        color: isActive ? activeColor : (isDark ? cs.outline.withOpacity(0.3) : AppColors.mintBgLight),
+                        borderRadius: BorderRadius.circular(uiScale.radius(10)),
                         boxShadow: isActive
                             ? [
                           BoxShadow(
-                            color: AppColors.primary.withOpacity(0.35),
-                            blurRadius: 10,
+                            color: activeColor.withOpacity(0.4),
+                            blurRadius: 12,
                             offset: const Offset(0, 4),
                           ),
                         ]
@@ -822,32 +795,33 @@ class _OnboardingScreenState extends State<OnboardingScreen>
                   );
                 }),
               ),
-              SizedBox(height: ui.gap(18)),
+              SizedBox(height: uiScale.gap(24)),
+
+              // Navigation Buttons
               LayoutBuilder(
                 builder: (context, constraints) {
                   final wide = constraints.maxWidth >= 320;
+                  final activeGradient = _pages[_currentPage].gradient;
 
                   final nextButton = GestureDetector(
                     onTap: _nextPage,
                     child: AnimatedContainer(
-                      duration: const Duration(milliseconds: 250),
+                      duration: const Duration(milliseconds: 300),
                       width: _currentPage == _pages.length - 1
-                          ? (wide ? ui.inset(180) : double.infinity)
-                          : (wide ? ui.inset(160) : double.infinity),
-                      height: ui.compact ? 52 : 58,
+                          ? (wide ? uiScale.inset(200) : double.infinity)
+                          : (wide ? uiScale.inset(160) : double.infinity),
+                      height: uiScale.buttonHeight,
                       decoration: BoxDecoration(
-                        gradient: const LinearGradient(
-                          colors: [AppColors.primary, AppColors.secondary],
+                        gradient: LinearGradient(
+                          colors: activeGradient,
                           begin: Alignment.centerLeft,
                           end: Alignment.centerRight,
                         ),
-                        borderRadius: BorderRadius.circular(ui.radius(32)),
+                        borderRadius: BorderRadius.circular(uiScale.radius(32)),
                         boxShadow: [
                           BoxShadow(
-                            color: AppColors.primary.withOpacity(
-                              ui.reduceFx ? 0.20 : 0.40,
-                            ),
-                            blurRadius: ui.reduceFx ? 14 : 24,
+                            color: activeGradient.first.withOpacity(uiScale.reduceFx ? 0.20 : 0.40),
+                            blurRadius: uiScale.reduceFx ? 14 : 24,
                             offset: const Offset(0, 10),
                           ),
                         ],
@@ -856,22 +830,16 @@ class _OnboardingScreenState extends State<OnboardingScreen>
                         mainAxisAlignment: MainAxisAlignment.center,
                         children: [
                           Text(
-                            _currentPage == _pages.length - 1
-                                ? 'Get Started'
-                                : 'Next',
+                            _currentPage == _pages.length - 1 ? 'Get Started' : 'Next',
                             style: TextStyle(
                               color: Colors.white,
-                              fontSize: ui.font(16),
+                              fontSize: uiScale.font(16),
                               fontWeight: FontWeight.w800,
-                              letterSpacing: 0.4,
+                              letterSpacing: 0.5,
                             ),
                           ),
-                          SizedBox(width: ui.gap(8)),
-                          Icon(
-                            Icons.arrow_forward_rounded,
-                            color: Colors.white,
-                            size: ui.icon(22),
-                          ),
+                          SizedBox(width: uiScale.gap(8)),
+                          Icon(Icons.arrow_forward_rounded, color: Colors.white, size: uiScale.icon(22)),
                         ],
                       ),
                     ),
@@ -885,29 +853,22 @@ class _OnboardingScreenState extends State<OnboardingScreen>
                           GestureDetector(
                             onTap: _previousPage,
                             child: Container(
-                              width: ui.compact ? 48 : 54,
-                              height: ui.compact ? 48 : 54,
-                              margin: EdgeInsets.only(right: ui.gap(14)),
+                              width: uiScale.buttonHeight,
+                              height: uiScale.buttonHeight,
+                              margin: EdgeInsets.only(right: uiScale.gap(16)),
                               decoration: BoxDecoration(
-                                color: AppColors.surface,
+                                color: isDark ? cs.surfaceVariant : Colors.white,
                                 shape: BoxShape.circle,
-                                border: Border.all(
-                                  color: AppColors.mintBgLight,
-                                  width: 1.5,
-                                ),
+                                border: Border.all(color: isDark ? cs.outline.withOpacity(0.5) : AppColors.mintBgLight, width: 1.5),
                                 boxShadow: [
                                   BoxShadow(
-                                    color: Colors.black.withOpacity(0.06),
+                                    color: Colors.black.withOpacity(0.05),
                                     blurRadius: 16,
-                                    offset: const Offset(0, 8),
+                                    offset: const Offset(0, 6),
                                   ),
                                 ],
                               ),
-                              child: Icon(
-                                Icons.arrow_back_rounded,
-                                color: AppColors.primary,
-                                size: ui.icon(22),
-                              ),
+                              child: Icon(Icons.arrow_back_rounded, color: isDark ? cs.onSurface : AppColors.textPrimary, size: uiScale.icon(22)),
                             ),
                           ),
                         nextButton,
@@ -920,25 +881,18 @@ class _OnboardingScreenState extends State<OnboardingScreen>
                     children: [
                       if (_currentPage > 0)
                         Padding(
-                          padding: EdgeInsets.only(bottom: ui.gap(10)),
+                          padding: EdgeInsets.only(bottom: uiScale.gap(12)),
                           child: GestureDetector(
                             onTap: _previousPage,
                             child: Container(
-                              width: ui.compact ? 46 : 50,
-                              height: ui.compact ? 46 : 50,
+                              width: uiScale.buttonHeight,
+                              height: uiScale.buttonHeight,
                               decoration: BoxDecoration(
-                                color: AppColors.surface,
+                                color: isDark ? cs.surfaceVariant : Colors.white,
                                 shape: BoxShape.circle,
-                                border: Border.all(
-                                  color: AppColors.mintBgLight,
-                                  width: 1.5,
-                                ),
+                                border: Border.all(color: isDark ? cs.outline.withOpacity(0.5) : AppColors.mintBgLight, width: 1.5),
                               ),
-                              child: Icon(
-                                Icons.arrow_back_rounded,
-                                color: AppColors.primary,
-                                size: ui.icon(22),
-                              ),
+                              child: Icon(Icons.arrow_back_rounded, color: isDark ? cs.onSurface : AppColors.textPrimary, size: uiScale.icon(22)),
                             ),
                           ),
                         ),

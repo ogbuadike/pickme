@@ -6,7 +6,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 
 import '../themes/app_theme.dart';
-import '../routes/routes.dart';
+import '../ui/ui_scale.dart';
 
 /// TRANSPARENT FLOATING NAV BAR (glass, strokes only)
 /// - Labels UNDER icons (always visible) for side items
@@ -54,55 +54,29 @@ class _CustomBottomNavBarState extends State<CustomBottomNavBar>
     super.dispose();
   }
 
-  /// Navigation behavior preserved (plus onTap to parent).
   void _select(int index) {
+    HapticFeedback.lightImpact();
+    _wave.forward(from: 0).then((_) => _wave.reverse());
+
     widget.onTap(index);
 
     if (index == 2 && widget.onCenterAction != null) {
       widget.onCenterAction!.call();
     }
-
-    switch (index) {
-      case 0:
-        Navigator.of(context).pushReplacementNamed(AppRoutes.home);
-        break;
-      case 1:
-        Navigator.of(context).pushReplacementNamed(AppRoutes.history);
-        break;
-      case 2:
-      // handled by onCenterAction (if provided)
-        break;
-      case 3:
-      // Add when route is ready:
-      // Navigator.of(context).pushReplacementNamed(AppRoutes.dispatch);
-        break;
-      case 4:
-        Navigator.pushNamed(context, AppRoutes.profile);
-        break;
-    }
-
-    HapticFeedback.lightImpact();
-    _wave.forward(from: 0).then((_) => _wave.reverse());
   }
 
   @override
   Widget build(BuildContext context) {
-    final t = Theme.of(context).textTheme;
+    final uiScale = UIScale.of(context);
     final theme = Theme.of(context);
     final cs = theme.colorScheme;
     final isDark = theme.brightness == Brightness.dark;
 
-    final screenWidth = MediaQuery.of(context).size.width;
+    // Responsive text sizing mapped securely to your UIScale engine
+    final baseFontSize = uiScale.font(11.0);
+    final selectedFontSize = uiScale.font(12.5);
 
-    // Responsive text sizing based on screen width
-    final isSmallScreen = screenWidth < 360;
-    final isMediumScreen = screenWidth >= 360 && screenWidth < 414;
-
-    // Adjust label sizes responsively
-    final baseFontSize = isSmallScreen ? 10.0 : (isMediumScreen ? 11.0 : 12.0);
-    final selectedFontSize = isSmallScreen ? 11.0 : (isMediumScreen ? 12.0 : 13.0);
-
-    final baseLabel = (t.labelMedium ?? TextStyle(fontSize: baseFontSize));
+    final baseLabel = TextStyle(fontSize: baseFontSize);
     final selectedLabelStyle = baseLabel.copyWith(
       fontSize: selectedFontSize,
       fontWeight: FontWeight.w900,
@@ -116,23 +90,22 @@ class _CustomBottomNavBarState extends State<CustomBottomNavBar>
       letterSpacing: .15,
     );
 
-    // Responsive sizes
-    final kGlassH = isSmallScreen ? 72.0 : 78.0;
-    final kTotalH = isSmallScreen ? 110.0 : 116.0;
-    final kChip = isSmallScreen ? 34.0 : (isMediumScreen ? 36.0 : 38.0);
-    final kIcon = isSmallScreen ? 20.0 : (isMediumScreen ? 21.0 : 22.0);
-    final kHero = isSmallScreen ? 60.0 : (isMediumScreen ? 64.0 : 66.0);
+    // FIXED: Uses public uiScale.inset() instead of private .scale()
+    final kGlassH = uiScale.compact ? 72.0 : uiScale.inset(78.0);
+    final kTotalH = uiScale.compact ? 110.0 : uiScale.inset(116.0);
+    final kChip = uiScale.icon(38.0);
+    final kIcon = uiScale.icon(22.0);
+    final kHero = uiScale.icon(66.0);
     const int kCount = 5;
 
-    // Responsive padding
-    final horizontalPadding = isSmallScreen ? 10.0 : 14.0;
+    final horizontalPadding = uiScale.inset(14.0);
 
     return SafeArea(
       top: false,
       child: SizedBox(
         height: kTotalH,
         child: Padding(
-          padding: EdgeInsets.fromLTRB(horizontalPadding, 0, horizontalPadding, 12),
+          padding: EdgeInsets.fromLTRB(horizontalPadding, 0, horizontalPadding, uiScale.inset(12)),
           child: LayoutBuilder(
             builder: (_, constraints) {
               final width = constraints.maxWidth;
@@ -141,24 +114,24 @@ class _CustomBottomNavBarState extends State<CustomBottomNavBar>
                 clipBehavior: Clip.none,
                 alignment: Alignment.bottomCenter,
                 children: [
-                  // Rear plate (transparent, stroke + drop)
+                  // Rear plate shadow layer
                   Positioned(
-                    bottom: 8,
+                    bottom: uiScale.inset(8),
                     child: Container(
                       width: width,
                       height: kGlassH,
                       decoration: BoxDecoration(
                         color: Colors.transparent,
-                        borderRadius: BorderRadius.circular(26),
+                        borderRadius: BorderRadius.circular(uiScale.radius(26)),
                         border: Border.all(
                           color: isDark ? cs.outline.withOpacity(0.3) : AppColors.mintBgLight.withOpacity(.55),
                           width: 1,
                         ),
                         boxShadow: [
                           BoxShadow(
-                            color: isDark ? Colors.black.withOpacity(0.4) : AppColors.deep.withOpacity(.18),
+                            color: isDark ? Colors.black.withOpacity(0.6) : AppColors.deep.withOpacity(.18),
                             blurRadius: 36,
-                            offset: const Offset(0, 16),
+                            offset: Offset(0, uiScale.inset(16)),
                           ),
                         ],
                       ),
@@ -167,28 +140,21 @@ class _CustomBottomNavBarState extends State<CustomBottomNavBar>
 
                   // Raised inner bar (blur, stroke)
                   Positioned(
-                    bottom: 8,
+                    bottom: uiScale.inset(8),
                     child: ClipRRect(
-                      borderRadius: BorderRadius.circular(24),
+                      borderRadius: BorderRadius.circular(uiScale.radius(24)),
                       child: BackdropFilter(
-                        filter: ui.ImageFilter.blur(sigmaX: 16, sigmaY: 16),
+                        filter: ui.ImageFilter.blur(sigmaX: 20, sigmaY: 20),
                         child: Container(
                           width: width,
                           height: kGlassH,
                           decoration: BoxDecoration(
-                            color: isDark ? cs.surface.withOpacity(0.65) : Colors.transparent,
-                            borderRadius: BorderRadius.circular(24),
+                            color: isDark ? cs.surfaceVariant.withOpacity(0.75) : Colors.white.withOpacity(0.85),
+                            borderRadius: BorderRadius.circular(uiScale.radius(24)),
                             border: Border.all(
                               color: isDark ? cs.outline.withOpacity(0.5) : AppColors.mintBgLight.withOpacity(.85),
                               width: 1.2,
                             ),
-                            boxShadow: [
-                              BoxShadow(
-                                color: isDark ? Colors.black.withOpacity(0.2) : AppColors.deep.withOpacity(.10),
-                                blurRadius: 18,
-                                offset: const Offset(0, 6),
-                              ),
-                            ],
                           ),
                           child: Stack(
                             alignment: Alignment.center,
@@ -201,7 +167,7 @@ class _CustomBottomNavBarState extends State<CustomBottomNavBar>
                                     builder: (_, __) => CustomPaint(
                                       painter: _LiquidWavePainter(
                                         progress: _wave.value,
-                                        color: (isDark ? cs.primary : AppColors.primary).withOpacity(.08),
+                                        color: (isDark ? cs.primary : AppColors.primary).withOpacity(.15),
                                       ),
                                     ),
                                   ),
@@ -213,17 +179,12 @@ class _CustomBottomNavBarState extends State<CustomBottomNavBar>
                                 mainAxisAlignment: MainAxisAlignment.center,
                                 children: List.generate(kCount, (i) {
                                   if (i == 2) {
-                                    // Center spacer for hero button - use Expanded with flex
-                                    return const Expanded(
-                                      flex: 1,
-                                      child: SizedBox(),
-                                    );
+                                    return const Expanded(flex: 1, child: SizedBox());
                                   }
 
                                   final selected = i == widget.currentIndex;
                                   final badge = (i < widget.badges.length) ? widget.badges[i] : null;
 
-                                  // Use Expanded for responsive width
                                   return Expanded(
                                     flex: 1,
                                     child: _SideItem(
@@ -236,7 +197,7 @@ class _CustomBottomNavBarState extends State<CustomBottomNavBar>
                                       badgeCount: badge,
                                       onTap: () => _select(i),
                                       glassHeight: kGlassH,
-                                      isSmallScreen: isSmallScreen,
+                                      uiScale: uiScale,
                                       isDark: isDark,
                                       cs: cs,
                                     ),
@@ -250,9 +211,9 @@ class _CustomBottomNavBarState extends State<CustomBottomNavBar>
                     ),
                   ),
 
-                  // Center hero ("Send Me") — label intentionally hidden
+                  // Center hero ("Send Me")
                   Positioned(
-                    bottom: 8,
+                    bottom: uiScale.inset(8),
                     left: 0,
                     right: 0,
                     child: _CenterHero(
@@ -273,11 +234,7 @@ class _CustomBottomNavBarState extends State<CustomBottomNavBar>
     );
   }
 
-  /// Icon per index (SVGs recolored; fallback to Material when missing).
   Widget _iconForIndex(int index, bool selected, double size, bool isDark, ColorScheme cs) {
-    // In dark mode:
-    // - Unselected icons are grey (onSurfaceVariant)
-    // - Selected icons are pure black (onPrimary) because they sit on a neon green chip (primary)
     final Color iconColor = selected
         ? (isDark ? cs.onPrimary : AppColors.surface)
         : (isDark ? cs.onSurfaceVariant : AppColors.textSecondary);
@@ -312,9 +269,6 @@ class _CustomBottomNavBarState extends State<CustomBottomNavBar>
   }
 }
 
-/// Side item: centered; label always visible under icon.
-/// Active: primary chip + white icon; bold label.
-/// Selection box integrated with proper padding.
 class _SideItem extends StatelessWidget {
   final Widget icon;
   final String label;
@@ -324,7 +278,7 @@ class _SideItem extends StatelessWidget {
   final int? badgeCount;
   final double chipDiameter;
   final double glassHeight;
-  final bool isSmallScreen;
+  final UIScale uiScale;
   final bool isDark;
   final ColorScheme cs;
   final VoidCallback onTap;
@@ -338,9 +292,9 @@ class _SideItem extends StatelessWidget {
     required this.unselectedStyle,
     required this.onTap,
     required this.glassHeight,
+    required this.uiScale,
     required this.isDark,
     required this.cs,
-    this.isSmallScreen = false,
     this.badgeCount,
     this.chipDiameter = 38,
   }) : super(key: key);
@@ -349,18 +303,17 @@ class _SideItem extends StatelessWidget {
   Widget build(BuildContext context) {
     final chipColor = selected
         ? (isDark ? cs.primary : AppColors.primary)
-        : (isDark ? cs.surfaceVariant : AppColors.mintBgLight);
+        : Colors.transparent;
 
     final labelStyle = selected ? selectedStyle : unselectedStyle;
 
-    // Responsive padding & margin
-    final selectionMargin = isSmallScreen ? 3.0 : 5.0;
-    final selectionPadding = isSmallScreen ? 3.0 : 5.0;
-    final itemSpacing = isSmallScreen ? 2.0 : 4.0;
+    final selectionMargin = uiScale.inset(4.0);
+    final selectionPadding = uiScale.inset(4.0);
+    final itemSpacing = uiScale.gap(2.0);
 
     return Center(
       child: InkWell(
-        borderRadius: BorderRadius.circular(18),
+        borderRadius: BorderRadius.circular(uiScale.radius(18)),
         onTap: onTap,
         child: AnimatedContainer(
           duration: const Duration(milliseconds: 240),
@@ -376,7 +329,7 @@ class _SideItem extends StatelessWidget {
           decoration: selected
               ? BoxDecoration(
             color: (isDark ? cs.primary : AppColors.primary).withOpacity(isDark ? 0.15 : .12),
-            borderRadius: BorderRadius.circular(16),
+            borderRadius: BorderRadius.circular(uiScale.radius(16)),
             border: Border.all(
               color: (isDark ? cs.primary : AppColors.primary).withOpacity(isDark ? 0.5 : .32),
               width: 1.2,
@@ -393,7 +346,6 @@ class _SideItem extends StatelessWidget {
                   mainAxisAlignment: MainAxisAlignment.center,
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    // Centered icon chip with flexible sizing
                     Flexible(
                       child: AnimatedContainer(
                         duration: const Duration(milliseconds: 240),
@@ -409,9 +361,9 @@ class _SideItem extends StatelessWidget {
                           boxShadow: selected
                               ? [
                             BoxShadow(
-                              color: (isDark ? cs.primary : AppColors.primary).withOpacity(.25),
-                              blurRadius: 8,
-                              offset: const Offset(0, 2),
+                              color: (isDark ? cs.primary : AppColors.primary).withOpacity(.35),
+                              blurRadius: 10,
+                              offset: const Offset(0, 4),
                             ),
                           ]
                               : null,
@@ -424,7 +376,6 @@ class _SideItem extends StatelessWidget {
                       ),
                     ),
                     SizedBox(height: itemSpacing),
-                    // Label with proper constraints and flexible text
                     Flexible(
                       child: Padding(
                         padding: const EdgeInsets.symmetric(horizontal: 2),
@@ -440,18 +391,13 @@ class _SideItem extends StatelessWidget {
                     ),
                   ],
                 ),
-                // Badge positioning responsive
                 if (badgeCount != null && badgeCount! > 0)
                   Positioned(
-                    right: selected
-                        ? (isSmallScreen ? 4 : 8)
-                        : (isSmallScreen ? 8 : 12),
-                    top: selected
-                        ? (isSmallScreen ? 0 : 2)
-                        : (isSmallScreen ? 4 : 6),
+                    right: selected ? uiScale.inset(4) : uiScale.inset(8),
+                    top: selected ? 0 : uiScale.inset(4),
                     child: _Badge(
                       count: badgeCount!,
-                      isSmallScreen: isSmallScreen,
+                      uiScale: uiScale,
                       isDark: isDark,
                       cs: cs,
                     ),
@@ -465,7 +411,6 @@ class _SideItem extends StatelessWidget {
   }
 }
 
-/// Center hero: floating gradient button (label intentionally hidden).
 class _CenterHero extends StatelessWidget {
   final bool active;
   final AnimationController pulse;
@@ -509,7 +454,7 @@ class _CenterHero extends StatelessWidget {
                     spreadRadius: 2,
                   ),
                   BoxShadow(
-                    color: isDark ? Colors.black.withOpacity(0.5) : AppColors.deep.withOpacity(.10),
+                    color: isDark ? Colors.black.withOpacity(0.7) : AppColors.deep.withOpacity(.10),
                     blurRadius: 10,
                     offset: const Offset(0, 4),
                   ),
@@ -553,7 +498,6 @@ class _CenterHero extends StatelessWidget {
   }
 }
 
-/// "Send Me" glyph: location target + outbound motion.
 class _SendMeGlyph extends StatelessWidget {
   final bool isDark;
   final ColorScheme cs;
@@ -569,10 +513,10 @@ class _SendMeGlyph extends StatelessWidget {
     return Stack(
       alignment: Alignment.center,
       children: [
-        Icon(Icons.location_on, color: isDark ? cs.onPrimary : AppColors.surface, size: 22),
+        Icon(Icons.location_on, color: isDark ? cs.onPrimary : AppColors.surface, size: 24),
         Positioned(
-          right: 10,
-          top: 10,
+          right: 12,
+          top: 12,
           child: Icon(Icons.directions_walk_sharp, color: isDark ? cs.onPrimary : AppColors.surface, size: 20),
         ),
       ],
@@ -580,7 +524,6 @@ class _SendMeGlyph extends StatelessWidget {
   }
 }
 
-/// Thin sine wave stroke for subtle motion (no fill)
 class _LiquidWavePainter extends CustomPainter {
   final double progress;
   final Color color;
@@ -612,44 +555,48 @@ class _LiquidWavePainter extends CustomPainter {
       old.progress != progress || old.color != color;
 }
 
-/// Badge using only AppColors with responsive sizing
 class _Badge extends StatelessWidget {
   final int count;
-  final bool isSmallScreen;
+  final UIScale uiScale;
   final bool isDark;
   final ColorScheme cs;
 
   const _Badge({
     required this.count,
+    required this.uiScale,
     required this.isDark,
     required this.cs,
-    this.isSmallScreen = false,
   });
 
   @override
   Widget build(BuildContext context) {
     final txt = count > 99 ? '99+' : '$count';
-    final fontSize = isSmallScreen ? 9.0 : 10.0;
+    final fontSize = uiScale.font(9.0);
 
     return Container(
       padding: EdgeInsets.symmetric(
-        horizontal: isSmallScreen ? 4 : 6,
-        vertical: isSmallScreen ? 1 : 2,
+        horizontal: uiScale.inset(6),
+        vertical: uiScale.inset(2),
       ),
       constraints: BoxConstraints(
-        minWidth: isSmallScreen ? 16 : 20,
-        minHeight: isSmallScreen ? 14 : 16,
+        minWidth: uiScale.inset(20),
+        minHeight: uiScale.inset(16),
       ),
       decoration: BoxDecoration(
-        color: isDark ? cs.error : AppColors.error,
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: isDark ? cs.surface : AppColors.surface, width: 1),
+          color: isDark ? cs.error : AppColors.error,
+          borderRadius: BorderRadius.circular(uiScale.radius(10)),
+          border: Border.all(color: isDark ? cs.surface : AppColors.surface, width: 1.5),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(0.2),
+              blurRadius: 4,
+              offset: const Offset(0, 2),
+            )
+          ]
       ),
       child: Text(
         txt,
-        style: (Theme.of(context).textTheme.labelSmall ??
-            AppTextStyles.caption.copyWith(fontSize: fontSize))
-            .copyWith(
+        style: TextStyle(
           color: isDark ? cs.onError : AppColors.onErrorColor,
           fontSize: fontSize,
           fontWeight: FontWeight.w900,

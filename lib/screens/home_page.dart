@@ -3338,7 +3338,7 @@ class _HomePageState extends State<HomePage>
                 Divider(color: isDark ? cs.outline.withOpacity(0.5) : AppColors.mintBgLight.withOpacity(0.5)),
 
                 ListTile(
-                  leading: const Icon(Icons.money, color: Colors.green),
+                  leading: const Icon(Icons.attach_money_sharp, color: Colors.green),
                   title: Text('Cash (Manual)', style: TextStyle(color: isDark ? cs.onSurface : AppColors.textPrimary, fontWeight: FontWeight.w600)),
                   subtitle: Text('Pay the driver directly', style: TextStyle(color: isDark ? cs.onSurfaceVariant : AppColors.textSecondary)),
                   onTap: () {
@@ -4519,21 +4519,43 @@ class _HomePageState extends State<HomePage>
             ),
         ],
       ),
+
       bottomNavigationBar: (!_marketOpen && _tripPhase == TripPhase.browsing)
           ? CustomBottomNavBar(
         currentIndex: _currentIndex,
         onTap: (i) {
           HapticFeedback.selectionClick();
+
+          // Update the visual active state
           setState(() => _currentIndex = i);
-          if (i == 1) {
-            Navigator.pushNamed(context, AppRoutes.rideHistory);
-          }
-          if (i == 2) {
-            Navigator.pushNamed(context, AppRoutes.profile);
+
+          // Correctly map the index to the right page
+          switch (i) {
+            case 0:
+            // Index 0: Street Ride (Already on Home)
+              break;
+            case 1:
+            // Index 1: Campus Ride / History
+              Navigator.pushNamed(context, AppRoutes.rideHistory);
+              break;
+            case 2:
+            // Index 2: Center Button ("Send Me")
+            // Add whatever action you want the middle button to do here!
+            // e.g., _expand(); or Navigator.pushNamed(...)
+              break;
+            case 3:
+            // Index 3: Dispatch
+            // Navigator.pushNamed(context, AppRoutes.dispatch);
+              break;
+            case 4:
+            // Index 4: Profile
+              Navigator.pushNamed(context, AppRoutes.profile);
+              break;
           }
         },
       )
           : null,
+
     );
   }
 

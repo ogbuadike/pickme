@@ -2,7 +2,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:math' as math;
-import 'dart:ui';
+import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:local_auth/local_auth.dart';
@@ -15,6 +15,7 @@ import '../../api/api_client.dart';
 import '../../api/url.dart';
 import '../../routes/routes.dart';
 import '../../widgets/inner_background.dart';
+import '../../ui/ui_scale.dart';
 
 // Added imports for correct home routing
 import '../../driver/driver_home_page.dart';
@@ -292,17 +293,16 @@ class _AuthenticationScreenState extends State<AuthenticationScreen>
       final ok = await _localAuth.authenticate(
         localizedReason: 'Verify your identity',
         options: const AuthenticationOptions(
-          biometricOnly: true,        // keep true since you want strictly biometrics
+          biometricOnly: true,
           stickyAuth: true,
-          useErrorDialogs: true,      // let OS show helpful messages
-          sensitiveTransaction: true, // newer Android guidance
+          useErrorDialogs: true,
+          sensitiveTransaction: true,
         ),
       );
       if (ok) {
         await _submitPin(bypass: true);
       }
     } on PlatformException catch (e) {
-      // LOG THIS to see the actual cause
       debugPrint('local_auth error: code=${e.code}, message=${e.message}');
       var message = 'Authentication failed';
       switch (e.code) {
@@ -341,408 +341,6 @@ class _AuthenticationScreenState extends State<AuthenticationScreen>
     HapticFeedback.mediumImpact();
   }
 
-  @override
-  Widget build(BuildContext context) {
-    final size = MediaQuery.of(context).size;
-    final padding = MediaQuery.of(context).padding;
-    final isLandscape = size.width > size.height;
-    final isTablet = size.shortestSide > 600;
-    final isSmallPhone = size.width < 360;
-
-    return Scaffold(
-      backgroundColor: Theme.of(context).colorScheme.background,
-      body: Stack(
-        children: [
-          // Premium holographic background
-          const BackgroundWidget(
-            style: HoloStyle.flux,
-            animate: true,
-            intensity: 0.7,
-          ),
-
-          // Main content with proper responsive layout
-          SafeArea(
-            child: FadeTransition(
-              opacity: _fadeIn,
-              child: isLandscape
-                  ? _buildLandscapeLayout(size, padding, isTablet)
-                  : _buildPortraitLayout(size, padding, isTablet, isSmallPhone),
-            ),
-          ),
-
-          // Loading overlay
-          if (_loading) _buildLoadingOverlay(),
-
-          // Lock overlay
-          if (_locked) _buildLockOverlay(),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildPortraitLayout(Size size, EdgeInsets padding, bool isTablet, bool isSmallPhone) {
-    final keypadSize = isTablet ? 400.0 : (isSmallPhone ? 280.0 : 320.0);
-
-    return Center(
-      child: SingleChildScrollView(
-        child: Padding(
-          padding: EdgeInsets.symmetric(
-            horizontal: isTablet ? 64 : (isSmallPhone ? 20 : 32),
-            vertical: 24,
-          ),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              _buildLogo(isTablet ? 120 : (isSmallPhone ? 80 : 100)),
-              SizedBox(height: isSmallPhone ? 24 : 32),
-              _buildWelcomeSection(isTablet, isSmallPhone),
-              SizedBox(height: isSmallPhone ? 32 : 48),
-              _buildPinIndicator(isSmallPhone),
-              SizedBox(height: isSmallPhone ? 24 : 32),
-              if (_biometricAvailable) ...[
-                _buildBiometricButton(isTablet),
-                SizedBox(height: isSmallPhone ? 32 : 48),
-              ],
-              Container(
-                width: keypadSize,
-                constraints: BoxConstraints(
-                  maxWidth: size.width - 40,
-                  maxHeight: isSmallPhone ? 320 : 400,
-                ),
-                child: _buildNumPad(isTablet, isSmallPhone, false),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildLandscapeLayout(Size size, EdgeInsets padding, bool isTablet) {
-    return Center(
-      child: SingleChildScrollView(
-        scrollDirection: Axis.horizontal,
-        child: Container(
-          width: math.max(size.width, 600),
-          padding: EdgeInsets.symmetric(
-            horizontal: isTablet ? 64 : 32,
-            vertical: 16,
-          ),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-            children: [
-              // Left side - Logo and info
-              Expanded(
-                flex: isTablet ? 3 : 2,
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    _buildLogo(isTablet ? 100 : 80),
-                    const SizedBox(height: 16),
-                    _buildWelcomeSection(isTablet, false),
-                    const SizedBox(height: 24),
-                    _buildPinIndicator(false),
-                    if (_biometricAvailable) ...[
-                      const SizedBox(height: 16),
-                      _buildBiometricButton(isTablet),
-                    ],
-                  ],
-                ),
-              ),
-
-              // Divider
-              Container(
-                width: 1,
-                height: size.height * 0.5,
-                margin: const EdgeInsets.symmetric(horizontal: 32),
-                decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    begin: Alignment.topCenter,
-                    end: Alignment.bottomCenter,
-                    colors: [
-                      Colors.transparent,
-                      AppColors.mintBgLight.withOpacity(0.3),
-                      AppColors.mintBgLight.withOpacity(0.3),
-                      Colors.transparent,
-                    ],
-                  ),
-                ),
-              ),
-
-              // Right side - Numpad
-              Expanded(
-                flex: isTablet ? 2 : 2,
-                child: Container(
-                  constraints: BoxConstraints(
-                    maxWidth: 320,
-                    maxHeight: size.height - 100,
-                  ),
-                  child: _buildNumPad(isTablet, false, true),
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildLogo(double size) {
-    return AnimatedBuilder(
-      animation: _logoFloat,
-      builder: (context, child) {
-        return Transform.translate(
-          offset: Offset(0, _logoFloat.value),
-          child: Container(
-            width: size,
-            height: size,
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              gradient: LinearGradient(
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-                colors: [
-                  AppColors.surface,
-                  AppColors.mintBgLight.withOpacity(0.9),
-                ],
-              ),
-              boxShadow: [
-                BoxShadow(
-                  color: AppColors.primary.withOpacity(0.3),
-                  blurRadius: 30,
-                  spreadRadius: 5,
-                  offset: Offset(0, _logoFloat.value + 10),
-                ),
-                BoxShadow(
-                  color: AppColors.secondary.withOpacity(0.2),
-                  blurRadius: 20,
-                  spreadRadius: 2,
-                  offset: Offset(0, _logoFloat.value + 5),
-                ),
-              ],
-            ),
-            child: Padding(
-              padding: EdgeInsets.all(size * 0.2),
-              child: Image.asset(
-                'image/pickme.png',
-                fit: BoxFit.contain,
-              ),
-            ),
-          ),
-        );
-      },
-    );
-  }
-
-  Widget _buildWelcomeSection(bool isTablet, bool isSmallPhone) {
-    final titleSize = isTablet ? 32.0 : (isSmallPhone ? 24.0 : 28.0);
-    final subtitleSize = isTablet ? 18.0 : (isSmallPhone ? 14.0 : 16.0);
-
-    return Column(
-      children: [
-        Text(
-          'Welcome Back',
-          style: TextStyle(
-            fontSize: subtitleSize,
-            color: AppColors.textSecondary,
-            fontWeight: FontWeight.w500,
-            letterSpacing: 0.5,
-          ),
-        ),
-        const SizedBox(height: 8),
-        Text(
-          _username ?? 'User',
-          style: TextStyle(
-            fontSize: titleSize,
-            color: AppColors.textPrimary,
-            fontWeight: FontWeight.w800,
-            letterSpacing: -0.5,
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildPinIndicator(bool isSmallPhone) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
-      decoration: BoxDecoration(
-        color: AppColors.surface.withOpacity(0.1),
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(
-          color: AppColors.primary.withOpacity(0.3),
-          width: 1,
-        ),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: List.generate(_pinLen, (index) {
-          final filled = _pin[index].isNotEmpty;
-          final active = index == _cursor && !_locked;
-
-          return AnimatedBuilder(
-            animation: _dotScale,
-            builder: (context, child) {
-              return Container(
-                margin: EdgeInsets.symmetric(
-                  horizontal: isSmallPhone ? 8 : 12,
-                ),
-                width: isSmallPhone ? 14 : 16,
-                height: isSmallPhone ? 14 : 16,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: filled
-                      ? AppColors.primary
-                      : active
-                      ? AppColors.primary.withOpacity(0.2)
-                      : Colors.transparent,
-                  border: Border.all(
-                    color: active
-                        ? AppColors.primary
-                        : filled
-                        ? AppColors.primary.withOpacity(0.6)
-                        : AppColors.mintBgLight.withOpacity(0.5),
-                    width: active ? 2.5 : 1.5,
-                  ),
-                ),
-                child: filled
-                    ? Transform.scale(
-                  scale: _cursor > index ? 1.0 : _dotScale.value,
-                  child: Container(
-                    decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      color: AppColors.primary,
-                    ),
-                  ),
-                )
-                    : null,
-              );
-            },
-          );
-        }),
-      ),
-    );
-  }
-
-  Widget _buildBiometricButton(bool isTablet) {
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        onTap: _locked ? null : _biometric,
-        borderRadius: BorderRadius.circular(30),
-        child: Container(
-          padding: EdgeInsets.symmetric(
-            horizontal: isTablet ? 32 : 24,
-            vertical: isTablet ? 14 : 12,
-          ),
-          decoration: BoxDecoration(
-            gradient: LinearGradient(
-              colors: [
-                AppColors.primary.withOpacity(0.1),
-                AppColors.secondary.withOpacity(0.1),
-              ],
-            ),
-            borderRadius: BorderRadius.circular(30),
-            border: Border.all(
-              color: AppColors.primary.withOpacity(0.3),
-              width: 1,
-            ),
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(
-                Icons.fingerprint_rounded,
-                color: AppColors.primary,
-                size: isTablet ? 28 : 24,
-              ),
-              const SizedBox(width: 12),
-              Text(
-                'Use Biometrics',
-                style: TextStyle(
-                  color: AppColors.primary,
-                  fontWeight: FontWeight.w600,
-                  fontSize: isTablet ? 16 : 14,
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildNumPad(bool isTablet, bool isSmallPhone, bool isLandscape) {
-    final buttonSize = isTablet
-        ? 70.0
-        : (isSmallPhone ? 55.0 : (isLandscape ? 50.0 : 60.0));
-    final spacing = isTablet
-        ? 16.0
-        : (isSmallPhone ? 10.0 : (isLandscape ? 8.0 : 12.0));
-
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      mainAxisAlignment: MainAxisAlignment.center,
-      children: [
-        // Numbers 1-9
-        for (int row = 0; row < 3; row++)
-          Padding(
-            padding: EdgeInsets.only(bottom: spacing),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                for (int col = 0; col < 3; col++)
-                  Padding(
-                    padding: EdgeInsets.symmetric(horizontal: spacing / 2),
-                    child: _NumpadButton(
-                      label: '${row * 3 + col + 1}',
-                      size: buttonSize,
-                      onTap: () => _handleInput('${row * 3 + col + 1}'),
-                      disabled: _locked || _loading,
-                    ),
-                  ),
-              ],
-            ),
-          ),
-        // Bottom row
-        Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Padding(
-              padding: EdgeInsets.symmetric(horizontal: spacing / 2),
-              child: _NumpadButton(
-                icon: Icons.fingerprint_rounded,
-                size: buttonSize,
-                onTap: _biometric,
-                disabled: _locked || _loading || !_biometricAvailable,
-                accent: true,
-              ),
-            ),
-            Padding(
-              padding: EdgeInsets.symmetric(horizontal: spacing / 2),
-              child: _NumpadButton(
-                label: '0',
-                size: buttonSize,
-                onTap: () => _handleInput('0'),
-                disabled: _locked || _loading,
-              ),
-            ),
-            Padding(
-              padding: EdgeInsets.symmetric(horizontal: spacing / 2),
-              child: _NumpadButton(
-                icon: Icons.backspace_outlined,
-                size: buttonSize,
-                onTap: _handleBackspace,
-                disabled: _locked || _loading || _cursor == 0,
-              ),
-            ),
-          ],
-        ),
-      ],
-    );
-  }
-
   void _handleInput(String digit) {
     if (_locked || _loading || _cursor >= _pinLen) return;
 
@@ -769,57 +367,450 @@ class _AuthenticationScreenState extends State<AuthenticationScreen>
     });
   }
 
-  Widget _buildLoadingOverlay() {
-    return Container(
-      color: Colors.black.withOpacity(0.7),
-      child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: 5, sigmaY: 5),
-        child: Center(
+  @override
+  Widget build(BuildContext context) {
+    final uiScale = UIScale.of(context);
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+    final cs = theme.colorScheme;
+
+    return Scaffold(
+      backgroundColor: isDark ? Colors.black : theme.colorScheme.background,
+      body: Stack(
+        children: [
+          // Premium holographic background
+          BackgroundWidget(
+            style: HoloStyle.flux,
+            animate: true,
+            intensity: isDark ? 0.3 : 0.7,
+          ),
+
+          // Main content with proper responsive layout
+          SafeArea(
+            child: FadeTransition(
+              opacity: _fadeIn,
+              child: uiScale.landscape
+                  ? _buildLandscapeLayout(uiScale, isDark, cs)
+                  : _buildPortraitLayout(uiScale, isDark, cs),
+            ),
+          ),
+
+          // Loading overlay
+          if (_loading) _buildLoadingOverlay(uiScale, isDark, cs),
+
+          // Lock overlay
+          if (_locked) _buildLockOverlay(uiScale, isDark, cs),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildPortraitLayout(UIScale uiScale, bool isDark, ColorScheme cs) {
+    final keypadSize = uiScale.tablet ? 400.0 : uiScale.inset(320.0);
+
+    return Center(
+      child: SingleChildScrollView(
+        child: Padding(
+          padding: EdgeInsets.symmetric(
+            horizontal: uiScale.tablet ? uiScale.inset(64) : uiScale.inset(24),
+            vertical: uiScale.inset(24),
+          ),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              _buildLogo(uiScale.heroLogoSize * 0.8, isDark, cs),
+              SizedBox(height: uiScale.gap(24)),
+              _buildWelcomeSection(uiScale, isDark, cs),
+              SizedBox(height: uiScale.gap(36)),
+              _buildPinIndicator(uiScale, isDark, cs),
+              SizedBox(height: uiScale.gap(32)),
+              if (_biometricAvailable) ...[
+                _buildBiometricButton(uiScale, isDark, cs),
+                SizedBox(height: uiScale.gap(36)),
+              ],
+              Container(
+                width: keypadSize,
+                constraints: BoxConstraints(
+                  maxWidth: uiScale.width - uiScale.inset(40),
+                ),
+                child: _buildNumPad(uiScale, isDark, cs, isLandscape: false),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildLandscapeLayout(UIScale uiScale, bool isDark, ColorScheme cs) {
+    return Center(
+      child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: Container(
+          width: math.max(uiScale.width, 600),
+          padding: EdgeInsets.symmetric(
+            horizontal: uiScale.tablet ? uiScale.inset(64) : uiScale.inset(32),
+            vertical: uiScale.inset(16),
+          ),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+            children: [
+              // Left side - Logo and info
+              Expanded(
+                flex: uiScale.tablet ? 3 : 2,
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    _buildLogo(uiScale.inset(80), isDark, cs),
+                    SizedBox(height: uiScale.gap(16)),
+                    _buildWelcomeSection(uiScale, isDark, cs),
+                    SizedBox(height: uiScale.gap(24)),
+                    _buildPinIndicator(uiScale, isDark, cs),
+                    if (_biometricAvailable) ...[
+                      SizedBox(height: uiScale.gap(16)),
+                      _buildBiometricButton(uiScale, isDark, cs),
+                    ],
+                  ],
+                ),
+              ),
+
+              // Divider
+              Container(
+                width: 1,
+                height: uiScale.height * 0.5,
+                margin: EdgeInsets.symmetric(horizontal: uiScale.inset(32)),
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                    colors: [
+                      Colors.transparent,
+                      isDark ? cs.outline.withOpacity(0.5) : AppColors.mintBgLight.withOpacity(0.3),
+                      isDark ? cs.outline.withOpacity(0.5) : AppColors.mintBgLight.withOpacity(0.3),
+                      Colors.transparent,
+                    ],
+                  ),
+                ),
+              ),
+
+              // Right side - Numpad
+              Expanded(
+                flex: uiScale.tablet ? 2 : 2,
+                child: Container(
+                  constraints: BoxConstraints(
+                    maxWidth: uiScale.inset(320),
+                    maxHeight: uiScale.height - uiScale.inset(100),
+                  ),
+                  child: _buildNumPad(uiScale, isDark, cs, isLandscape: true),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildLogo(double size, bool isDark, ColorScheme cs) {
+    return AnimatedBuilder(
+      animation: _logoFloat,
+      builder: (context, child) {
+        return Transform.translate(
+          offset: Offset(0, _logoFloat.value),
           child: Container(
-            padding: const EdgeInsets.all(40),
+            width: size,
+            height: size,
             decoration: BoxDecoration(
+              shape: BoxShape.circle,
               gradient: LinearGradient(
                 begin: Alignment.topLeft,
                 end: Alignment.bottomRight,
-                colors: [
-                  AppColors.surface.withOpacity(0.95),
-                  AppColors.mintBgLight.withOpacity(0.95),
-                ],
+                colors: isDark
+                    ? [cs.surfaceVariant, cs.primary.withOpacity(0.2)]
+                    : [AppColors.surface, AppColors.mintBgLight.withOpacity(0.9)],
               ),
-              borderRadius: BorderRadius.circular(24),
-              border: Border.all(
-                color: AppColors.primary.withOpacity(0.3),
-                width: 1,
+              boxShadow: [
+                BoxShadow(
+                  color: (isDark ? cs.primary : AppColors.primary).withOpacity(0.3),
+                  blurRadius: 30,
+                  spreadRadius: 5,
+                  offset: Offset(0, _logoFloat.value + 10),
+                ),
+                BoxShadow(
+                  color: (isDark ? cs.secondary : AppColors.secondary).withOpacity(0.2),
+                  blurRadius: 20,
+                  spreadRadius: 2,
+                  offset: Offset(0, _logoFloat.value + 5),
+                ),
+              ],
+            ),
+            child: Padding(
+              padding: EdgeInsets.all(size * 0.2),
+              child: Image.asset(
+                'image/pickme.png',
+                fit: BoxFit.contain,
+                color: isDark ? cs.onPrimary : AppColors.surface,
               ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildWelcomeSection(UIScale uiScale, bool isDark, ColorScheme cs) {
+    return Column(
+      children: [
+        Text(
+          'Welcome Back',
+          style: TextStyle(
+            fontSize: uiScale.font(16),
+            color: isDark ? cs.onSurfaceVariant : AppColors.textSecondary,
+            fontWeight: FontWeight.w600,
+            letterSpacing: 0.5,
+          ),
+        ),
+        SizedBox(height: uiScale.gap(8)),
+        Text(
+          _username ?? 'User',
+          style: TextStyle(
+            fontSize: uiScale.font(28),
+            color: isDark ? cs.onSurface : AppColors.textPrimary,
+            fontWeight: FontWeight.w900,
+            letterSpacing: -0.5,
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildPinIndicator(UIScale uiScale, bool isDark, ColorScheme cs) {
+    return Container(
+      padding: EdgeInsets.symmetric(horizontal: uiScale.inset(20), vertical: uiScale.inset(16)),
+      decoration: BoxDecoration(
+        color: isDark ? cs.surfaceVariant.withOpacity(0.5) : AppColors.surface.withOpacity(0.8),
+        borderRadius: BorderRadius.circular(uiScale.radius(20)),
+        border: Border.all(
+          color: (isDark ? cs.primary : AppColors.primary).withOpacity(0.3),
+          width: 1.5,
+        ),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: List.generate(_pinLen, (index) {
+          final filled = _pin[index].isNotEmpty;
+          final active = index == _cursor && !_locked;
+
+          return AnimatedBuilder(
+            animation: _dotScale,
+            builder: (context, child) {
+              return Container(
+                margin: EdgeInsets.symmetric(horizontal: uiScale.inset(10)),
+                width: uiScale.icon(16),
+                height: uiScale.icon(16),
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: filled
+                      ? (isDark ? cs.primary : AppColors.primary)
+                      : active
+                      ? (isDark ? cs.primary : AppColors.primary).withOpacity(0.2)
+                      : Colors.transparent,
+                  border: Border.all(
+                    color: active
+                        ? (isDark ? cs.primary : AppColors.primary)
+                        : filled
+                        ? (isDark ? cs.primary : AppColors.primary).withOpacity(0.6)
+                        : (isDark ? cs.outline : AppColors.mintBgLight).withOpacity(0.5),
+                    width: active ? 2.5 : 1.5,
+                  ),
+                ),
+                child: filled
+                    ? Transform.scale(
+                  scale: _cursor > index ? 1.0 : _dotScale.value,
+                  child: Container(
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: isDark ? cs.primary : AppColors.primary,
+                    ),
+                  ),
+                )
+                    : null,
+              );
+            },
+          );
+        }),
+      ),
+    );
+  }
+
+  Widget _buildBiometricButton(UIScale uiScale, bool isDark, ColorScheme cs) {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: _locked ? null : _biometric,
+        borderRadius: BorderRadius.circular(uiScale.radius(30)),
+        child: Container(
+          padding: EdgeInsets.symmetric(
+            horizontal: uiScale.inset(24),
+            vertical: uiScale.inset(12),
+          ),
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              colors: [
+                (isDark ? cs.primary : AppColors.primary).withOpacity(0.15),
+                (isDark ? cs.secondary : AppColors.secondary).withOpacity(0.15),
+              ],
+            ),
+            borderRadius: BorderRadius.circular(uiScale.radius(30)),
+            border: Border.all(
+              color: (isDark ? cs.primary : AppColors.primary).withOpacity(0.4),
+              width: 1.5,
+            ),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                Icons.fingerprint_rounded,
+                color: isDark ? cs.primary : AppColors.primary,
+                size: uiScale.icon(24),
+              ),
+              SizedBox(width: uiScale.gap(12)),
+              Text(
+                'Use Biometrics',
+                style: TextStyle(
+                  color: isDark ? cs.primary : AppColors.primary,
+                  fontWeight: FontWeight.w700,
+                  fontSize: uiScale.font(14),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildNumPad(UIScale uiScale, bool isDark, ColorScheme cs, {required bool isLandscape}) {
+    final buttonSize = uiScale.icon(isLandscape ? 56.0 : 64.0);
+    final spacing = uiScale.gap(12.0);
+
+    Widget cell(Widget child) => Padding(
+      padding: EdgeInsets.symmetric(horizontal: spacing / 2),
+      child: child,
+    );
+
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        for (int row = 0; row < 3; row++)
+          Padding(
+            padding: EdgeInsets.only(bottom: spacing),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                for (int col = 0; col < 3; col++)
+                  cell(_NumpadButton(
+                    label: '${row * 3 + col + 1}',
+                    size: buttonSize,
+                    onTap: () => _handleInput('${row * 3 + col + 1}'),
+                    disabled: _locked || _loading,
+                    isDark: isDark,
+                    cs: cs,
+                  )),
+              ],
+            ),
+          ),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            cell(
+              _biometricAvailable
+                  ? _NumpadButton(
+                icon: Icons.fingerprint_rounded,
+                size: buttonSize,
+                onTap: _biometric,
+                disabled: _locked || _loading,
+                accent: true,
+                isDark: isDark,
+                cs: cs,
+              )
+                  : SizedBox(width: buttonSize, height: buttonSize),
+            ),
+            cell(_NumpadButton(
+              label: '0',
+              size: buttonSize,
+              onTap: () => _handleInput('0'),
+              disabled: _locked || _loading,
+              isDark: isDark,
+              cs: cs,
+            )),
+            cell(_NumpadButton(
+              icon: Icons.backspace_rounded,
+              size: buttonSize,
+              onTap: _handleBackspace,
+              disabled: _locked || _loading || _cursor == 0,
+              isDark: isDark,
+              cs: cs,
+            )),
+          ],
+        ),
+      ],
+    );
+  }
+
+  Widget _buildLoadingOverlay(UIScale uiScale, bool isDark, ColorScheme cs) {
+    return Container(
+      color: Colors.black.withOpacity(0.7),
+      child: BackdropFilter(
+        filter: ui.ImageFilter.blur(sigmaX: 10, sigmaY: 10),
+        child: Center(
+          child: Container(
+            padding: EdgeInsets.all(uiScale.inset(40)),
+            decoration: BoxDecoration(
+                color: isDark ? cs.surface.withOpacity(0.9) : Colors.white.withOpacity(0.95),
+                borderRadius: BorderRadius.circular(uiScale.radius(24)),
+                border: Border.all(
+                  color: (isDark ? cs.primary : AppColors.primary).withOpacity(0.3),
+                  width: 1.5,
+                ),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withOpacity(isDark ? 0.5 : 0.1),
+                    blurRadius: 30,
+                    offset: const Offset(0, 10),
+                  )
+                ]
             ),
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
                 SizedBox(
-                  width: 48,
-                  height: 48,
+                  width: uiScale.icon(48),
+                  height: uiScale.icon(48),
                   child: CircularProgressIndicator(
-                    strokeWidth: 3,
-                    valueColor: AlwaysStoppedAnimation<Color>(
-                      AppColors.primary,
-                    ),
+                      strokeWidth: 3.5,
+                      color: isDark ? cs.primary : AppColors.primary
                   ),
                 ),
-                const SizedBox(height: 24),
+                SizedBox(height: uiScale.gap(24)),
                 Text(
                   'Verifying PIN',
                   style: TextStyle(
-                    color: AppColors.textPrimary,
-                    fontSize: 18,
-                    fontWeight: FontWeight.w700,
+                    color: isDark ? cs.onSurface : AppColors.textPrimary,
+                    fontSize: uiScale.font(18),
+                    fontWeight: FontWeight.w800,
                   ),
                 ),
-                const SizedBox(height: 8),
+                SizedBox(height: uiScale.gap(8)),
                 Text(
                   'Please wait...',
                   style: TextStyle(
-                    color: AppColors.textSecondary,
-                    fontSize: 14,
+                    color: isDark ? cs.onSurfaceVariant : AppColors.textSecondary,
+                    fontSize: uiScale.font(14),
+                    fontWeight: FontWeight.w600,
                   ),
                 ),
               ],
@@ -830,35 +821,34 @@ class _AuthenticationScreenState extends State<AuthenticationScreen>
     );
   }
 
-  Widget _buildLockOverlay() {
+  Widget _buildLockOverlay(UIScale uiScale, bool isDark, ColorScheme cs) {
     final minutes = _remaining.inMinutes;
     final seconds = _remaining.inSeconds % 60;
 
     return Container(
-      color: Colors.black.withOpacity(0.8),
+      color: Colors.black.withOpacity(0.85),
       child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
+        filter: ui.ImageFilter.blur(sigmaX: 16, sigmaY: 16),
         child: Center(
           child: Container(
-            margin: const EdgeInsets.all(32),
-            padding: const EdgeInsets.all(40),
+            margin: EdgeInsets.all(uiScale.inset(32)),
+            padding: EdgeInsets.all(uiScale.inset(40)),
             decoration: BoxDecoration(
               gradient: LinearGradient(
                 begin: Alignment.topLeft,
                 end: Alignment.bottomRight,
-                colors: [
-                  AppColors.surface,
-                  AppColors.mintBgLight,
-                ],
+                colors: isDark
+                    ? [cs.surface, cs.surfaceVariant]
+                    : [AppColors.surface, AppColors.mintBgLight],
               ),
-              borderRadius: BorderRadius.circular(32),
+              borderRadius: BorderRadius.circular(uiScale.radius(32)),
               border: Border.all(
-                color: AppColors.error.withOpacity(0.3),
+                color: cs.error.withOpacity(0.3),
                 width: 2,
               ),
               boxShadow: [
                 BoxShadow(
-                  color: AppColors.error.withOpacity(0.2),
+                  color: cs.error.withOpacity(0.2),
                   blurRadius: 30,
                   spreadRadius: 5,
                 ),
@@ -868,55 +858,55 @@ class _AuthenticationScreenState extends State<AuthenticationScreen>
               mainAxisSize: MainAxisSize.min,
               children: [
                 Container(
-                  width: 80,
-                  height: 80,
+                  width: uiScale.icon(80),
+                  height: uiScale.icon(80),
                   decoration: BoxDecoration(
                     shape: BoxShape.circle,
                     gradient: LinearGradient(
                       colors: [
-                        AppColors.error.withOpacity(0.1),
-                        AppColors.error.withOpacity(0.2),
+                        cs.error.withOpacity(0.1),
+                        cs.error.withOpacity(0.2),
                       ],
                     ),
                     border: Border.all(
-                      color: AppColors.error.withOpacity(0.3),
+                      color: cs.error.withOpacity(0.3),
                       width: 2,
                     ),
                   ),
                   child: Icon(
                     Icons.lock_clock_rounded,
-                    size: 40,
-                    color: AppColors.error,
+                    size: uiScale.icon(40),
+                    color: cs.error,
                   ),
                 ),
-                const SizedBox(height: 32),
+                SizedBox(height: uiScale.gap(32)),
                 Text(
                   'Account Locked',
                   style: TextStyle(
-                    fontSize: 24,
+                    fontSize: uiScale.font(24),
                     fontWeight: FontWeight.w800,
-                    color: AppColors.textPrimary,
+                    color: isDark ? cs.onSurface : AppColors.textPrimary,
                   ),
                 ),
-                const SizedBox(height: 12),
+                SizedBox(height: uiScale.gap(12)),
                 Text(
                   'Too many failed attempts',
                   style: TextStyle(
-                    fontSize: 16,
-                    color: AppColors.textSecondary,
+                    fontSize: uiScale.font(16),
+                    color: isDark ? cs.onSurfaceVariant : AppColors.textSecondary,
                   ),
                 ),
-                const SizedBox(height: 32),
+                SizedBox(height: uiScale.gap(32)),
                 Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 32,
-                    vertical: 20,
+                  padding: EdgeInsets.symmetric(
+                    horizontal: uiScale.inset(32),
+                    vertical: uiScale.inset(20),
                   ),
                   decoration: BoxDecoration(
-                    color: AppColors.surface.withOpacity(0.5),
-                    borderRadius: BorderRadius.circular(20),
+                    color: (isDark ? cs.surfaceVariant : AppColors.surface).withOpacity(0.5),
+                    borderRadius: BorderRadius.circular(uiScale.radius(20)),
                     border: Border.all(
-                      color: AppColors.mintBgLight.withOpacity(0.5),
+                      color: (isDark ? cs.outline : AppColors.mintBgLight).withOpacity(0.5),
                       width: 1,
                     ),
                   ),
@@ -925,17 +915,17 @@ class _AuthenticationScreenState extends State<AuthenticationScreen>
                       Text(
                         'Try again in',
                         style: TextStyle(
-                          color: AppColors.textSecondary,
-                          fontSize: 14,
+                          color: isDark ? cs.onSurfaceVariant : AppColors.textSecondary,
+                          fontSize: uiScale.font(14),
                         ),
                       ),
-                      const SizedBox(height: 8),
+                      SizedBox(height: uiScale.gap(8)),
                       Text(
                         '${minutes.toString().padLeft(2, '0')}:${seconds.toString().padLeft(2, '0')}',
                         style: TextStyle(
-                          fontSize: 40,
+                          fontSize: uiScale.font(40),
                           fontWeight: FontWeight.w900,
-                          color: AppColors.primary,
+                          color: isDark ? cs.primary : AppColors.primary,
                           letterSpacing: 2,
                         ),
                       ),
@@ -959,6 +949,8 @@ class _NumpadButton extends StatelessWidget {
   final VoidCallback onTap;
   final bool disabled;
   final bool accent;
+  final bool isDark;
+  final ColorScheme cs;
 
   const _NumpadButton({
     this.label,
@@ -967,12 +959,12 @@ class _NumpadButton extends StatelessWidget {
     required this.onTap,
     this.disabled = false,
     this.accent = false,
+    required this.isDark,
+    required this.cs,
   });
 
   @override
   Widget build(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-
     return AnimatedOpacity(
       opacity: disabled ? 0.4 : 1.0,
       duration: const Duration(milliseconds: 200),
@@ -990,54 +982,52 @@ class _NumpadButton extends StatelessWidget {
                   ? LinearGradient(
                 begin: Alignment.topLeft,
                 end: Alignment.bottomRight,
-                colors: [
-                  AppColors.primary.withOpacity(0.2),
-                  AppColors.secondary.withOpacity(0.2),
-                ],
+                colors: isDark
+                    ? [cs.primary.withOpacity(0.2), cs.secondary.withOpacity(0.2)]
+                    : [AppColors.primary.withOpacity(0.2), AppColors.secondary.withOpacity(0.2)],
               )
                   : null,
               color: !accent
-                  ? (isDark
-                  ? AppColors.surface.withOpacity(0.05)
-                  : AppColors.surface.withOpacity(0.7))
+                  ? (isDark ? cs.surfaceVariant.withOpacity(0.6) : AppColors.surface.withOpacity(0.7))
                   : null,
               border: Border.all(
                 color: disabled
-                    ? AppColors.mintBgLight.withOpacity(0.2)
+                    ? (isDark ? cs.outline.withOpacity(0.3) : AppColors.mintBgLight.withOpacity(0.2))
                     : (accent
-                    ? AppColors.primary.withOpacity(0.4)
-                    : AppColors.mintBgLight.withOpacity(0.4)),
+                    ? (isDark ? cs.primary : AppColors.primary).withOpacity(0.4)
+                    : (isDark ? cs.outline : AppColors.mintBgLight).withOpacity(0.4)),
                 width: 1.5,
               ),
-              boxShadow: !disabled ? [
+              boxShadow: !disabled
+                  ? [
                 BoxShadow(
-                  color: (accent ? AppColors.primary : AppColors.deep)
-                      .withOpacity(0.1),
+                  color: (accent ? (isDark ? cs.primary : AppColors.primary) : AppColors.deep).withOpacity(0.1),
                   blurRadius: 10,
                   offset: const Offset(0, 4),
                 ),
-              ] : null,
+              ]
+                  : null,
             ),
             child: Center(
               child: label != null
                   ? Text(
                 label!,
                 style: TextStyle(
-                  fontSize: size * 0.35,
-                  fontWeight: FontWeight.w700,
+                  fontSize: size * 0.4,
+                  fontWeight: FontWeight.w800,
                   color: disabled
-                      ? AppColors.textSecondary.withOpacity(0.3)
-                      : AppColors.textPrimary,
+                      ? (isDark ? cs.onSurfaceVariant : AppColors.textSecondary).withOpacity(0.3)
+                      : (isDark ? cs.onSurface : AppColors.textPrimary),
                 ),
               )
                   : Icon(
                 icon,
-                size: size * 0.35,
+                size: size * 0.4,
                 color: disabled
-                    ? AppColors.textSecondary.withOpacity(0.3)
+                    ? (isDark ? cs.onSurfaceVariant : AppColors.textSecondary).withOpacity(0.3)
                     : (accent
-                    ? AppColors.primary
-                    : AppColors.textPrimary),
+                    ? (isDark ? cs.primary : AppColors.primary)
+                    : (isDark ? cs.onSurface : AppColors.textPrimary)),
               ),
             ),
           ),

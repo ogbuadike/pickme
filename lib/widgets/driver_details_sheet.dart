@@ -968,76 +968,32 @@ class _DriverDetailsSheetState extends State<DriverDetailsSheet> {
                       icon: Icons.receipt_long_rounded,
                       child: Column(
                         children: [
-                          Wrap(
-                            spacing: ui.gap(8).clamp(8.0, 10.0),
-                            runSpacing: ui.gap(8).clamp(8.0, 10.0),
-                            children: [
-                              _priceMetricTile(
-                                cs,
-                                ui,
-                                title: 'Base fare',
-                                value: base > 0
-                                    ? '$cur${_moneyFmt.format(base.round())}'
-                                    : '—',
-                                tone: const Color(0xFF1A73E8),
-                              ),
-                              _priceMetricTile(
-                                cs,
-                                ui,
-                                title: 'Per km',
-                                value: perKm > 0
-                                    ? '$cur${_moneyFmt.format(perKm.round())}'
-                                    : '—',
-                                tone: const Color(0xFF6A5ACD),
-                              ),
-                              _priceMetricTile(
-                                cs,
-                                ui,
-                                title: 'Trip km',
-                                value: widget.tripDistanceKm > 0
-                                    ? widget.tripDistanceKm.toStringAsFixed(2)
-                                    : '—',
-                                tone: const Color(0xFF1E8E3E),
-                              ),
-                              _priceMetricTile(
-                                cs,
-                                ui,
-                                title: 'API total',
-                                value: _estimatedTotal() > 0
-                                    ? '$cur${_moneyFmt.format(_estimatedTotal().round())}'
-                                    : '—',
-                                tone: const Color(0xFFB8860B),
-                              ),
-                            ],
-                          ),
-                          SizedBox(height: ui.gap(12).clamp(10.0, 14.0)),
                           _kvRow(
                             cs,
                             ui,
                             'Currency',
                             _s(widget.offer['currency'], _s(widget.driver['currency'], 'NGN')),
                           ),
-                          SizedBox(height: ui.gap(6).clamp(6.0, 8.0)),
-                          // _kvRow(cs, 'Base fare', base > 0 ? '$cur${_moneyFmt.format(base.round())}' : '—', mono: true),
-                          // const SizedBox(height: 6),
-                          // _kvRow(cs, 'Price / km', perKm > 0 ? '$cur${_moneyFmt.format(perKm.round())}/km' : '—', mono: true),
-                          // const SizedBox(height: 6),
-                          // _kvRow(cs, 'Trip km', widget.tripDistanceKm > 0 ? widget.tripDistanceKm.toStringAsFixed(3) : '—', mono: true),
-                          SizedBox(height: ui.gap(6).clamp(6.0, 8.0)),
+                          SizedBox(height: ui.gap(8).clamp(8.0, 10.0)),
+
                           _kvRow(
                             cs,
                             ui,
-                            'Estimated total (API)',
-                            _estimatedTotal() > 0
-                                ? '$cur${_moneyFmt.format(_estimatedTotal().round())}'
+                            'Total',
+                            total > 0
+                                ? '$cur${_moneyFmt.format(total.round())}'
                                 : '—',
                             mono: true,
                           ),
-                          SizedBox(height: ui.gap(10).clamp(10.0, 12.0)),
+
+                          SizedBox(height: ui.gap(12).clamp(10.0, 14.0)),
+
                           _bigTotal(
                             cs,
                             ui,
-                            total > 0 ? '$cur${_moneyFmt.format(total.round())}' : '—',
+                            total > 0
+                                ? '$cur${_moneyFmt.format(total.round())}'
+                                : '—',
                           ),
                         ],
                       ),

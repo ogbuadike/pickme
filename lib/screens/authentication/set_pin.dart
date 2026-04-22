@@ -1,7 +1,7 @@
 // lib/screens/set_pin.dart
 import 'dart:convert';
 import 'dart:math' as math;
-import 'dart:ui';
+import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -14,6 +14,7 @@ import '../../api/api_client.dart';
 import '../../api/url.dart';
 import '../../routes/routes.dart';
 import '../../widgets/inner_background.dart';
+import '../../ui/ui_scale.dart';
 
 // Added imports for correct home routing after PIN creation
 import '../../driver/driver_home_page.dart';
@@ -238,70 +239,70 @@ class _SetPinScreenState extends State<SetPinScreen>
   // ───────────────────── UI (mirrors Authentication) ─────────────────────
   @override
   Widget build(BuildContext context) {
-    final size = MediaQuery.of(context).size;
-    final padding = MediaQuery.of(context).padding;
-    final isLandscape = size.width > size.height;
-    final isTablet = size.shortestSide > 600;
-    final isSmallPhone = size.width < 360;
+    final uiScale = UIScale.of(context);
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+    final cs = theme.colorScheme;
 
     return Scaffold(
-      backgroundColor: Theme.of(context).colorScheme.background,
+      backgroundColor: isDark ? Colors.black : theme.colorScheme.background,
       body: Stack(
         children: [
           // Same premium background
-          const BackgroundWidget(
+          BackgroundWidget(
             style: HoloStyle.flux,
             animate: true,
-            intensity: 0.7,
+            intensity: isDark ? 0.3 : 0.7,
           ),
 
           SafeArea(
             child: FadeTransition(
               opacity: _fadeIn,
-              child: isLandscape
-                  ? _buildLandscapeLayout(size, padding, isTablet)
-                  : _buildPortraitLayout(size, padding, isTablet, isSmallPhone),
+              child: uiScale.landscape
+                  ? _buildLandscapeLayout(uiScale, isDark, cs)
+                  : _buildPortraitLayout(uiScale, isDark, cs),
             ),
           ),
 
-          if (_loading) _buildLoadingOverlay(),
+          if (_loading) _buildLoadingOverlay(uiScale, isDark, cs),
         ],
       ),
     );
   }
 
-  Widget _buildPortraitLayout(
-      Size size, EdgeInsets padding, bool isTablet, bool isSmallPhone) {
-    final keypadSize = isTablet ? 400.0 : (isSmallPhone ? 280.0 : 320.0);
+  Widget _buildPortraitLayout(UIScale uiScale, bool isDark, ColorScheme cs) {
+    final keypadSize = uiScale.tablet ? 400.0 : uiScale.inset(320.0);
 
     return Center(
       child: SingleChildScrollView(
         child: Padding(
           padding: EdgeInsets.symmetric(
-            horizontal: isTablet ? 64 : (isSmallPhone ? 20 : 32),
-            vertical: 24,
+            horizontal: uiScale.tablet ? uiScale.inset(64) : uiScale.inset(24),
+            vertical: uiScale.inset(24),
           ),
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              _buildLogo(isTablet ? 120 : (isSmallPhone ? 80 : 100)),
-              SizedBox(height: isSmallPhone ? 24 : 32),
-              _buildHeaderText(isTablet, isSmallPhone),
-              SizedBox(height: isSmallPhone ? 32 : 48),
-              _buildPinIndicator(isSmallPhone),
-              SizedBox(height: isSmallPhone ? 24 : 32),
+              _buildLogo(uiScale.heroLogoSize * 0.8, isDark, cs),
+              SizedBox(height: uiScale.gap(24)),
+              _buildHeaderText(uiScale, isDark, cs),
+              SizedBox(height: uiScale.gap(36)),
+              _buildPinIndicator(uiScale, isDark, cs),
+              SizedBox(height: uiScale.gap(32)),
               Container(
                 width: keypadSize,
                 constraints: BoxConstraints(
-                  maxWidth: size.width - 40,
-                  maxHeight: isSmallPhone ? 320 : 400,
+                  maxWidth: uiScale.width - uiScale.inset(40),
                 ),
-                child: _buildNumPad(isTablet, isSmallPhone, false),
+                child: _buildNumPad(uiScale, isDark, cs, isLandscape: false),
               ),
-              SizedBox(height: isSmallPhone ? 8 : 12),
+              SizedBox(height: uiScale.gap(12)),
               TextButton(
                 onPressed: _loading ? null : () => Navigator.pop(context),
-                child: const Text('Back to Login'),
+                style: TextButton.styleFrom(
+                  foregroundColor: isDark ? cs.primary : AppColors.primary,
+                ),
+                child: Text('Back to Login', style: TextStyle(fontSize: uiScale.font(14), fontWeight: FontWeight.w700)),
               ),
             ],
           ),
@@ -310,47 +311,47 @@ class _SetPinScreenState extends State<SetPinScreen>
     );
   }
 
-  Widget _buildLandscapeLayout(Size size, EdgeInsets padding, bool isTablet) {
+  Widget _buildLandscapeLayout(UIScale uiScale, bool isDark, ColorScheme cs) {
     return Center(
       child: SingleChildScrollView(
         scrollDirection: Axis.horizontal,
         child: Container(
-          width: math.max(size.width, 600),
+          width: math.max(uiScale.width, 600),
           padding: EdgeInsets.symmetric(
-            horizontal: isTablet ? 64 : 32,
-            vertical: 16,
+            horizontal: uiScale.tablet ? uiScale.inset(64) : uiScale.inset(32),
+            vertical: uiScale.inset(16),
           ),
           child: Row(
             mainAxisAlignment: MainAxisAlignment.spaceEvenly,
             children: [
               // Left: Logo & text
               Expanded(
-                flex: isTablet ? 3 : 2,
+                flex: uiScale.tablet ? 3 : 2,
                 child: Column(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
-                    _buildLogo(isTablet ? 100 : 80),
-                    const SizedBox(height: 16),
-                    _buildHeaderText(isTablet, false),
-                    const SizedBox(height: 24),
-                    _buildPinIndicator(false),
+                    _buildLogo(uiScale.inset(80), isDark, cs),
+                    SizedBox(height: uiScale.gap(16)),
+                    _buildHeaderText(uiScale, isDark, cs),
+                    SizedBox(height: uiScale.gap(24)),
+                    _buildPinIndicator(uiScale, isDark, cs),
                   ],
                 ),
               ),
 
-              // Divider line (same look/feel as sample)
+              // Divider line
               Container(
                 width: 1,
-                height: size.height * 0.5,
-                margin: const EdgeInsets.symmetric(horizontal: 32),
+                height: uiScale.height * 0.5,
+                margin: EdgeInsets.symmetric(horizontal: uiScale.inset(32)),
                 decoration: BoxDecoration(
                   gradient: LinearGradient(
                     begin: Alignment.topCenter,
                     end: Alignment.bottomCenter,
                     colors: [
                       Colors.transparent,
-                      AppColors.mintBgLight.withOpacity(0.3),
-                      AppColors.mintBgLight.withOpacity(0.3),
+                      isDark ? cs.outline.withOpacity(0.5) : AppColors.mintBgLight.withOpacity(0.3),
+                      isDark ? cs.outline.withOpacity(0.5) : AppColors.mintBgLight.withOpacity(0.3),
                       Colors.transparent,
                     ],
                   ),
@@ -359,13 +360,13 @@ class _SetPinScreenState extends State<SetPinScreen>
 
               // Right: Numpad
               Expanded(
-                flex: isTablet ? 2 : 2,
+                flex: uiScale.tablet ? 2 : 2,
                 child: Container(
                   constraints: BoxConstraints(
-                    maxWidth: 320,
-                    maxHeight: size.height - 100,
+                    maxWidth: uiScale.inset(320),
+                    maxHeight: uiScale.height - uiScale.inset(100),
                   ),
-                  child: _buildNumPad(isTablet, false, true),
+                  child: _buildNumPad(uiScale, isDark, cs, isLandscape: true),
                 ),
               ),
             ],
@@ -375,8 +376,8 @@ class _SetPinScreenState extends State<SetPinScreen>
     );
   }
 
-  // Floating logo (same as Authentication)
-  Widget _buildLogo(double size) {
+  // Floating logo
+  Widget _buildLogo(double size, bool isDark, ColorScheme cs) {
     return AnimatedBuilder(
       animation: _logoFloat,
       builder: (context, child) {
@@ -390,20 +391,19 @@ class _SetPinScreenState extends State<SetPinScreen>
               gradient: LinearGradient(
                 begin: Alignment.topLeft,
                 end: Alignment.bottomRight,
-                colors: [
-                  AppColors.surface,
-                  AppColors.mintBgLight.withOpacity(0.9),
-                ],
+                colors: isDark
+                    ? [cs.surfaceVariant, cs.primary.withOpacity(0.2)]
+                    : [AppColors.surface, AppColors.mintBgLight.withOpacity(0.9)],
               ),
               boxShadow: [
                 BoxShadow(
-                  color: AppColors.primary.withOpacity(0.3),
+                  color: (isDark ? cs.primary : AppColors.primary).withOpacity(0.3),
                   blurRadius: 30,
                   spreadRadius: 5,
                   offset: Offset(0, _logoFloat.value + 10),
                 ),
                 BoxShadow(
-                  color: AppColors.secondary.withOpacity(0.2),
+                  color: (isDark ? cs.secondary : AppColors.secondary).withOpacity(0.2),
                   blurRadius: 20,
                   spreadRadius: 2,
                   offset: Offset(0, _logoFloat.value + 5),
@@ -415,6 +415,7 @@ class _SetPinScreenState extends State<SetPinScreen>
               child: Image.asset(
                 'image/pickme.png',
                 fit: BoxFit.contain,
+                color: isDark ? cs.onPrimary : AppColors.surface,
               ),
             ),
           ),
@@ -423,32 +424,29 @@ class _SetPinScreenState extends State<SetPinScreen>
     );
   }
 
-  // Title/subtitle to match sample’s hierarchy
-  Widget _buildHeaderText(bool isTablet, bool isSmallPhone) {
-    final titleSize = isTablet ? 28.0 : (isSmallPhone ? 22.0 : 26.0);
-    final subtitleSize = isTablet ? 16.0 : (isSmallPhone ? 13.0 : 14.0);
-
+  // Title/subtitle
+  Widget _buildHeaderText(UIScale uiScale, bool isDark, ColorScheme cs) {
     return Column(
       children: [
         Text(
           _confirmPhase ? 'Re-enter to confirm' : 'Create a 4-digit PIN',
           style: TextStyle(
-            fontSize: titleSize,
-            color: AppColors.textPrimary,
-            fontWeight: FontWeight.w800,
+            fontSize: uiScale.font(24),
+            color: isDark ? cs.onSurface : AppColors.textPrimary,
+            fontWeight: FontWeight.w900,
             letterSpacing: -0.5,
           ),
           textAlign: TextAlign.center,
         ),
-        const SizedBox(height: 6),
+        SizedBox(height: uiScale.gap(6)),
         Text(
           _confirmPhase
               ? 'Make sure it matches your first entry'
               : 'Use digits you remember',
           style: TextStyle(
-            fontSize: subtitleSize,
-            color: AppColors.textSecondary,
-            fontWeight: FontWeight.w500,
+            fontSize: uiScale.font(14),
+            color: isDark ? cs.onSurfaceVariant : AppColors.textSecondary,
+            fontWeight: FontWeight.w600,
             letterSpacing: 0.3,
           ),
           textAlign: TextAlign.center,
@@ -457,20 +455,19 @@ class _SetPinScreenState extends State<SetPinScreen>
     );
   }
 
-  // Circular dot indicator (same visual language as Authentication)
-  Widget _buildPinIndicator(bool isSmallPhone) {
+  // Circular dot indicator
+  Widget _buildPinIndicator(UIScale uiScale, bool isDark, ColorScheme cs) {
     final active = _active;
     final filledCount = active.where((e) => e.isNotEmpty).length;
 
-    return Container
-      (
-      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+    return Container(
+      padding: EdgeInsets.symmetric(horizontal: uiScale.inset(20), vertical: uiScale.inset(16)),
       decoration: BoxDecoration(
-        color: AppColors.surface.withOpacity(0.1),
-        borderRadius: BorderRadius.circular(20),
+        color: isDark ? cs.surfaceVariant.withOpacity(0.5) : AppColors.surface.withOpacity(0.8),
+        borderRadius: BorderRadius.circular(uiScale.radius(20)),
         border: Border.all(
-          color: AppColors.primary.withOpacity(0.3),
-          width: 1,
+          color: (isDark ? cs.primary : AppColors.primary).withOpacity(0.3),
+          width: 1.5,
         ),
       ),
       child: Row(
@@ -483,35 +480,32 @@ class _SetPinScreenState extends State<SetPinScreen>
             animation: _dotScale,
             builder: (context, _) {
               return Container(
-                margin: EdgeInsets.symmetric(
-                  horizontal: isSmallPhone ? 8 : 12,
-                ),
-                width: isSmallPhone ? 14 : 16,
-                height: isSmallPhone ? 14 : 16,
+                margin: EdgeInsets.symmetric(horizontal: uiScale.inset(10)),
+                width: uiScale.icon(16),
+                height: uiScale.icon(16),
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,
                   color: filled
-                      ? AppColors.primary
+                      ? (isDark ? cs.primary : AppColors.primary)
                       : activeDot
-                      ? AppColors.primary.withOpacity(0.2)
+                      ? (isDark ? cs.primary : AppColors.primary).withOpacity(0.2)
                       : Colors.transparent,
                   border: Border.all(
                     color: activeDot
-                        ? AppColors.primary
+                        ? (isDark ? cs.primary : AppColors.primary)
                         : filled
-                        ? AppColors.primary.withOpacity(0.6)
-                        : AppColors.mintBgLight.withOpacity(0.5),
+                        ? (isDark ? cs.primary : AppColors.primary).withOpacity(0.6)
+                        : (isDark ? cs.outline : AppColors.mintBgLight).withOpacity(0.5),
                     width: activeDot ? 2.5 : 1.5,
                   ),
                 ),
                 child: filled
                     ? Transform.scale(
-                  scale:
-                  _cursor > index ? 1.0 : _dotScale.value, // pop-in
+                  scale: _cursor > index ? 1.0 : _dotScale.value,
                   child: Container(
-                    decoration: const BoxDecoration(
+                    decoration: BoxDecoration(
                       shape: BoxShape.circle,
-                      color: AppColors.primary,
+                      color: isDark ? cs.primary : AppColors.primary,
                     ),
                   ),
                 )
@@ -524,14 +518,10 @@ class _SetPinScreenState extends State<SetPinScreen>
     );
   }
 
-  // Numpad (same component style as Authentication)
-  Widget _buildNumPad(bool isTablet, bool isSmallPhone, bool isLandscape) {
-    final buttonSize = isTablet
-        ? 70.0
-        : (isSmallPhone ? 55.0 : (isLandscape ? 50.0 : 60.0));
-    final spacing = isTablet
-        ? 16.0
-        : (isSmallPhone ? 10.0 : (isLandscape ? 8.0 : 12.0));
+  // Numpad
+  Widget _buildNumPad(UIScale uiScale, bool isDark, ColorScheme cs, {required bool isLandscape}) {
+    final buttonSize = uiScale.icon(isLandscape ? 56.0 : 64.0);
+    final spacing = uiScale.gap(12.0);
 
     Widget cell(Widget child) => Padding(
       padding: EdgeInsets.symmetric(horizontal: spacing / 2),
@@ -548,11 +538,14 @@ class _SetPinScreenState extends State<SetPinScreen>
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
                 for (int col = 0; col < 3; col++)
-                  cell(_NumpadButton(
+                  cell(_buildNumpadButton(
                     label: '${row * 3 + col + 1}',
                     size: buttonSize,
                     onTap: () => _handleInput('${row * 3 + col + 1}'),
                     disabled: _loading,
+                    isDark: isDark,
+                    cs: cs,
+                    uiScale: uiScale,
                   )),
               ],
             ),
@@ -560,18 +553,24 @@ class _SetPinScreenState extends State<SetPinScreen>
         Row(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            cell(const SizedBox.shrink()), // spacer
-            cell(_NumpadButton(
+            cell(SizedBox(width: buttonSize, height: buttonSize)), // spacer
+            cell(_buildNumpadButton(
               label: '0',
               size: buttonSize,
               onTap: () => _handleInput('0'),
               disabled: _loading,
+              isDark: isDark,
+              cs: cs,
+              uiScale: uiScale,
             )),
-            cell(_NumpadButton(
-              icon: Icons.backspace_outlined,
+            cell(_buildNumpadButton(
+              icon: Icons.backspace_rounded,
               size: buttonSize,
               onTap: _handleBackspace,
               disabled: _loading || _cursor == 0,
+              isDark: isDark,
+              cs: cs,
+              uiScale: uiScale,
             )),
           ],
         ),
@@ -579,53 +578,54 @@ class _SetPinScreenState extends State<SetPinScreen>
     );
   }
 
-  // Same loading overlay visuals used in Authentication
-  Widget _buildLoadingOverlay() {
+  // Loading overlay
+  Widget _buildLoadingOverlay(UIScale uiScale, bool isDark, ColorScheme cs) {
     return Container(
       color: Colors.black.withOpacity(0.7),
       child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: 5, sigmaY: 5),
+        filter: ui.ImageFilter.blur(sigmaX: 10, sigmaY: 10),
         child: Center(
           child: Container(
-            padding: const EdgeInsets.all(40),
+            padding: EdgeInsets.all(uiScale.inset(40)),
             decoration: BoxDecoration(
-              gradient: LinearGradient(
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-                colors: [
-                  AppColors.surface.withOpacity(0.95),
-                  AppColors.mintBgLight.withOpacity(0.95),
-                ],
-              ),
-              borderRadius: BorderRadius.circular(24),
-              border: Border.all(
-                color: AppColors.primary.withOpacity(0.3),
-                width: 1,
-              ),
+                color: isDark ? cs.surface.withOpacity(0.9) : Colors.white.withOpacity(0.95),
+                borderRadius: BorderRadius.circular(uiScale.radius(24)),
+                border: Border.all(
+                  color: (isDark ? cs.primary : AppColors.primary).withOpacity(0.3),
+                  width: 1.5,
+                ),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withOpacity(isDark ? 0.5 : 0.1),
+                    blurRadius: 30,
+                    offset: const Offset(0, 10),
+                  )
+                ]
             ),
             child: Column(
               mainAxisSize: MainAxisSize.min,
-              children: const [
+              children: [
                 SizedBox(
-                  width: 48,
-                  height: 48,
-                  child: CircularProgressIndicator(strokeWidth: 3),
+                  width: uiScale.icon(48),
+                  height: uiScale.icon(48),
+                  child: CircularProgressIndicator(strokeWidth: 3.5, color: isDark ? cs.primary : AppColors.primary),
                 ),
-                SizedBox(height: 24),
+                SizedBox(height: uiScale.gap(24)),
                 Text(
                   'Setting PIN',
                   style: TextStyle(
-                    color: AppColors.textPrimary,
-                    fontSize: 18,
-                    fontWeight: FontWeight.w700,
+                    color: isDark ? cs.onSurface : AppColors.textPrimary,
+                    fontSize: uiScale.font(18),
+                    fontWeight: FontWeight.w800,
                   ),
                 ),
-                SizedBox(height: 8),
+                SizedBox(height: uiScale.gap(8)),
                 Text(
                   'Please wait...',
                   style: TextStyle(
-                    color: AppColors.textSecondary,
-                    fontSize: 14,
+                    color: isDark ? cs.onSurfaceVariant : AppColors.textSecondary,
+                    fontSize: uiScale.font(14),
+                    fontWeight: FontWeight.w600,
                   ),
                 ),
               ],
@@ -635,30 +635,19 @@ class _SetPinScreenState extends State<SetPinScreen>
       ),
     );
   }
-}
 
-// Premium number pad button (copied style from authentication.dart)
-class _NumpadButton extends StatelessWidget {
-  final String? label;
-  final IconData? icon;
-  final double size;
-  final VoidCallback onTap;
-  final bool disabled;
-  final bool accent;
-
-  const _NumpadButton({
-    this.label,
-    this.icon,
-    required this.size,
-    required this.onTap,
-    this.disabled = false,
-    this.accent = false,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-
+  // Premium number pad button logic embedded here to access theme natively
+  Widget _buildNumpadButton({
+    String? label,
+    IconData? icon,
+    required double size,
+    required VoidCallback onTap,
+    bool disabled = false,
+    bool accent = false,
+    required bool isDark,
+    required ColorScheme cs,
+    required UIScale uiScale,
+  }) {
     return AnimatedOpacity(
       opacity: disabled ? 0.4 : 1.0,
       duration: const Duration(milliseconds: 200),
@@ -676,30 +665,26 @@ class _NumpadButton extends StatelessWidget {
                   ? LinearGradient(
                 begin: Alignment.topLeft,
                 end: Alignment.bottomRight,
-                colors: [
-                  AppColors.primary.withOpacity(0.2),
-                  AppColors.secondary.withOpacity(0.2),
-                ],
+                colors: isDark
+                    ? [cs.primary.withOpacity(0.2), cs.secondary.withOpacity(0.2)]
+                    : [AppColors.primary.withOpacity(0.2), AppColors.secondary.withOpacity(0.2)],
               )
                   : null,
               color: !accent
-                  ? (isDark
-                  ? AppColors.surface.withOpacity(0.05)
-                  : AppColors.surface.withOpacity(0.7))
+                  ? (isDark ? cs.surfaceVariant.withOpacity(0.6) : AppColors.surface.withOpacity(0.7))
                   : null,
               border: Border.all(
                 color: disabled
-                    ? AppColors.mintBgLight.withOpacity(0.2)
+                    ? (isDark ? cs.outline.withOpacity(0.3) : AppColors.mintBgLight.withOpacity(0.2))
                     : (accent
-                    ? AppColors.primary.withOpacity(0.4)
-                    : AppColors.mintBgLight.withOpacity(0.4)),
+                    ? (isDark ? cs.primary : AppColors.primary).withOpacity(0.4)
+                    : (isDark ? cs.outline : AppColors.mintBgLight).withOpacity(0.4)),
                 width: 1.5,
               ),
               boxShadow: !disabled
                   ? [
                 BoxShadow(
-                  color: (accent ? AppColors.primary : AppColors.deep)
-                      .withOpacity(0.1),
+                  color: (accent ? (isDark ? cs.primary : AppColors.primary) : AppColors.deep).withOpacity(0.1),
                   blurRadius: 10,
                   offset: const Offset(0, 4),
                 ),
@@ -709,23 +694,23 @@ class _NumpadButton extends StatelessWidget {
             child: Center(
               child: label != null
                   ? Text(
-                label!,
+                label,
                 style: TextStyle(
-                  fontSize: size * 0.35,
-                  fontWeight: FontWeight.w700,
+                  fontSize: size * 0.4,
+                  fontWeight: FontWeight.w800,
                   color: disabled
-                      ? AppColors.textSecondary.withOpacity(0.3)
-                      : AppColors.textPrimary,
+                      ? (isDark ? cs.onSurfaceVariant : AppColors.textSecondary).withOpacity(0.3)
+                      : (isDark ? cs.onSurface : AppColors.textPrimary),
                 ),
               )
                   : Icon(
                 icon,
-                size: size * 0.35,
+                size: size * 0.4,
                 color: disabled
-                    ? AppColors.textSecondary.withOpacity(0.3)
+                    ? (isDark ? cs.onSurfaceVariant : AppColors.textSecondary).withOpacity(0.3)
                     : (accent
-                    ? AppColors.primary
-                    : AppColors.textPrimary),
+                    ? (isDark ? cs.primary : AppColors.primary)
+                    : (isDark ? cs.onSurface : AppColors.textPrimary)),
               ),
             ),
           ),

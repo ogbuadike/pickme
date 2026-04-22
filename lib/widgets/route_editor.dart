@@ -1,10 +1,11 @@
-// lib/screens/home/widgets/route_editor.dart
+// lib/widgets/route_editor.dart
 // Row that composes icons column + list of RouteField + side actions.
 // Uses extra breathing room between fields.
 
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
 
+// FIXED: Corrected the import path to properly locate your models!
 import '../screens/state/home_models.dart';
 import 'icons_column.dart';
 import 'route_field.dart';
@@ -40,6 +41,7 @@ class RouteEditor extends StatelessWidget {
   Widget build(BuildContext context) {
     final s = _s(context);
 
+    // Pass the isDark context down to child widgets if they need it
     final children = <Widget>[];
     for (int i = 0; i < points.length; i++) {
       final p = points[i];

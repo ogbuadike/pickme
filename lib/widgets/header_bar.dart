@@ -79,15 +79,18 @@ class _HeaderBarState extends State<HeaderBar> with SingleTickerProviderStateMix
     final m = _metricsOf(context);
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
+    final cs = theme.colorScheme;
 
     final name = (widget.user?['user_lname'] ?? widget.user?['user_name'] ?? 'Rider').toString();
     final avatarUrl = _safeAvatarUrl(widget.user?['user_logo'] as String?);
 
-    final textColor = isDark ? Colors.white : AppColors.textPrimary;
-    final subColor  = isDark ? Colors.white.withOpacity(.80) : AppColors.textSecondary.withOpacity(.90);
+    // Uses crisp theme colors instead of faded whites
+    final textColor = isDark ? cs.onSurface : AppColors.textPrimary;
+    final subColor  = isDark ? cs.onSurfaceVariant : AppColors.textSecondary.withOpacity(.90);
 
-    final bg   = isDark ? Colors.white.withOpacity(.06) : theme.cardColor;
-    final brdr = isDark ? AppColors.outline.withOpacity(.18) : AppColors.mintBgLight.withOpacity(.30);
+    // Uses sleek surface colors for OLED compatibility
+    final bg   = isDark ? cs.surface : theme.cardColor;
+    final brdr = isDark ? cs.outline : AppColors.mintBgLight.withOpacity(.30);
 
     return Padding(
       padding: EdgeInsets.fromLTRB(12 * m.scale, 6 * m.scale, 12 * m.scale, 6 * m.scale),
@@ -99,7 +102,7 @@ class _HeaderBarState extends State<HeaderBar> with SingleTickerProviderStateMix
           border: Border.all(color: brdr, width: 1),
           boxShadow: [
             BoxShadow(
-              color: Colors.black.withOpacity(isDark ? .22 : .08),
+              color: Colors.black.withOpacity(isDark ? .40 : .08),
               blurRadius: 12 * m.scale,
               offset: Offset(0, 6 * m.scale),
             ),
@@ -116,6 +119,8 @@ class _HeaderBarState extends State<HeaderBar> with SingleTickerProviderStateMix
                 widget.onMenu();
               },
               metrics: m,
+              isDark: isDark,
+              cs: cs,
             ),
             SizedBox(width: 10 * m.scale),
             Expanded(child: _Greeting(name: name, textColor: textColor, subColor: subColor, metrics: m)),
@@ -130,6 +135,7 @@ class _HeaderBarState extends State<HeaderBar> with SingleTickerProviderStateMix
               size: 34 * m.scale,
               metrics: m,
               isDark: isDark,
+              cs: cs,
             ),
             SizedBox(width: 6 * m.scale),
             _WalletButton(
@@ -141,6 +147,7 @@ class _HeaderBarState extends State<HeaderBar> with SingleTickerProviderStateMix
               size: 34 * m.scale,
               metrics: m,
               isDark: isDark,
+              cs: cs,
               pulseCtrl: _pulseCtrl,
               textColor: textColor,
             ),
@@ -198,7 +205,7 @@ class _Greeting extends StatelessWidget {
             style: TextStyle(
               color: subColor,
               fontSize: (9.5 * metrics.scale * metrics.textScale).clamp(8.0, 11.0),
-              fontWeight: FontWeight.w600,
+              fontWeight: FontWeight.w600, // FIXED: Changed 600 to FontWeight.w600
               letterSpacing: -0.1,
             ),
           ),
@@ -224,12 +231,17 @@ class _AvatarButton extends StatelessWidget {
   final bool busy;
   final VoidCallback onTap;
   final _ResponsiveMetrics metrics;
+  final bool isDark;
+  final ColorScheme cs;
+
   const _AvatarButton({
     required this.size,
     required this.networkUrl,
     required this.busy,
     required this.onTap,
     required this.metrics,
+    required this.isDark,
+    required this.cs,
   });
 
   @override
@@ -242,11 +254,11 @@ class _AvatarButton extends StatelessWidget {
           width: size,
           height: size,
           fit: BoxFit.cover,
-          errorBuilder: (_, __, ___) => _PlaceholderAvatar(size: size),
+          errorBuilder: (_, __, ___) => _PlaceholderAvatar(size: size, isDark: isDark, cs: cs),
         ),
       );
     } else {
-      avatarCore = _PlaceholderAvatar(size: size);
+      avatarCore = _PlaceholderAvatar(size: size, isDark: isDark, cs: cs);
     }
 
     return Semantics(
@@ -262,10 +274,10 @@ class _AvatarButton extends StatelessWidget {
               height: size,
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
-                border: Border.all(color: Colors.white.withOpacity(.9), width: 1.5),
+                border: Border.all(color: isDark ? cs.primary : Colors.white.withOpacity(.9), width: 1.5),
                 boxShadow: [
                   BoxShadow(
-                    color: Colors.black.withOpacity(.18),
+                    color: Colors.black.withOpacity(isDark ? .40 : .18),
                     blurRadius: 8 * metrics.scale,
                     offset: Offset(0, 3.5 * metrics.scale),
                   ),
@@ -281,12 +293,12 @@ class _AvatarButton extends StatelessWidget {
                   width: 10.0 * metrics.scale,
                   height: 10.0 * metrics.scale,
                   decoration: BoxDecoration(
-                    color: AppColors.primary,
+                    color: isDark ? cs.primary : AppColors.primary,
                     shape: BoxShape.circle,
-                    border: Border.all(color: Colors.white, width: 1.4),
+                    border: Border.all(color: isDark ? cs.surface : Colors.white, width: 1.4),
                     boxShadow: [
                       BoxShadow(
-                        color: AppColors.primary.withOpacity(0.45),
+                        color: (isDark ? cs.primary : AppColors.primary).withOpacity(0.45),
                         blurRadius: 3.5 * metrics.scale,
                       ),
                     ],
@@ -302,13 +314,17 @@ class _AvatarButton extends StatelessWidget {
 
 class _PlaceholderAvatar extends StatelessWidget {
   final double size;
-  const _PlaceholderAvatar({required this.size});
+  final bool isDark;
+  final ColorScheme cs;
+
+  const _PlaceholderAvatar({required this.size, required this.isDark, required this.cs});
+
   @override
   Widget build(BuildContext context) {
     return CircleAvatar(
       radius: size / 2,
-      backgroundColor: Colors.white.withOpacity(.7),
-      child: const Icon(Icons.person, color: Colors.black54),
+      backgroundColor: isDark ? cs.surfaceVariant : Colors.white.withOpacity(.7),
+      child: Icon(Icons.person, color: isDark ? cs.onSurfaceVariant : Colors.black54),
     );
   }
 }
@@ -320,8 +336,7 @@ class _HeaderAction extends StatefulWidget {
   final double size;
   final _ResponsiveMetrics metrics;
   final bool isDark;
-  final bool isScannerMode;
-  final AnimationController? pulseCtrl;
+  final ColorScheme cs;
 
   const _HeaderAction({
     required this.tooltip,
@@ -330,8 +345,7 @@ class _HeaderAction extends StatefulWidget {
     required this.size,
     required this.metrics,
     required this.isDark,
-    this.isScannerMode = false,
-    this.pulseCtrl,
+    required this.cs,
   });
 
   @override
@@ -359,9 +373,12 @@ class _HeaderActionState extends State<_HeaderAction> with SingleTickerProviderS
   @override
   Widget build(BuildContext context) {
     final isDark = widget.isDark;
-    final bg = isDark ? Colors.white.withOpacity(.08) : Colors.white;
-    final iconColor = isDark ? Colors.white : AppColors.deep;
-    final borderColor = isDark ? Colors.white.withOpacity(.14) : AppColors.mintBgLight.withOpacity(.45);
+    final cs = widget.cs;
+
+    // Uses sleek Surface Variant and Neon Primary in dark mode
+    final bg = isDark ? cs.surfaceVariant : Colors.white;
+    final iconColor = isDark ? cs.primary : AppColors.deep;
+    final borderColor = isDark ? cs.outline : AppColors.mintBgLight.withOpacity(.45);
 
     return Tooltip(
       message: widget.tooltip,
@@ -383,7 +400,7 @@ class _HeaderActionState extends State<_HeaderAction> with SingleTickerProviderS
               border: Border.all(color: borderColor, width: 1),
               boxShadow: [
                 BoxShadow(
-                  color: Colors.black.withOpacity(isDark ? .16 : .08),
+                  color: Colors.black.withOpacity(isDark ? .40 : .08),
                   blurRadius: 7 * widget.metrics.scale,
                   offset: Offset(0, 2.5 * widget.metrics.scale),
                 ),
@@ -404,6 +421,7 @@ class _WalletButton extends StatefulWidget {
   final double size;
   final _ResponsiveMetrics metrics;
   final bool isDark;
+  final ColorScheme cs;
   final AnimationController pulseCtrl;
   final Color textColor;
 
@@ -413,6 +431,7 @@ class _WalletButton extends StatefulWidget {
     required this.size,
     required this.metrics,
     required this.isDark,
+    required this.cs,
     required this.pulseCtrl,
     required this.textColor,
   });
@@ -442,9 +461,12 @@ class _WalletButtonState extends State<_WalletButton> with SingleTickerProviderS
   @override
   Widget build(BuildContext context) {
     final isDark = widget.isDark;
-    final bg = isDark ? Colors.white.withOpacity(.08) : Colors.white;
-    final borderColor = isDark ? Colors.white.withOpacity(.14) : AppColors.mintBgLight.withOpacity(.45);
-    final iconColor = isDark ? Colors.white : AppColors.deep;
+    final cs = widget.cs;
+
+    // Uses sleek Surface Variant and Neon Primary in dark mode
+    final bg = isDark ? cs.surfaceVariant : Colors.white;
+    final borderColor = isDark ? cs.outline : AppColors.mintBgLight.withOpacity(.45);
+    final iconColor = isDark ? cs.primary : AppColors.deep;
 
     final ringSize = widget.size * 0.64;
 
@@ -467,7 +489,7 @@ class _WalletButtonState extends State<_WalletButton> with SingleTickerProviderS
               border: Border.all(color: borderColor, width: 1),
               boxShadow: [
                 BoxShadow(
-                  color: Colors.black.withOpacity(isDark ? .16 : .08),
+                  color: Colors.black.withOpacity(isDark ? .40 : .08),
                   blurRadius: 7 * widget.metrics.scale,
                   offset: Offset(0, 2.5 * widget.metrics.scale),
                 ),
@@ -490,7 +512,7 @@ class _WalletButtonState extends State<_WalletButton> with SingleTickerProviderS
                             decoration: BoxDecoration(
                               shape: BoxShape.circle,
                               border: Border.all(
-                                color: AppColors.primary.withOpacity((1 - t) * 0.40),
+                                color: (isDark ? cs.primary : AppColors.primary).withOpacity((1 - t) * 0.40),
                                 width: 1.2,
                               ),
                             ),

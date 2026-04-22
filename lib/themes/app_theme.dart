@@ -42,7 +42,7 @@ class AppColors {
   static const Color accentColor      = secondary;        // highlight/cta
   static const Color darkerColor      = Color(0xFF1E5138); // deep emerald
   static const Color darkColor        = Color(0xFF2A6A49); // darker emerald
-  static const Color darkBackground   = Color(0xFF000000); // Pure OLED Black
+  static const Color darkBackground   = Color(0xFF0B1410);
   static const Color backgroundColor  = offWhite;
   static const Color goldenColor      = Color(0xFFD4AF37);
 
@@ -59,7 +59,7 @@ class AppColors {
   static const Color textOnLightAccent    = darkerColor;
 
   static const Color textOnDarkPrimary    = Colors.white;
-  static const Color textOnDarkSecondary  = Color(0xFFB0BEC5); // Crisp light grey for dark mode
+  static const Color textOnDarkSecondary  = Color(0xFFDDE7E2);
   static const Color textOnDarkAccent     = secondary;
 }
 
@@ -160,55 +160,54 @@ final ColorScheme _lightScheme = const ColorScheme(
   onBackground: AppColors.textPrimary,
 );
 
-final ColorScheme _darkScheme = const ColorScheme(
+final ColorScheme _darkScheme = ColorScheme(
   brightness: Brightness.dark,
 
   // ── BRAND COLORS (Glowing Neon Mint for maximum dark-mode pop) ──
-  primary: Color(0xFF10E58C),       // Vibrant neon emerald
-  onPrimary: Color(0xFF000000),     // Pitch black text on primary buttons for perfect reading
-  primaryContainer: Color(0xFF0A3D25), // Deep tinted green for active states
-  onPrimaryContainer: Color(0xFF6DF0B2), // Soft bright green for text inside active states
+  primary: const Color(0xFF10E58C),       // Vibrant neon emerald
+  onPrimary: const Color(0xFF000000),     // Pitch black text on primary buttons for perfect reading
+  primaryContainer: const Color(0xFF0A3D25), // Deep tinted green for active states
+  onPrimaryContainer: const Color(0xFF6DF0B2), // Soft bright green for text inside active states
 
   // ── SECONDARY ──
-  secondary: Color(0xFF00BFA5),     // Cool teal/mint
-  onSecondary: Color(0xFF000000),
-  secondaryContainer: Color(0xFF062B22),
-  onSecondaryContainer: Color(0xFF5CF2D6),
+  secondary: const Color(0xFF00BFA5),     // Cool teal/mint
+  onSecondary: const Color(0xFF000000),
+  secondaryContainer: const Color(0xFF062B22),
+  onSecondaryContainer: const Color(0xFF5CF2D6),
 
   // ── TERTIARY (Accents) ──
-  tertiary: Color(0xFF4ADE80),
-  onTertiary: Color(0xFF000000),
-  tertiaryContainer: Color(0xFF0F361F),
-  onTertiaryContainer: Color(0xFF94F0B4),
+  tertiary: const Color(0xFF4ADE80),
+  onTertiary: const Color(0xFF000000),
+  tertiaryContainer: const Color(0xFF0F361F),
+  onTertiaryContainer: const Color(0xFF94F0B4),
 
   // ── ERROR (Vibrant red/coral for dark mode visibility) ──
-  error: Color(0xFFFF5252),
-  onError: Color(0xFF000000),
-  errorContainer: Color(0xFF4A0B0B),
-  onErrorContainer: Color(0xFFFFB3B3),
+  error: const Color(0xFFFF5252),
+  onError: const Color(0xFF000000),
+  errorContainer: const Color(0xFF4A0B0B),
+  onErrorContainer: const Color(0xFFFFB3B3),
 
   // ── BACKGROUNDS (OLED Black for deep, immersive UI) ──
-  background: Color(0xFF000000),    // Pure OLED Black
-  onBackground: Color(0xFFFFFFFF),  // Pure White for high contrast headings
+  background: const Color(0xFF000000),    // Pure OLED Black
+  onBackground: const Color(0xFFFFFFFF),  // Pure White for high contrast headings
 
   // ── SURFACES (Elevated slightly from the black background to create depth) ──
-  surface: Color(0xFF121212),       // Sleek off-black for cards
-  onSurface: Color(0xFFFFFFFF),     // Bright white text for cards
+  surface: const Color(0xFF111412),       // Very dark, sleek off-black with a 1% green tint
+  onSurface: const Color(0xFFF8F9FA),     // Off-white text (reduces eye strain compared to pure white)
 
-  surfaceVariant: Color(0xFF1E1E1E), // Slightly lighter for text fields
-  onSurfaceVariant: Color(0xFFB0BEC5), // Crisp grey for icons and hints
+  surfaceVariant: const Color(0xFF1C2420), // Lighter surface for text fields and bottom sheets
+  onSurfaceVariant: const Color(0xFFA3B8AE), // Muted grey-green for hints, subtitles, and icons
 
   // ── BORDERS & SHADOWS ──
-  outline: Color(0xFF333333),       // Crisp, subtle borders separating dark elements
+  outline: const Color(0xFF2D4238),       // Crisp, subtle borders separating dark elements
   shadow: Colors.black,
-  scrim: Colors.black87,            // Darker scrim for modals to pop out
+  scrim: Colors.black.withOpacity(0.8),   // Darker scrim for modals to pop out
 
-  // ── INVERSE ──
-  inverseSurface: Color(0xFFE4F0EA),
-  onInverseSurface: Color(0xFF000000),
-  inversePrimary: Color(0xFF1E5138),
+  // ── INVERSE (If you ever need a light element in dark mode) ──
+  inverseSurface: const Color(0xFFE4F0EA),
+  onInverseSurface: const Color(0xFF0B1410),
+  inversePrimary: const Color(0xFF1E5138),
 );
-
 /// ─────────────────────────────────────────────────────────────────────────
 /// THEME (uses CardThemeData to match your SDK)
 /// ─────────────────────────────────────────────────────────────────────────
@@ -336,25 +335,23 @@ class AppTheme {
     return ThemeData(
       useMaterial3: true,
       colorScheme: cs,
-      // PERFECT OLED BLACK SCFFOLD
-      scaffoldBackgroundColor: Colors.black,
-
-      // CRISP WHITE TEXT FOR DARK MODE
-      textTheme: AppTextStyles.textTheme(Colors.white, const Color(0xFFB0BEC5)),
+      scaffoldBackgroundColor: cs.background,
+      textTheme: AppTextStyles.textTheme(cs.onSurface, const Color(0xFFDDE7E2)),
 
       appBarTheme: AppBarTheme(
         elevation: 0,
-        backgroundColor: Colors.black, // OLED Black AppBar
-        foregroundColor: Colors.white,
+        backgroundColor: cs.surface,
+        foregroundColor: cs.onSurface,
         centerTitle: true,
         surfaceTintColor: Colors.transparent,
       ),
 
       cardTheme: CardThemeData(
         color: cs.surface,
-        elevation: 0,
+        elevation: 0.5,
         margin: EdgeInsets.zero,
         shape: AppShape.rounded(),
+        shadowColor: Colors.black.withOpacity(.25),
         surfaceTintColor: Colors.transparent,
       ),
 
@@ -378,21 +375,20 @@ class AppTheme {
       outlinedButtonTheme: OutlinedButtonThemeData(
         style: ButtonStyle(
           shape: const MaterialStatePropertyAll(AppShape.pill),
-          side: MaterialStatePropertyAll(BorderSide(color: cs.outline)),
-          foregroundColor: MaterialStatePropertyAll(cs.primary),
+          side: MaterialStatePropertyAll(BorderSide(color: AppColors.lighten(cs.outline, .2))),
+          foregroundColor: MaterialStatePropertyAll(cs.inversePrimary),
         ),
       ),
 
-      // PERFECTED TEXT FIELDS FOR DARK MODE
       inputDecorationTheme: InputDecorationTheme(
         filled: true,
-        fillColor: cs.surfaceVariant, // #1E1E1E
-        hintStyle: TextStyle(color: cs.onSurfaceVariant, fontWeight: FontWeight.w500), // Bright Grey
-        labelStyle: TextStyle(color: cs.onSurfaceVariant, fontWeight: FontWeight.w500), // Bright Grey
+        fillColor: AppColors.darken(cs.surface, .04),
+        hintStyle: TextStyle(color: AppColors.lighten(cs.onSurface, .35)),
+        labelStyle: TextStyle(color: AppColors.lighten(cs.onSurface, .35)),
         contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
         enabledBorder: OutlineInputBorder(
           borderRadius: BorderRadius.circular(14),
-          borderSide: BorderSide(color: cs.outline),
+          borderSide: BorderSide(color: AppColors.darken(cs.surfaceVariant, .06)),
         ),
         focusedBorder: OutlineInputBorder(
           borderRadius: BorderRadius.circular(14),
@@ -401,10 +397,10 @@ class AppTheme {
       ),
 
       chipTheme: ChipThemeData(
-        backgroundColor: cs.surfaceVariant,
+        backgroundColor: AppColors.darken(cs.surfaceVariant, .05),
         selectedColor: cs.primary,
-        disabledColor: cs.surfaceVariant,
-        labelStyle: TextStyle(color: Colors.white, fontWeight: FontWeight.w700),
+        disabledColor: AppColors.darken(cs.surfaceVariant, .05),
+        labelStyle: TextStyle(color: cs.onSurface, fontWeight: FontWeight.w700),
         secondaryLabelStyle: TextStyle(color: cs.onPrimary, fontWeight: FontWeight.w700),
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
         shape: const StadiumBorder(),
@@ -412,14 +408,14 @@ class AppTheme {
       ),
 
       bottomNavigationBarTheme: BottomNavigationBarThemeData(
-        backgroundColor: Colors.black, // OLED Black Navbar
+        backgroundColor: cs.surface,
         selectedItemColor: cs.primary,
-        unselectedItemColor: cs.onSurfaceVariant,
+        unselectedItemColor: AppColors.lighten(cs.onSurface, .35),
         elevation: 0,
       ),
 
-      dividerTheme: DividerThemeData(color: cs.outline, thickness: 1),
-      iconTheme: const IconThemeData(color: Colors.white),
+      dividerTheme: DividerThemeData(color: AppColors.darken(cs.surfaceVariant, .1), thickness: 1),
+      iconTheme: IconThemeData(color: cs.onSurface),
     );
   }
 }

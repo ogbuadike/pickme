@@ -41,7 +41,7 @@ class FundAccountSheet extends StatelessWidget {
     );
   }
 
-  Widget _dashedDivider() {
+  Widget _dashedDivider(bool isDark, ColorScheme cs) {
     return LayoutBuilder(
       builder: (context, c) {
         final w = c.maxWidth;
@@ -54,7 +54,8 @@ class FundAccountSheet extends StatelessWidget {
               width: dash,
               height: 1,
               child: DecoratedBox(
-                decoration: BoxDecoration(color: Colors.grey.withOpacity(.45)),
+                // FIXED: Uses crisp outline color in dark mode instead of grey
+                decoration: BoxDecoration(color: isDark ? cs.outline : Colors.grey.withOpacity(.45)),
               ),
             );
           }),
@@ -63,13 +64,15 @@ class FundAccountSheet extends StatelessWidget {
     );
   }
 
-  Widget _row(BuildContext context, String label, String value, {bool copy = false}) {
+  Widget _row(BuildContext context, String label, String value, bool isDark, ColorScheme cs, {bool copy = false}) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
       decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.surface,
+        // FIXED: Elevated slightly off the background in dark mode
+        color: isDark ? cs.surfaceVariant.withOpacity(0.3) : Theme.of(context).colorScheme.surface,
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: AppColors.mintBgLight),
+        // FIXED: Uses sleek outline instead of mint green in dark mode
+        border: Border.all(color: isDark ? cs.outline : AppColors.mintBgLight),
       ),
       child: Row(
         children: [
@@ -80,9 +83,9 @@ class FundAccountSheet extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(label,
-                      style: const TextStyle(
+                      style: TextStyle(
                         fontSize: 12,
-                        color: AppColors.textSecondary,
+                        color: isDark ? cs.onSurfaceVariant : AppColors.textSecondary,
                         fontWeight: FontWeight.w600,
                       )),
                   const SizedBox(height: 4),
@@ -90,9 +93,10 @@ class FundAccountSheet extends StatelessWidget {
                     value.isNotEmpty ? value : 'Not available',
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
+                    style: TextStyle(
                       fontSize: 16,
                       fontWeight: FontWeight.w800,
+                      color: isDark ? cs.onSurface : AppColors.textPrimary,
                     ),
                   ),
                 ],
@@ -102,7 +106,7 @@ class FundAccountSheet extends StatelessWidget {
           if (copy && value.isNotEmpty)
             IconButton(
               tooltip: 'Copy $label',
-              icon: const Icon(Icons.copy_rounded, size: 18),
+              icon: Icon(Icons.copy_rounded, size: 18, color: isDark ? cs.primary : AppColors.textSecondary),
               onPressed: () => _copy(context, label, value),
             ),
         ],
@@ -122,6 +126,10 @@ class FundAccountSheet extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+    final cs = theme.colorScheme;
+
     final bank = _firstNonEmpty(account, ['bankName', 'bank', 'bank_name', 'user_bank']) ?? 'PickMe Partner Bank';
     final number =
         _firstNonEmpty(account, ['accountNumber', 'account_number', 'user_account_number']) ?? '0000000000';
@@ -146,7 +154,7 @@ class FundAccountSheet extends StatelessWidget {
               width: 40,
               height: 4,
               decoration: BoxDecoration(
-                color: AppColors.mintBgLight,
+                color: isDark ? cs.surfaceVariant : AppColors.mintBgLight,
                 borderRadius: BorderRadius.circular(4),
               ),
             ),
@@ -155,12 +163,12 @@ class FundAccountSheet extends StatelessWidget {
             // Title + optional balance (same data, different layout from BalanceCard)
             Row(
               mainAxisAlignment: MainAxisAlignment.center,
-              children: const [
-                Icon(Icons.account_balance_wallet_outlined, size: 18),
-                SizedBox(width: 8),
+              children: [
+                Icon(Icons.account_balance_wallet_outlined, size: 18, color: isDark ? cs.primary : AppColors.textPrimary),
+                const SizedBox(width: 8),
                 Text(
                   'Fund Your Account',
-                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900),
+                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900, color: isDark ? cs.onSurface : AppColors.textPrimary),
                 ),
               ],
             ),
@@ -170,33 +178,33 @@ class FundAccountSheet extends StatelessWidget {
                 padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                 decoration: BoxDecoration(
                   gradient: LinearGradient(
-                    colors: [
-                      AppColors.accentColor.withOpacity(.12),
-                      AppColors.accentColor.withOpacity(.06),
-                    ],
+                    colors: isDark
+                        ? [cs.primary.withOpacity(.15), cs.primary.withOpacity(.05)]
+                        : [AppColors.accentColor.withOpacity(.12), AppColors.accentColor.withOpacity(.06)],
                   ),
                   borderRadius: BorderRadius.circular(10),
-                  border: Border.all(color: AppColors.accentColor.withOpacity(.4)),
+                  border: Border.all(color: isDark ? cs.primary.withOpacity(.3) : AppColors.accentColor.withOpacity(.4)),
                 ),
                 child: Text(
                   'Current balance: $currency${_fmt(balance!)}',
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontWeight: FontWeight.w800,
                     letterSpacing: -0.1,
+                    color: isDark ? cs.primary : AppColors.textPrimary,
                   ),
                 ),
               ),
             ],
 
             const SizedBox(height: 16),
-            _row(context, 'Bank', bank),
+            _row(context, 'Bank', bank, isDark, cs),
             const SizedBox(height: 12),
-            _row(context, 'Account number', number, copy: true),
+            _row(context, 'Account number', number, isDark, cs, copy: true),
             const SizedBox(height: 12),
-            _row(context, 'Account name', name),
+            _row(context, 'Account name', name, isDark, cs),
             const SizedBox(height: 14),
 
-            _dashedDivider(),
+            _dashedDivider(isDark, cs),
             const SizedBox(height: 12),
 
             // Notes – mirrors BalanceCard messaging (layout-only difference)
@@ -205,33 +213,33 @@ class FundAccountSheet extends StatelessWidget {
               child: Text(
                 'Important Notes:',
                 style: TextStyle(
-                  color: Theme.of(context).colorScheme.onSurface.withOpacity(.9),
+                  color: isDark ? cs.onSurface : theme.colorScheme.onSurface.withOpacity(.9),
                   fontWeight: FontWeight.w800,
                   fontSize: 14,
                 ),
               ),
             ),
             const SizedBox(height: 6),
-            _note('Transfers may be delayed within 30–60 minutes.'),
-            _note('Include detailed info in the transfer description (optional).'),
-            _note('Contact support if you encounter any issues.'),
+            _note('Transfers may be delayed within 30–60 minutes.', isDark, cs),
+            _note('Include detailed info in the transfer description (optional).', isDark, cs),
+            _note('Contact support if you encounter any issues.', isDark, cs),
           ],
         ),
       ),
     );
   }
 
-  Widget _note(String text) {
+  Widget _note(String text, bool isDark, ColorScheme cs) {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 4),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text('• ', style: TextStyle(fontSize: 13)),
+          Text('• ', style: TextStyle(fontSize: 13, color: isDark ? cs.onSurfaceVariant : AppColors.textSecondary)),
           Expanded(
             child: Text(
               text,
-              style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, height: 1.25),
+              style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, height: 1.25, color: isDark ? cs.onSurfaceVariant : AppColors.textSecondary),
             ),
           ),
         ],

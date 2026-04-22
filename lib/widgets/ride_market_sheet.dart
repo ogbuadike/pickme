@@ -1,3 +1,4 @@
+// lib/widgets/ride_market_sheet.dart
 import 'dart:math' as math;
 import 'dart:ui' show FontFeature;
 
@@ -706,7 +707,10 @@ class _RideMarketSheetState extends State<RideMarketSheet> {
   Widget build(BuildContext context) {
     final mq = MediaQuery.of(context);
     final ui = UIScale.of(context);
-    final cs = Theme.of(context).colorScheme;
+    final theme = Theme.of(context);
+    final cs = theme.colorScheme;
+    final isDark = theme.brightness == Brightness.dark;
+
     final drivers = _stableDrivers;
     final maxH = _sheetMaxHeight(mq, ui);
 
@@ -718,17 +722,19 @@ class _RideMarketSheetState extends State<RideMarketSheet> {
           width: double.infinity,
           constraints: BoxConstraints(maxHeight: maxH),
           decoration: BoxDecoration(
-            color: Theme.of(context).cardColor,
+            // FIXED: Ensure surface is correctly applied for OLED dark mode
+            color: isDark ? cs.surface : theme.cardColor,
             borderRadius: BorderRadius.vertical(
               top: Radius.circular(ui.radius(18)),
             ),
             boxShadow: [
               BoxShadow(
-                color: Colors.black.withOpacity(0.16),
+                color: isDark ? Colors.black.withOpacity(0.5) : Colors.black.withOpacity(0.16),
                 blurRadius: ui.reduceFx ? 8 : 16,
                 offset: const Offset(0, -8),
               ),
             ],
+            border: isDark ? Border(top: BorderSide(color: cs.outline, width: 1.0)) : null,
           ),
           child: LayoutBuilder(
             builder: (context, constraints) {
@@ -738,9 +744,9 @@ class _RideMarketSheetState extends State<RideMarketSheet> {
               return Column(
                 children: [
                   SizedBox(height: ui.gap(6)),
-                  _handle(cs, ui),
+                  _handle(cs, ui, isDark),
                   SizedBox(height: ui.gap(4)),
-                  _topBar(context, ui, dense: dense),
+                  _topBar(context, ui, dense: dense, isDark: isDark, cs: cs),
                   Expanded(
                     child: _content(
                       context,
@@ -748,6 +754,8 @@ class _RideMarketSheetState extends State<RideMarketSheet> {
                       ui,
                       dense: dense,
                       ultraDense: ultraDense,
+                      isDark: isDark,
+                      cs: cs,
                     ),
                   ),
                   _bottomBar(
@@ -757,6 +765,8 @@ class _RideMarketSheetState extends State<RideMarketSheet> {
                     ui,
                     dense: dense,
                     maxHeight: maxH,
+                    isDark: isDark,
+                    cs: cs,
                   ),
                 ],
               );
@@ -767,19 +777,18 @@ class _RideMarketSheetState extends State<RideMarketSheet> {
     );
   }
 
-  Widget _handle(ColorScheme cs, UIScale ui) {
+  Widget _handle(ColorScheme cs, UIScale ui, bool isDark) {
     return Container(
       width: ui.landscape ? 38 : 46,
       height: 4,
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(999),
-        color: cs.onSurface.withOpacity(0.16),
+        color: isDark ? cs.onSurfaceVariant.withOpacity(0.5) : cs.onSurface.withOpacity(0.16),
       ),
     );
   }
 
-  Widget _topBar(BuildContext context, UIScale ui, {required bool dense}) {
-    final cs = Theme.of(context).colorScheme;
+  Widget _topBar(BuildContext context, UIScale ui, {required bool dense, required bool isDark, required ColorScheme cs}) {
     final iconSize = ui.icon(dense ? 15 : 17);
 
     return Padding(
@@ -794,7 +803,7 @@ class _RideMarketSheetState extends State<RideMarketSheet> {
               width: ui.gap(30),
               height: ui.gap(30),
             ),
-            icon: Icon(Icons.close_rounded, size: iconSize),
+            icon: Icon(Icons.close_rounded, size: iconSize, color: cs.onSurface),
             tooltip: 'Close',
           ),
           Expanded(
@@ -807,7 +816,7 @@ class _RideMarketSheetState extends State<RideMarketSheet> {
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(
                     fontWeight: FontWeight.w900,
-                    color: cs.onSurface.withOpacity(0.92),
+                    color: cs.onSurface,
                     fontSize: ui.font(dense ? 11.0 : 12.0),
                     height: 1.0,
                     letterSpacing: -0.18,
@@ -820,7 +829,8 @@ class _RideMarketSheetState extends State<RideMarketSheet> {
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(
                     fontWeight: FontWeight.w800,
-                    color: cs.onSurface.withOpacity(0.55),
+                    // FIXED: Removed opacity to stop fenty text, using solid grey for dark mode
+                    color: isDark ? cs.onSurfaceVariant : cs.onSurface.withOpacity(0.55),
                     fontSize: ui.font(dense ? 8.7 : 9.5),
                     height: 1.0,
                   ),
@@ -839,7 +849,7 @@ class _RideMarketSheetState extends State<RideMarketSheet> {
               width: ui.gap(30),
               height: ui.gap(30),
             ),
-            icon: Icon(Icons.refresh_rounded, size: iconSize),
+            icon: Icon(Icons.refresh_rounded, size: iconSize, color: cs.onSurface),
             tooltip: 'Refresh',
           ),
         ],
@@ -853,6 +863,8 @@ class _RideMarketSheetState extends State<RideMarketSheet> {
       UIScale ui, {
         required bool dense,
         required bool ultraDense,
+        required bool isDark,
+        required ColorScheme cs,
       }) {
     return RepaintBoundary(
       child: ListView(
@@ -864,12 +876,12 @@ class _RideMarketSheetState extends State<RideMarketSheet> {
           ui.gap(6),
         ),
         children: [
-          _routeMini(context, ui, dense: dense),
+          _routeMini(context, ui, dense: dense, isDark: isDark, cs: cs),
           SizedBox(height: ui.gap(6)),
           if (_showNoDrivers)
-            _emptyState(context, ui)
+            _emptyState(context, ui, isDark: isDark, cs: cs)
           else ...[
-            if (widget.loading && drivers.isEmpty) _loadingRow(context, ui),
+            if (widget.loading && drivers.isEmpty) _loadingRow(context, ui, isDark: isDark, cs: cs),
             ...List.generate(drivers.length, (i) {
               final d = drivers[i];
               final selected = (_selectedDriverId == d.id);
@@ -885,6 +897,8 @@ class _RideMarketSheetState extends State<RideMarketSheet> {
                     dense: dense,
                     ultraDense: ultraDense,
                     selected: selected,
+                    isDark: isDark,
+                    cs: cs,
                     onTap: () => setState(() => _selectedDriverId = d.id),
                   ),
                 ),
@@ -896,8 +910,7 @@ class _RideMarketSheetState extends State<RideMarketSheet> {
     );
   }
 
-  Widget _routeMini(BuildContext context, UIScale ui, {required bool dense}) {
-    final cs = Theme.of(context).colorScheme;
+  Widget _routeMini(BuildContext context, UIScale ui, {required bool dense, required bool isDark, required ColorScheme cs}) {
     final origin =
     widget.originText.trim().isEmpty ? 'Pickup' : widget.originText.trim();
     final dest = widget.destinationText.trim().isEmpty
@@ -913,9 +926,9 @@ class _RideMarketSheetState extends State<RideMarketSheet> {
         ui.inset(dense ? 8 : 9),
       ),
       decoration: BoxDecoration(
-        color: cs.surface,
+        color: isDark ? cs.surfaceVariant.withOpacity(0.5) : cs.surface,
         borderRadius: BorderRadius.circular(ui.radius(13)),
-        border: Border.all(color: cs.onSurface.withOpacity(0.08)),
+        border: Border.all(color: isDark ? cs.outline : cs.onSurface.withOpacity(0.08)),
       ),
       child: _FromToMini(
         origin: origin,
@@ -924,6 +937,7 @@ class _RideMarketSheetState extends State<RideMarketSheet> {
         cs: cs,
         ui: ui,
         dense: dense,
+        isDark: isDark,
       ),
     );
   }
@@ -943,13 +957,13 @@ class _RideMarketSheetState extends State<RideMarketSheet> {
     return Icons.verified_rounded;
   }
 
-  Color _rankColor(String r) {
+  Color _rankColor(String r, bool isDark, ColorScheme cs) {
     final x = r.trim().toLowerCase();
     if (x.contains('platinum')) return const Color(0xFF6A5ACD);
     if (x.contains('gold')) return const Color(0xFFB8860B);
     if (x.contains('silver')) return const Color(0xFF607D8B);
     if (x.contains('bronze')) return const Color(0xFF8D6E63);
-    return const Color(0xFF1E8E3E);
+    return isDark ? cs.primary : const Color(0xFF1E8E3E);
   }
 
   Widget _driverCard(
@@ -959,12 +973,13 @@ class _RideMarketSheetState extends State<RideMarketSheet> {
         required bool dense,
         required bool ultraDense,
         required bool selected,
+        required bool isDark,
+        required ColorScheme cs,
         required VoidCallback onTap,
       }) {
-    final cs = Theme.of(context).colorScheme;
 
     final rankText = d.rank.trim().isEmpty ? 'Verified' : d.rank.trim();
-    final rc = _rankColor(rankText);
+    final rc = _rankColor(rankText, isDark, cs);
 
     final vt = d.vehicleType.trim().isEmpty ? 'car' : d.vehicleType.trim();
     final seats =
@@ -991,7 +1006,7 @@ class _RideMarketSheetState extends State<RideMarketSheet> {
         boxShadow: selected
             ? [
           BoxShadow(
-            color: AppColors.primary.withOpacity(0.10),
+            color: (isDark ? cs.primary : AppColors.primary).withOpacity(0.10),
             blurRadius: ui.reduceFx ? 6 : 12,
             offset: const Offset(0, 5),
           ),
@@ -1011,12 +1026,14 @@ class _RideMarketSheetState extends State<RideMarketSheet> {
             ui.inset(6),
           ),
           decoration: BoxDecoration(
-            color: selected ? AppColors.primary.withOpacity(0.08) : cs.surface,
+            color: selected
+                ? (isDark ? cs.primary.withOpacity(0.12) : AppColors.primary.withOpacity(0.08))
+                : (isDark ? cs.surfaceVariant.withOpacity(0.5) : cs.surface),
             borderRadius: BorderRadius.circular(ui.radius(14)),
             border: Border.all(
               color: selected
-                  ? AppColors.primary.withOpacity(0.46)
-                  : cs.onSurface.withOpacity(0.08),
+                  ? (isDark ? cs.primary.withOpacity(0.5) : AppColors.primary.withOpacity(0.46))
+                  : (isDark ? cs.outline : cs.onSurface.withOpacity(0.08)),
               width: selected ? 1.35 : 1.0,
             ),
           ),
@@ -1036,6 +1053,8 @@ class _RideMarketSheetState extends State<RideMarketSheet> {
                     rc,
                     size: avatarSize,
                     selected: selected,
+                    isDark: isDark,
+                    cs: cs,
                   ),
                   SizedBox(width: ui.gap(6)),
                   Expanded(
@@ -1051,7 +1070,7 @@ class _RideMarketSheetState extends State<RideMarketSheet> {
                                 overflow: TextOverflow.ellipsis,
                                 style: TextStyle(
                                   fontWeight: FontWeight.w900,
-                                  color: cs.onSurface.withOpacity(0.92),
+                                  color: cs.onSurface,
                                   fontSize: ui.font(
                                     ultraDense ? 10.0 : (dense ? 10.4 : 10.8),
                                   ),
@@ -1061,7 +1080,7 @@ class _RideMarketSheetState extends State<RideMarketSheet> {
                               ),
                             ),
                             SizedBox(width: ui.gap(4)),
-                            _ratingPill(context, ui, d.rating),
+                            _ratingPill(context, ui, d.rating, isDark: isDark, cs: cs),
                           ],
                         ),
                         SizedBox(height: ui.gap(4)),
@@ -1079,8 +1098,10 @@ class _RideMarketSheetState extends State<RideMarketSheet> {
                                 text: vt.toLowerCase().contains('bike')
                                     ? 'Bike'
                                     : 'Car',
-                                tone: AppColors.primary,
+                                tone: isDark ? cs.primary : AppColors.primary,
                                 strong: true,
+                                isDark: isDark,
+                                cs: cs,
                               ),
                               SizedBox(width: ui.gap(4)),
                               _chipNx(
@@ -1089,6 +1110,8 @@ class _RideMarketSheetState extends State<RideMarketSheet> {
                                 icon: Icons.airline_seat_recline_normal_rounded,
                                 text: '$seats',
                                 tone: const Color(0xFF1A73E8),
+                                isDark: isDark,
+                                cs: cs,
                               ),
                               SizedBox(width: ui.gap(4)),
                               _chipNx(
@@ -1097,6 +1120,8 @@ class _RideMarketSheetState extends State<RideMarketSheet> {
                                 icon: Icons.av_timer_rounded,
                                 text: etaText,
                                 tone: const Color(0xFFB8860B),
+                                isDark: isDark,
+                                cs: cs,
                               ),
                               SizedBox(width: ui.gap(4)),
                               _chipNx(
@@ -1104,7 +1129,9 @@ class _RideMarketSheetState extends State<RideMarketSheet> {
                                 ui: ui,
                                 icon: Icons.route_rounded,
                                 text: distText,
-                                tone: const Color(0xFF1E8E3E),
+                                tone: isDark ? cs.primary : const Color(0xFF1E8E3E),
+                                isDark: isDark,
+                                cs: cs,
                               ),
                               if (d.carPlate.trim().isNotEmpty) ...[
                                 SizedBox(width: ui.gap(4)),
@@ -1115,6 +1142,8 @@ class _RideMarketSheetState extends State<RideMarketSheet> {
                                   text: d.carPlate.trim(),
                                   tone: const Color(0xFF6A5ACD),
                                   mono: true,
+                                  isDark: isDark,
+                                  cs: cs,
                                 ),
                               ],
                               if (!veryNarrow && d.category.trim().isNotEmpty) ...[
@@ -1124,7 +1153,9 @@ class _RideMarketSheetState extends State<RideMarketSheet> {
                                   ui: ui,
                                   icon: Icons.bolt_rounded,
                                   text: _shortCat(d.category),
-                                  tone: AppColors.primary,
+                                  tone: isDark ? cs.primary : AppColors.primary,
+                                  isDark: isDark,
+                                  cs: cs,
                                 ),
                               ],
                             ],
@@ -1147,13 +1178,15 @@ class _RideMarketSheetState extends State<RideMarketSheet> {
                             img,
                             vt,
                             size: thumbSize,
+                            isDark: isDark,
+                            cs: cs,
                           ),
                           if (selected) ...[
                             SizedBox(width: ui.gap(3)),
                             Icon(
                               Icons.check_circle_rounded,
                               size: ui.icon(13),
-                              color: AppColors.primary,
+                              color: isDark ? cs.primary : AppColors.primary,
                             ),
                           ],
                         ],
@@ -1165,7 +1198,7 @@ class _RideMarketSheetState extends State<RideMarketSheet> {
                         overflow: TextOverflow.ellipsis,
                         style: TextStyle(
                           fontWeight: FontWeight.w900,
-                          color: cs.onSurface.withOpacity(0.92),
+                          color: cs.onSurface,
                           fontSize: ui.font(
                             ultraDense ? 10.0 : (dense ? 10.5 : 11.0),
                           ),
@@ -1197,8 +1230,7 @@ class _RideMarketSheetState extends State<RideMarketSheet> {
     return '${km.toStringAsFixed(1)}km';
   }
 
-  Widget _ratingPill(BuildContext context, UIScale ui, double rating) {
-    final cs = Theme.of(context).colorScheme;
+  Widget _ratingPill(BuildContext context, UIScale ui, double rating, {required bool isDark, required ColorScheme cs}) {
     final r = rating.clamp(0, 5).toDouble();
 
     return Container(
@@ -1209,7 +1241,7 @@ class _RideMarketSheetState extends State<RideMarketSheet> {
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(999),
         color: const Color(0xFFFFD54F).withOpacity(0.14),
-        border: Border.all(color: cs.onSurface.withOpacity(0.08)),
+        border: Border.all(color: isDark ? const Color(0xFFFFD54F).withOpacity(0.5) : cs.onSurface.withOpacity(0.08)),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
@@ -1224,7 +1256,7 @@ class _RideMarketSheetState extends State<RideMarketSheet> {
             r.toStringAsFixed(1),
             style: TextStyle(
               fontWeight: FontWeight.w900,
-              color: cs.onSurface.withOpacity(0.82),
+              color: isDark ? Colors.white : cs.onSurface.withOpacity(0.82),
               fontSize: ui.font(8.6),
               height: 1.0,
               fontFeatures: const [FontFeature.tabularFigures()],
@@ -1244,12 +1276,14 @@ class _RideMarketSheetState extends State<RideMarketSheet> {
       Color rc, {
         required double size,
         required bool selected,
+        required bool isDark,
+        required ColorScheme cs,
       }) {
-    final cs = Theme.of(context).colorScheme;
+
     final borderColor = selected
-        ? AppColors.primary.withOpacity(0.40)
-        : cs.onSurface.withOpacity(0.10);
-    final bg = cs.onSurface.withOpacity(0.06);
+        ? (isDark ? cs.primary.withOpacity(0.60) : AppColors.primary.withOpacity(0.40))
+        : (isDark ? cs.outline : cs.onSurface.withOpacity(0.10));
+    final bg = isDark ? cs.surfaceVariant : cs.onSurface.withOpacity(0.06);
     final u = _fixUrl(url);
 
     Widget avatarFallback() {
@@ -1266,7 +1300,7 @@ class _RideMarketSheetState extends State<RideMarketSheet> {
             initials,
             style: TextStyle(
               fontWeight: FontWeight.w900,
-              color: cs.onSurface.withOpacity(0.78),
+              color: isDark ? cs.onSurface : cs.onSurface.withOpacity(0.78),
               fontSize: ui.font(9.2),
             ),
           ),
@@ -1299,10 +1333,10 @@ class _RideMarketSheetState extends State<RideMarketSheet> {
                 child: SizedBox(
                   width: ui.gap(10),
                   height: ui.gap(10),
-                  child: const CircularProgressIndicator(
+                  child: CircularProgressIndicator(
                     strokeWidth: 1.8,
                     valueColor: AlwaysStoppedAnimation<Color>(
-                      AppColors.primary,
+                      isDark ? cs.primary : AppColors.primary,
                     ),
                   ),
                 ),
@@ -1326,9 +1360,9 @@ class _RideMarketSheetState extends State<RideMarketSheet> {
             child: Container(
               padding: EdgeInsets.all(ui.inset(2)),
               decoration: BoxDecoration(
-                color: Theme.of(context).cardColor,
+                color: isDark ? cs.surface : Theme.of(context).cardColor,
                 borderRadius: BorderRadius.circular(999),
-                border: Border.all(color: cs.onSurface.withOpacity(0.10)),
+                border: Border.all(color: isDark ? cs.outline : cs.onSurface.withOpacity(0.10)),
               ),
               child: Icon(
                 _rankIcon(rank),
@@ -1348,22 +1382,23 @@ class _RideMarketSheetState extends State<RideMarketSheet> {
       String url,
       String vehicleType, {
         required double size,
+        required bool isDark,
+        required ColorScheme cs,
       }) {
-    final cs = Theme.of(context).colorScheme;
 
     Widget fallback() {
       return Container(
         width: size,
         height: size,
         decoration: BoxDecoration(
-          color: cs.onSurface.withOpacity(0.06),
+          color: isDark ? cs.surfaceVariant : cs.onSurface.withOpacity(0.06),
           borderRadius: BorderRadius.circular(ui.radius(10)),
-          border: Border.all(color: cs.onSurface.withOpacity(0.10)),
+          border: Border.all(color: isDark ? cs.outline : cs.onSurface.withOpacity(0.10)),
         ),
         child: Center(
           child: Icon(
             _vehicleIcon(vehicleType),
-            color: cs.onSurface.withOpacity(0.55),
+            color: isDark ? cs.onSurfaceVariant : cs.onSurface.withOpacity(0.55),
             size: ui.icon(14),
           ),
         ),
@@ -1390,15 +1425,15 @@ class _RideMarketSheetState extends State<RideMarketSheet> {
           loadingBuilder: (c, w, p) {
             if (p == null) return w;
             return Container(
-              color: cs.onSurface.withOpacity(0.06),
+              color: isDark ? cs.surfaceVariant : cs.onSurface.withOpacity(0.06),
               child: Center(
                 child: SizedBox(
                   width: ui.gap(10),
                   height: ui.gap(10),
-                  child: const CircularProgressIndicator(
+                  child: CircularProgressIndicator(
                     strokeWidth: 1.8,
                     valueColor: AlwaysStoppedAnimation<Color>(
-                      AppColors.primary,
+                      isDark ? cs.primary : AppColors.primary,
                     ),
                   ),
                 ),
@@ -1410,8 +1445,7 @@ class _RideMarketSheetState extends State<RideMarketSheet> {
     );
   }
 
-  Widget _loadingRow(BuildContext context, UIScale ui) {
-    final cs = Theme.of(context).colorScheme;
+  Widget _loadingRow(BuildContext context, UIScale ui, {required bool isDark, required ColorScheme cs}) {
     return Container(
       margin: EdgeInsets.only(bottom: ui.gap(6)),
       padding: EdgeInsets.fromLTRB(
@@ -1421,18 +1455,18 @@ class _RideMarketSheetState extends State<RideMarketSheet> {
         ui.inset(8),
       ),
       decoration: BoxDecoration(
-        color: cs.surface,
+        color: isDark ? cs.surfaceVariant.withOpacity(0.5) : cs.surface,
         borderRadius: BorderRadius.circular(ui.radius(13)),
-        border: Border.all(color: cs.onSurface.withOpacity(0.08)),
+        border: Border.all(color: isDark ? cs.outline : cs.onSurface.withOpacity(0.08)),
       ),
       child: Row(
         children: [
           SizedBox(
             width: ui.gap(13),
             height: ui.gap(13),
-            child: const CircularProgressIndicator(
+            child: CircularProgressIndicator(
               strokeWidth: 2.0,
-              valueColor: AlwaysStoppedAnimation<Color>(AppColors.primary),
+              valueColor: AlwaysStoppedAnimation<Color>(isDark ? cs.primary : AppColors.primary),
             ),
           ),
           SizedBox(width: ui.gap(8)),
@@ -1441,7 +1475,7 @@ class _RideMarketSheetState extends State<RideMarketSheet> {
               'Searching…',
               style: TextStyle(
                 fontWeight: FontWeight.w900,
-                color: cs.onSurface.withOpacity(0.78),
+                color: isDark ? cs.onSurface : cs.onSurface.withOpacity(0.78),
                 fontSize: ui.font(10.2),
               ),
             ),
@@ -1451,9 +1485,7 @@ class _RideMarketSheetState extends State<RideMarketSheet> {
     );
   }
 
-  Widget _emptyState(BuildContext context, UIScale ui) {
-    final cs = Theme.of(context).colorScheme;
-
+  Widget _emptyState(BuildContext context, UIScale ui, {required bool isDark, required ColorScheme cs}) {
     return Container(
       padding: EdgeInsets.fromLTRB(
         ui.inset(12),
@@ -1462,15 +1494,15 @@ class _RideMarketSheetState extends State<RideMarketSheet> {
         ui.inset(12),
       ),
       decoration: BoxDecoration(
-        color: cs.surface,
+        color: isDark ? cs.surfaceVariant.withOpacity(0.5) : cs.surface,
         borderRadius: BorderRadius.circular(ui.radius(14)),
-        border: Border.all(color: cs.onSurface.withOpacity(0.08)),
+        border: Border.all(color: isDark ? cs.outline : cs.onSurface.withOpacity(0.08)),
       ),
       child: Column(
         children: [
           Icon(
             Icons.directions_car_filled_rounded,
-            color: cs.onSurface.withOpacity(0.55),
+            color: isDark ? cs.onSurfaceVariant : cs.onSurface.withOpacity(0.55),
             size: ui.icon(24),
           ),
           SizedBox(height: ui.gap(6)),
@@ -1478,7 +1510,7 @@ class _RideMarketSheetState extends State<RideMarketSheet> {
             'No drivers nearby',
             style: TextStyle(
               fontWeight: FontWeight.w900,
-              color: cs.onSurface.withOpacity(0.84),
+              color: cs.onSurface,
               fontSize: ui.font(10.8),
             ),
           ),
@@ -1487,7 +1519,7 @@ class _RideMarketSheetState extends State<RideMarketSheet> {
             'Try refresh in a moment.',
             style: TextStyle(
               fontWeight: FontWeight.w700,
-              color: cs.onSurface.withOpacity(0.60),
+              color: isDark ? cs.onSurfaceVariant : cs.onSurface.withOpacity(0.60),
               fontSize: ui.font(9.0),
             ),
           ),
@@ -1501,8 +1533,8 @@ class _RideMarketSheetState extends State<RideMarketSheet> {
                 widget.onRefresh();
               },
               style: ElevatedButton.styleFrom(
-                backgroundColor: AppColors.primary,
-                foregroundColor: Colors.white,
+                backgroundColor: isDark ? cs.primary : AppColors.primary,
+                foregroundColor: isDark ? cs.onPrimary : Colors.white,
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(ui.radius(12)),
                 ),
@@ -1530,9 +1562,9 @@ class _RideMarketSheetState extends State<RideMarketSheet> {
       UIScale ui, {
         required bool dense,
         required double maxHeight,
+        required bool isDark,
+        required ColorScheme cs,
       }) {
-    final cs = Theme.of(context).colorScheme;
-
     final selected = (_selectedDriverId != null)
         ? drivers
         .where((x) => x.id == _selectedDriverId)
@@ -1552,9 +1584,9 @@ class _RideMarketSheetState extends State<RideMarketSheet> {
           bottomInset,
         ),
         decoration: BoxDecoration(
-          color: Theme.of(context).cardColor,
+          color: isDark ? cs.surface : Theme.of(context).cardColor,
           border: Border(
-            top: BorderSide(color: cs.onSurface.withOpacity(0.08)),
+            top: BorderSide(color: isDark ? cs.outline : cs.onSurface.withOpacity(0.08)),
           ),
         ),
         child: SizedBox(
@@ -1619,10 +1651,10 @@ class _RideMarketSheetState extends State<RideMarketSheet> {
             }
                 : null,
             style: ElevatedButton.styleFrom(
-              backgroundColor: AppColors.primary,
-              foregroundColor: Colors.white,
-              disabledBackgroundColor: cs.onSurface.withOpacity(0.10),
-              disabledForegroundColor: cs.onSurface.withOpacity(0.40),
+              backgroundColor: isDark ? cs.primary : AppColors.primary,
+              foregroundColor: isDark ? cs.onPrimary : Colors.white,
+              disabledBackgroundColor: isDark ? cs.surfaceVariant : cs.onSurface.withOpacity(0.10),
+              disabledForegroundColor: isDark ? cs.onSurfaceVariant.withOpacity(0.5) : cs.onSurface.withOpacity(0.40),
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(ui.radius(14)),
               ),
@@ -1703,6 +1735,7 @@ class _FromToMini extends StatelessWidget {
   final ColorScheme cs;
   final UIScale ui;
   final bool dense;
+  final bool isDark;
 
   const _FromToMini({
     required this.origin,
@@ -1711,6 +1744,7 @@ class _FromToMini extends StatelessWidget {
     required this.cs,
     required this.ui,
     required this.dense,
+    required this.isDark,
   });
 
   @override
@@ -1731,6 +1765,7 @@ class _FromToMini extends StatelessWidget {
             height: h,
             width: treeW,
             dense: dense,
+            isDark: isDark,
           ),
           SizedBox(width: gap),
           Expanded(
@@ -1749,6 +1784,7 @@ class _FromToMini extends StatelessWidget {
                         cs: cs,
                         ui: ui,
                         strong: true,
+                        isDark: isDark,
                       ),
                       _LabeledLine(
                         label: 'TO',
@@ -1756,6 +1792,7 @@ class _FromToMini extends StatelessWidget {
                         cs: cs,
                         ui: ui,
                         strong: false,
+                        isDark: isDark,
                       ),
                     ],
                   ),
@@ -1767,6 +1804,7 @@ class _FromToMini extends StatelessWidget {
                     count: count,
                     cs: cs,
                     ui: ui,
+                    isDark: isDark,
                   ),
                 ),
               ],
@@ -1784,6 +1822,7 @@ class _RouteTreeAligned extends StatelessWidget {
   final double height;
   final double width;
   final bool dense;
+  final bool isDark;
 
   const _RouteTreeAligned({
     required this.cs,
@@ -1791,6 +1830,7 @@ class _RouteTreeAligned extends StatelessWidget {
     required this.height,
     required this.width,
     required this.dense,
+    required this.isDark,
   });
 
   @override
@@ -1815,7 +1855,7 @@ class _RouteTreeAligned extends StatelessWidget {
               padding: const EdgeInsets.symmetric(vertical: 2),
               child: CustomPaint(
                 painter: _DottedStemPainter(
-                  color: cs.onSurface.withOpacity(0.22),
+                  color: isDark ? cs.onSurfaceVariant : cs.onSurface.withOpacity(0.22),
                 ),
               ),
             ),
@@ -1921,6 +1961,7 @@ class _LabeledLine extends StatelessWidget {
   final ColorScheme cs;
   final UIScale ui;
   final bool strong;
+  final bool isDark;
 
   const _LabeledLine({
     required this.label,
@@ -1928,6 +1969,7 @@ class _LabeledLine extends StatelessWidget {
     required this.cs,
     required this.ui,
     required this.strong,
+    required this.isDark,
   });
 
   @override
@@ -1946,7 +1988,7 @@ class _LabeledLine extends StatelessWidget {
               height: 1.0,
               fontWeight: FontWeight.w900,
               letterSpacing: 0.30,
-              color: cs.onSurface.withOpacity(0.42),
+              color: isDark ? cs.onSurfaceVariant : cs.onSurface.withOpacity(0.42),
             ),
           ),
         ),
@@ -1961,7 +2003,7 @@ class _LabeledLine extends StatelessWidget {
               height: 1.0,
               letterSpacing: -0.12,
               fontWeight: strong ? FontWeight.w900 : FontWeight.w800,
-              color: cs.onSurface.withOpacity(strong ? 0.92 : 0.66),
+              color: isDark ? cs.onSurface : cs.onSurface.withOpacity(strong ? 0.92 : 0.66),
             ),
           ),
         ),
@@ -1974,21 +2016,23 @@ class _NearbyPillMini extends StatelessWidget {
   final int count;
   final ColorScheme cs;
   final UIScale ui;
+  final bool isDark;
 
   const _NearbyPillMini({
     required this.count,
     required this.cs,
     required this.ui,
+    required this.isDark,
   });
 
   @override
   Widget build(BuildContext context) {
     return DecoratedBox(
       decoration: BoxDecoration(
-        color: cs.surface.withOpacity(0.88),
+        color: isDark ? cs.surfaceVariant : cs.surface.withOpacity(0.88),
         borderRadius: BorderRadius.circular(999),
         border: Border.all(
-          color: AppColors.primary.withOpacity(0.22),
+          color: isDark ? cs.outline : AppColors.primary.withOpacity(0.22),
           width: 1,
         ),
       ),
@@ -2003,7 +2047,7 @@ class _NearbyPillMini extends StatelessWidget {
             Icon(
               Icons.near_me_rounded,
               size: ui.icon(9),
-              color: AppColors.primary,
+              color: isDark ? cs.primary : AppColors.primary,
             ),
             SizedBox(width: ui.gap(3)),
             Text(
@@ -2013,7 +2057,7 @@ class _NearbyPillMini extends StatelessWidget {
                 height: 1.0,
                 fontWeight: FontWeight.w900,
                 letterSpacing: -0.08,
-                color: cs.onSurface.withOpacity(0.88),
+                color: isDark ? cs.onSurface : cs.onSurface.withOpacity(0.88),
                 fontFeatures: const [FontFeature.tabularFigures()],
               ),
             ),
@@ -2046,14 +2090,15 @@ Widget _chipNx(
       required Color tone,
       bool strong = false,
       bool mono = false,
+      required bool isDark,
+      required ColorScheme cs,
     }) {
-  final cs = Theme.of(context).colorScheme;
 
   return DecoratedBox(
     decoration: BoxDecoration(
-      color: tone.withOpacity(0.10),
+      color: tone.withOpacity(isDark ? 0.20 : 0.10),
       borderRadius: BorderRadius.circular(999),
-      border: Border.all(color: tone.withOpacity(0.20), width: 1),
+      border: Border.all(color: tone.withOpacity(isDark ? 0.35 : 0.20), width: 1),
     ),
     child: Padding(
       padding: EdgeInsets.symmetric(
@@ -2075,7 +2120,7 @@ Widget _chipNx(
             overflow: TextOverflow.ellipsis,
             style: TextStyle(
               fontWeight: strong ? FontWeight.w900 : FontWeight.w800,
-              color: cs.onSurface.withOpacity(0.86),
+              color: isDark ? cs.onSurface : cs.onSurface.withOpacity(0.86),
               fontSize: ui.font(7.8),
               height: 1.0,
               letterSpacing: -0.05,

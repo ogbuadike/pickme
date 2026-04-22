@@ -1,3 +1,4 @@
+// lib/screens/ride_history_screen.dart
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -127,40 +128,46 @@ class _RideHistoryScreenState extends State<RideHistoryScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+    final cs = theme.colorScheme;
     final filtered = _filteredRides;
 
     return Scaffold(
-      backgroundColor: cs.background,
+      backgroundColor: isDark ? Colors.black : AppColors.offWhite,
       appBar: AppBar(
-        title: const Text('Ride History', style: TextStyle(fontWeight: FontWeight.w800)),
+        title: Text('Ride History', style: TextStyle(fontWeight: FontWeight.w800, color: isDark ? cs.onSurface : AppColors.textPrimary)),
         backgroundColor: Colors.transparent,
         elevation: 0,
+        leading: IconButton(
+          icon: Icon(Icons.arrow_back_ios_new_rounded, size: 20, color: isDark ? cs.onSurface : AppColors.textPrimary),
+          onPressed: () => Navigator.of(context).pop(),
+        ),
         actions: [
           if (_isBackgroundSyncing)
-            const Padding(
-              padding: EdgeInsets.only(right: 20.0),
-              child: Center(child: SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))),
+            Padding(
+              padding: const EdgeInsets.only(right: 20.0),
+              child: Center(child: SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: isDark ? cs.primary : AppColors.primary))),
             ),
         ],
       ),
       extendBodyBehindAppBar: true,
       body: Stack(
         children: [
-          const BackgroundWidget(style: HoloStyle.vapor, intensity: 0.5, animate: true),
+          BackgroundWidget(style: HoloStyle.vapor, intensity: isDark ? 0.15 : 0.5, animate: true),
           SafeArea(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                _buildFilters(),
+                _buildFilters(isDark, cs),
                 Expanded(
                   child: _isLoading
-                      ? const Center(child: CircularProgressIndicator())
+                      ? Center(child: CircularProgressIndicator(color: isDark ? cs.primary : AppColors.primary))
                       : RefreshIndicator(
                     onRefresh: _fetchHistoryFromNetwork,
-                    color: AppColors.primary,
+                    color: isDark ? cs.primary : AppColors.primary,
                     child: filtered.isEmpty
-                        ? _buildEmptyState()
+                        ? _buildEmptyState(isDark, cs)
                         : ListView.builder(
                       physics: const AlwaysScrollableScrollPhysics(),
                       padding: const EdgeInsets.only(top: 8, bottom: 40, left: 16, right: 16),
@@ -168,6 +175,8 @@ class _RideHistoryScreenState extends State<RideHistoryScreen> {
                       itemBuilder: (context, index) => _RideCard(
                         ride: filtered[index] as Map<String, dynamic>,
                         isDriverMode: _isDriverMode,
+                        isDark: isDark,
+                        cs: cs,
                         onTap: () => _showRideDetails(filtered[index] as Map<String, dynamic>),
                       ),
                     ),
@@ -181,7 +190,7 @@ class _RideHistoryScreenState extends State<RideHistoryScreen> {
     );
   }
 
-  Widget _buildFilters() {
+  Widget _buildFilters(bool isDark, ColorScheme cs) {
     final filters = ['All', 'Active', 'Completed', 'Canceled'];
     return SizedBox(
       height: 60,
@@ -195,12 +204,13 @@ class _RideHistoryScreenState extends State<RideHistoryScreen> {
           return Padding(
             padding: const EdgeInsets.only(right: 8.0),
             child: ChoiceChip(
-              label: Text(f, style: TextStyle(fontWeight: FontWeight.w700, color: active ? Colors.white : AppColors.textSecondary)),
+              label: Text(f, style: TextStyle(fontWeight: FontWeight.w700, color: active ? (isDark ? cs.onPrimary : Colors.white) : (isDark ? cs.onSurfaceVariant : AppColors.textSecondary))),
               selected: active,
-              selectedColor: AppColors.primary,
-              backgroundColor: AppColors.surface.withOpacity(0.5),
+              selectedColor: isDark ? cs.primary : AppColors.primary,
+              backgroundColor: isDark ? cs.surfaceVariant.withOpacity(0.5) : AppColors.surface.withOpacity(0.5),
               onSelected: (v) => setState(() => _activeFilter = f),
               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+              side: BorderSide(color: active ? Colors.transparent : (isDark ? cs.outline.withOpacity(0.3) : AppColors.mintBgLight.withOpacity(0.3))),
             ),
           );
         },
@@ -208,16 +218,16 @@ class _RideHistoryScreenState extends State<RideHistoryScreen> {
     );
   }
 
-  Widget _buildEmptyState() {
+  Widget _buildEmptyState(bool isDark, ColorScheme cs) {
     return Center(
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          Icon(Icons.history_rounded, size: 80, color: AppColors.textSecondary.withOpacity(0.3)),
+          Icon(Icons.history_rounded, size: 80, color: isDark ? cs.onSurfaceVariant.withOpacity(0.3) : AppColors.textSecondary.withOpacity(0.3)),
           const SizedBox(height: 16),
-          Text('No rides found', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700, color: AppColors.textPrimary)),
+          Text('No rides found', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700, color: isDark ? cs.onSurface : AppColors.textPrimary)),
           const SizedBox(height: 8),
-          Text('Your $_activeFilter ride history will appear here.', style: TextStyle(color: AppColors.textSecondary)),
+          Text('Your $_activeFilter ride history will appear here.', style: TextStyle(color: isDark ? cs.onSurfaceVariant : AppColors.textSecondary)),
         ],
       ),
     );
@@ -227,20 +237,25 @@ class _RideHistoryScreenState extends State<RideHistoryScreen> {
 class _RideCard extends StatelessWidget {
   final Map<String, dynamic> ride;
   final bool isDriverMode;
+  final bool isDark;
+  final ColorScheme cs;
   final VoidCallback onTap;
 
-  const _RideCard({required this.ride, required this.isDriverMode, required this.onTap});
+  const _RideCard({required this.ride, required this.isDriverMode, required this.isDark, required this.cs, required this.onTap});
 
   @override
   Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
     final status = ride['status'].toString().toLowerCase().trim();
     final isActive = ['searching', 'accepted', 'enroute_pickup', 'arrived_pickup', 'in_progress', 'arrived_destination'].contains(status);
 
     Color statusColor;
-    if (isActive) statusColor = AppColors.primary;
-    else if (status == 'completed') statusColor = Colors.green;
-    else statusColor = Colors.red;
+    if (isActive) {
+      statusColor = isDark ? cs.primary : AppColors.primary;
+    } else if (status == 'completed') {
+      statusColor = isDark ? const Color(0xFF00E676) : Colors.green;
+    } else {
+      statusColor = cs.error;
+    }
 
     final dateStr = ride['created_at']?.toString() ?? '';
     String displayDate = '';
@@ -256,11 +271,11 @@ class _RideCard extends StatelessWidget {
     return Container(
       margin: const EdgeInsets.only(bottom: 12),
       decoration: BoxDecoration(
-        color: cs.surface.withOpacity(0.85),
+        color: isDark ? cs.surface.withOpacity(0.85) : cs.surface.withOpacity(0.85),
         borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: isActive ? AppColors.primary.withOpacity(0.5) : AppColors.mintBgLight.withOpacity(0.2)),
+        border: Border.all(color: isActive ? (isDark ? cs.primary.withOpacity(0.5) : AppColors.primary.withOpacity(0.5)) : (isDark ? cs.outline.withOpacity(0.3) : AppColors.mintBgLight.withOpacity(0.2))),
         boxShadow: [
-          BoxShadow(color: Colors.black.withOpacity(0.1), blurRadius: 10, offset: const Offset(0, 4)),
+          BoxShadow(color: Colors.black.withOpacity(isDark ? 0.3 : 0.1), blurRadius: 10, offset: const Offset(0, 4)),
         ],
       ),
       child: Material(
@@ -276,7 +291,7 @@ class _RideCard extends StatelessWidget {
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
-                    Text(displayDate, style: TextStyle(color: AppColors.textSecondary, fontSize: 12, fontWeight: FontWeight.w600)),
+                    Text(displayDate, style: TextStyle(color: isDark ? cs.onSurfaceVariant : AppColors.textSecondary, fontSize: 12, fontWeight: FontWeight.w600)),
                     Container(
                       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                       decoration: BoxDecoration(color: statusColor.withOpacity(0.15), borderRadius: BorderRadius.circular(8)),
@@ -289,18 +304,18 @@ class _RideCard extends StatelessWidget {
                   children: [
                     CircleAvatar(
                       radius: 20,
-                      backgroundColor: AppColors.primary.withOpacity(0.1),
+                      backgroundColor: (isDark ? cs.primary : AppColors.primary).withOpacity(0.1),
                       backgroundImage: avatarUrl.isNotEmpty ? NetworkImage(avatarUrl) : null,
-                      child: avatarUrl.isEmpty ? Icon(isDriverMode ? Icons.person : Icons.local_taxi_rounded, color: AppColors.primary, size: 20) : null,
+                      child: avatarUrl.isEmpty ? Icon(isDriverMode ? Icons.person : Icons.local_taxi_rounded, color: isDark ? cs.primary : AppColors.primary, size: 20) : null,
                     ),
                     const SizedBox(width: 16),
                     Expanded(
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Text(ride['dest_text'] ?? 'Destination', maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 15)),
+                          Text(ride['dest_text'] ?? 'Destination', maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontWeight: FontWeight.w800, fontSize: 15, color: isDark ? cs.onSurface : AppColors.textPrimary)),
                           const SizedBox(height: 4),
-                          Text('${ride['currency']} ${ride['price']}', style: const TextStyle(fontWeight: FontWeight.w900, color: AppColors.primary)),
+                          Text('${ride['currency']} ${ride['price']}', style: TextStyle(fontWeight: FontWeight.w900, color: isDark ? cs.primary : AppColors.primary)),
                         ],
                       ),
                     ),
@@ -591,6 +606,10 @@ class _RideDetailSheetState extends State<_RideDetailSheet> {
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+    final cs = theme.colorScheme;
+
     final status = widget.ride['status'].toString().toLowerCase().trim();
     final isActive = ['searching', 'accepted', 'enroute_pickup', 'arrived_pickup', 'in_progress', 'arrived_destination'].contains(status);
     final avatarUrl = widget.ride['peer_avatar']?.toString() ?? '';
@@ -598,7 +617,7 @@ class _RideDetailSheetState extends State<_RideDetailSheet> {
 
     return Container(
       decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.surface,
+        color: isDark ? cs.surface : cs.surface,
         borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
       ),
       child: SafeArea(
@@ -608,13 +627,13 @@ class _RideDetailSheetState extends State<_RideDetailSheet> {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Center(child: Container(width: 40, height: 4, decoration: BoxDecoration(color: Colors.grey.withOpacity(0.3), borderRadius: BorderRadius.circular(2)))),
+              Center(child: Container(width: 40, height: 4, decoration: BoxDecoration(color: isDark ? cs.onSurfaceVariant.withOpacity(0.5) : Colors.grey.withOpacity(0.3), borderRadius: BorderRadius.circular(2)))),
               const SizedBox(height: 24),
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  const Text('Trip Details', style: TextStyle(fontSize: 22, fontWeight: FontWeight.w900)),
-                  Text('${widget.ride['currency']} ${widget.ride['price']}', style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w900, color: AppColors.primary)),
+                  Text('Trip Details', style: TextStyle(fontSize: 22, fontWeight: FontWeight.w900, color: isDark ? cs.onSurface : AppColors.textPrimary)),
+                  Text('${widget.ride['currency']} ${widget.ride['price']}', style: TextStyle(fontSize: 22, fontWeight: FontWeight.w900, color: isDark ? cs.primary : AppColors.primary)),
                 ],
               ),
               const SizedBox(height: 24),
@@ -622,35 +641,35 @@ class _RideDetailSheetState extends State<_RideDetailSheet> {
               // Peer Profile Card
               Container(
                 padding: const EdgeInsets.all(16),
-                decoration: BoxDecoration(color: AppColors.mintBgLight.withOpacity(0.1), borderRadius: BorderRadius.circular(16)),
+                decoration: BoxDecoration(color: isDark ? cs.surfaceVariant.withOpacity(0.3) : AppColors.mintBgLight.withOpacity(0.1), borderRadius: BorderRadius.circular(16), border: Border.all(color: isDark ? cs.outline : Colors.transparent)),
                 child: Row(
                   children: [
                     CircleAvatar(
                       radius: 26,
-                      backgroundColor: AppColors.primary.withOpacity(0.2),
+                      backgroundColor: (isDark ? cs.primary : AppColors.primary).withOpacity(0.2),
                       backgroundImage: avatarUrl.isNotEmpty ? NetworkImage(avatarUrl) : null,
-                      child: avatarUrl.isEmpty ? Icon(widget.isDriverMode ? Icons.person : Icons.local_taxi_rounded, color: AppColors.primary) : null,
+                      child: avatarUrl.isEmpty ? Icon(widget.isDriverMode ? Icons.person : Icons.local_taxi_rounded, color: isDark ? cs.primary : AppColors.primary) : null,
                     ),
                     const SizedBox(width: 16),
                     Expanded(
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Text(widget.isDriverMode ? 'Rider' : 'Driver', style: TextStyle(fontSize: 12, color: AppColors.textSecondary, fontWeight: FontWeight.w700)),
-                          Text(widget.ride['peer_name'] ?? 'Unknown', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w800)),
+                          Text(widget.isDriverMode ? 'Rider' : 'Driver', style: TextStyle(fontSize: 12, color: isDark ? cs.onSurfaceVariant : AppColors.textSecondary, fontWeight: FontWeight.w700)),
+                          Text(widget.ride['peer_name'] ?? 'Unknown', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800, color: isDark ? cs.onSurface : AppColors.textPrimary)),
                           if (!widget.isDriverMode && widget.ride['peer_plate'] != null && widget.ride['peer_plate'].toString().isNotEmpty)
-                            Text(widget.ride['peer_plate'], style: const TextStyle(color: AppColors.primary, fontWeight: FontWeight.w700)),
+                            Text(widget.ride['peer_plate'], style: TextStyle(color: isDark ? cs.primary : AppColors.primary, fontWeight: FontWeight.w700)),
                         ],
                       ),
                     ),
                     if (phone.isNotEmpty)
                       Container(
                         decoration: BoxDecoration(
-                          color: AppColors.primary.withOpacity(0.15),
+                          color: (isDark ? cs.primary : AppColors.primary).withOpacity(0.15),
                           shape: BoxShape.circle,
                         ),
                         child: IconButton(
-                          icon: const Icon(Icons.phone_rounded, color: AppColors.primary),
+                          icon: Icon(Icons.phone_rounded, color: isDark ? cs.primary : AppColors.primary),
                           onPressed: () => _makePhoneCall(phone),
                         ),
                       )
@@ -660,13 +679,13 @@ class _RideDetailSheetState extends State<_RideDetailSheet> {
 
               const SizedBox(height: 24),
               // Timeline
-              _buildTimelineRow(Icons.my_location_rounded, 'Pickup', widget.ride['pickup_text'] ?? '', true),
+              _buildTimelineRow(Icons.my_location_rounded, 'Pickup', widget.ride['pickup_text'] ?? '', true, isDark, cs, color: isDark ? cs.primary : AppColors.primary),
 
               // Handle multiple stops
               if (widget.ride['stops'] is List)
-                ...((widget.ride['stops'] as List).map((stop) => _buildTimelineRow(Icons.stop_circle_rounded, 'Stop', 'Intermediate Drop-off', true, color: Colors.orange))),
+                ...((widget.ride['stops'] as List).map((stop) => _buildTimelineRow(Icons.stop_circle_rounded, 'Stop', 'Intermediate Drop-off', true, isDark, cs, color: Colors.orange))),
 
-              _buildTimelineRow(Icons.location_on_rounded, 'Destination', widget.ride['dest_text'] ?? '', false),
+              _buildTimelineRow(Icons.location_on_rounded, 'Destination', widget.ride['dest_text'] ?? '', false, isDark, cs, color: isDark ? cs.primary : AppColors.primary),
 
               const SizedBox(height: 32),
 
@@ -679,8 +698,8 @@ class _RideDetailSheetState extends State<_RideDetailSheet> {
                     icon: _isActionBusy ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2)) : const Icon(Icons.navigation_rounded),
                     label: Text(_isActionBusy ? 'Processing...' : 'Return to Live Navigation', style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 16)),
                     style: ElevatedButton.styleFrom(
-                        backgroundColor: AppColors.primary,
-                        foregroundColor: Colors.white,
+                        backgroundColor: isDark ? cs.primary : AppColors.primary,
+                        foregroundColor: isDark ? cs.onPrimary : Colors.white,
                         elevation: 0,
                         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16))
                     ),
@@ -696,7 +715,7 @@ class _RideDetailSheetState extends State<_RideDetailSheet> {
     );
   }
 
-  Widget _buildTimelineRow(IconData icon, String title, String address, bool showLine, {Color color = AppColors.primary}) {
+  Widget _buildTimelineRow(IconData icon, String title, String address, bool showLine, bool isDark, ColorScheme cs, {required Color color}) {
     return Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -715,9 +734,9 @@ class _RideDetailSheetState extends State<_RideDetailSheet> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(title, style: TextStyle(fontSize: 12, color: AppColors.textSecondary, fontWeight: FontWeight.w700)),
+              Text(title, style: TextStyle(fontSize: 12, color: isDark ? cs.onSurfaceVariant : AppColors.textSecondary, fontWeight: FontWeight.w700)),
               const SizedBox(height: 2),
-              Text(address, maxLines: 2, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+              Text(address, maxLines: 2, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: isDark ? cs.onSurface : AppColors.textPrimary)),
             ],
           ),
         ),

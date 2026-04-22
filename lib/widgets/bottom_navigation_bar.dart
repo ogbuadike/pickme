@@ -88,6 +88,10 @@ class _CustomBottomNavBarState extends State<CustomBottomNavBar>
   @override
   Widget build(BuildContext context) {
     final t = Theme.of(context).textTheme;
+    final theme = Theme.of(context);
+    final cs = theme.colorScheme;
+    final isDark = theme.brightness == Brightness.dark;
+
     final screenWidth = MediaQuery.of(context).size.width;
 
     // Responsive text sizing based on screen width
@@ -102,13 +106,13 @@ class _CustomBottomNavBarState extends State<CustomBottomNavBar>
     final selectedLabelStyle = baseLabel.copyWith(
       fontSize: selectedFontSize,
       fontWeight: FontWeight.w900,
-      color: AppColors.textPrimary,
+      color: isDark ? cs.onSurface : AppColors.textPrimary,
       letterSpacing: .2,
     );
     final unselectedLabelStyle = baseLabel.copyWith(
       fontSize: baseFontSize,
       fontWeight: FontWeight.w700,
-      color: AppColors.textSecondary,
+      color: isDark ? cs.onSurfaceVariant : AppColors.textSecondary,
       letterSpacing: .15,
     );
 
@@ -147,12 +151,12 @@ class _CustomBottomNavBarState extends State<CustomBottomNavBar>
                         color: Colors.transparent,
                         borderRadius: BorderRadius.circular(26),
                         border: Border.all(
-                          color: AppColors.mintBgLight.withOpacity(.55),
+                          color: isDark ? cs.outline.withOpacity(0.3) : AppColors.mintBgLight.withOpacity(.55),
                           width: 1,
                         ),
                         boxShadow: [
                           BoxShadow(
-                            color: AppColors.deep.withOpacity(.18),
+                            color: isDark ? Colors.black.withOpacity(0.4) : AppColors.deep.withOpacity(.18),
                             blurRadius: 36,
                             offset: const Offset(0, 16),
                           ),
@@ -172,15 +176,15 @@ class _CustomBottomNavBarState extends State<CustomBottomNavBar>
                           width: width,
                           height: kGlassH,
                           decoration: BoxDecoration(
-                            color: Colors.transparent,
+                            color: isDark ? cs.surface.withOpacity(0.65) : Colors.transparent,
                             borderRadius: BorderRadius.circular(24),
                             border: Border.all(
-                              color: AppColors.mintBgLight.withOpacity(.85),
+                              color: isDark ? cs.outline.withOpacity(0.5) : AppColors.mintBgLight.withOpacity(.85),
                               width: 1.2,
                             ),
                             boxShadow: [
                               BoxShadow(
-                                color: AppColors.deep.withOpacity(.10),
+                                color: isDark ? Colors.black.withOpacity(0.2) : AppColors.deep.withOpacity(.10),
                                 blurRadius: 18,
                                 offset: const Offset(0, 6),
                               ),
@@ -197,7 +201,7 @@ class _CustomBottomNavBarState extends State<CustomBottomNavBar>
                                     builder: (_, __) => CustomPaint(
                                       painter: _LiquidWavePainter(
                                         progress: _wave.value,
-                                        color: AppColors.primary.withOpacity(.08),
+                                        color: (isDark ? cs.primary : AppColors.primary).withOpacity(.08),
                                       ),
                                     ),
                                   ),
@@ -210,7 +214,7 @@ class _CustomBottomNavBarState extends State<CustomBottomNavBar>
                                 children: List.generate(kCount, (i) {
                                   if (i == 2) {
                                     // Center spacer for hero button - use Expanded with flex
-                                    return Expanded(
+                                    return const Expanded(
                                       flex: 1,
                                       child: SizedBox(),
                                     );
@@ -223,7 +227,7 @@ class _CustomBottomNavBarState extends State<CustomBottomNavBar>
                                   return Expanded(
                                     flex: 1,
                                     child: _SideItem(
-                                      icon: _iconForIndex(i, selected, kIcon),
+                                      icon: _iconForIndex(i, selected, kIcon, isDark, cs),
                                       label: _labels[i],
                                       chipDiameter: kChip,
                                       selected: selected,
@@ -233,6 +237,8 @@ class _CustomBottomNavBarState extends State<CustomBottomNavBar>
                                       onTap: () => _select(i),
                                       glassHeight: kGlassH,
                                       isSmallScreen: isSmallScreen,
+                                      isDark: isDark,
+                                      cs: cs,
                                     ),
                                   );
                                 }),
@@ -254,6 +260,8 @@ class _CustomBottomNavBarState extends State<CustomBottomNavBar>
                       pulse: _pulse,
                       size: kHero,
                       onTap: () => _select(2),
+                      isDark: isDark,
+                      cs: cs,
                     ),
                   ),
                 ],
@@ -266,8 +274,13 @@ class _CustomBottomNavBarState extends State<CustomBottomNavBar>
   }
 
   /// Icon per index (SVGs recolored; fallback to Material when missing).
-  Widget _iconForIndex(int index, bool selected, double size) {
-    final Color iconColor = selected ? AppColors.surface : AppColors.textSecondary;
+  Widget _iconForIndex(int index, bool selected, double size, bool isDark, ColorScheme cs) {
+    // In dark mode:
+    // - Unselected icons are grey (onSurfaceVariant)
+    // - Selected icons are pure black (onPrimary) because they sit on a neon green chip (primary)
+    final Color iconColor = selected
+        ? (isDark ? cs.onPrimary : AppColors.surface)
+        : (isDark ? cs.onSurfaceVariant : AppColors.textSecondary);
 
     switch (index) {
       case 0:
@@ -312,6 +325,8 @@ class _SideItem extends StatelessWidget {
   final double chipDiameter;
   final double glassHeight;
   final bool isSmallScreen;
+  final bool isDark;
+  final ColorScheme cs;
   final VoidCallback onTap;
 
   const _SideItem({
@@ -323,6 +338,8 @@ class _SideItem extends StatelessWidget {
     required this.unselectedStyle,
     required this.onTap,
     required this.glassHeight,
+    required this.isDark,
+    required this.cs,
     this.isSmallScreen = false,
     this.badgeCount,
     this.chipDiameter = 38,
@@ -330,7 +347,10 @@ class _SideItem extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final chipColor = selected ? AppColors.primary : AppColors.mintBgLight;
+    final chipColor = selected
+        ? (isDark ? cs.primary : AppColors.primary)
+        : (isDark ? cs.surfaceVariant : AppColors.mintBgLight);
+
     final labelStyle = selected ? selectedStyle : unselectedStyle;
 
     // Responsive padding & margin
@@ -355,10 +375,10 @@ class _SideItem extends StatelessWidget {
           ),
           decoration: selected
               ? BoxDecoration(
-            color: AppColors.primary.withOpacity(.12),
+            color: (isDark ? cs.primary : AppColors.primary).withOpacity(isDark ? 0.15 : .12),
             borderRadius: BorderRadius.circular(16),
             border: Border.all(
-              color: AppColors.primary.withOpacity(.32),
+              color: (isDark ? cs.primary : AppColors.primary).withOpacity(isDark ? 0.5 : .32),
               width: 1.2,
             ),
           )
@@ -389,7 +409,7 @@ class _SideItem extends StatelessWidget {
                           boxShadow: selected
                               ? [
                             BoxShadow(
-                              color: AppColors.primary.withOpacity(.25),
+                              color: (isDark ? cs.primary : AppColors.primary).withOpacity(.25),
                               blurRadius: 8,
                               offset: const Offset(0, 2),
                             ),
@@ -432,6 +452,8 @@ class _SideItem extends StatelessWidget {
                     child: _Badge(
                       count: badgeCount!,
                       isSmallScreen: isSmallScreen,
+                      isDark: isDark,
+                      cs: cs,
                     ),
                   ),
               ],
@@ -449,6 +471,8 @@ class _CenterHero extends StatelessWidget {
   final AnimationController pulse;
   final double size;
   final VoidCallback onTap;
+  final bool isDark;
+  final ColorScheme cs;
 
   const _CenterHero({
     Key? key,
@@ -456,6 +480,8 @@ class _CenterHero extends StatelessWidget {
     required this.pulse,
     required this.size,
     required this.onTap,
+    required this.isDark,
+    required this.cs,
   }) : super(key: key);
 
   @override
@@ -478,12 +504,12 @@ class _CenterHero extends StatelessWidget {
                 shape: BoxShape.circle,
                 boxShadow: [
                   BoxShadow(
-                    color: AppColors.primary.withOpacity(ringOpacity),
+                    color: (isDark ? cs.primary : AppColors.primary).withOpacity(ringOpacity),
                     blurRadius: 26,
                     spreadRadius: 2,
                   ),
                   BoxShadow(
-                    color: AppColors.deep.withOpacity(.10),
+                    color: isDark ? Colors.black.withOpacity(0.5) : AppColors.deep.withOpacity(.10),
                     blurRadius: 10,
                     offset: const Offset(0, 4),
                   ),
@@ -498,24 +524,26 @@ class _CenterHero extends StatelessWidget {
                 height: size,
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,
-                  gradient: const LinearGradient(
-                    colors: [AppColors.primary, AppColors.secondary],
+                  gradient: LinearGradient(
+                    colors: isDark
+                        ? [cs.primary, cs.secondary]
+                        : [AppColors.primary, AppColors.secondary],
                     begin: Alignment.topLeft,
                     end: Alignment.bottomRight,
                   ),
                   boxShadow: [
                     BoxShadow(
-                      color: AppColors.primary.withOpacity(.30),
+                      color: (isDark ? cs.primary : AppColors.primary).withOpacity(.30),
                       blurRadius: 20,
                       offset: const Offset(0, 8),
                     ),
                   ],
                   border: Border.all(
-                    color: AppColors.mintBgLight.withOpacity(.55),
+                    color: isDark ? cs.outline.withOpacity(0.5) : AppColors.mintBgLight.withOpacity(.55),
                     width: 1,
                   ),
                 ),
-                child: const _SendMeGlyph(),
+                child: _SendMeGlyph(isDark: isDark, cs: cs),
               ),
             ),
           ],
@@ -527,18 +555,25 @@ class _CenterHero extends StatelessWidget {
 
 /// "Send Me" glyph: location target + outbound motion.
 class _SendMeGlyph extends StatelessWidget {
-  const _SendMeGlyph({Key? key}) : super(key: key);
+  final bool isDark;
+  final ColorScheme cs;
+
+  const _SendMeGlyph({
+    Key? key,
+    required this.isDark,
+    required this.cs,
+  }) : super(key: key);
 
   @override
   Widget build(BuildContext context) {
     return Stack(
       alignment: Alignment.center,
-      children: const [
-        Icon(Icons.location_on, color: AppColors.surface, size: 22),
+      children: [
+        Icon(Icons.location_on, color: isDark ? cs.onPrimary : AppColors.surface, size: 22),
         Positioned(
           right: 10,
           top: 10,
-          child: Icon(Icons.directions_walk_sharp, color: AppColors.surface, size: 20),
+          child: Icon(Icons.directions_walk_sharp, color: isDark ? cs.onPrimary : AppColors.surface, size: 20),
         ),
       ],
     );
@@ -581,9 +616,13 @@ class _LiquidWavePainter extends CustomPainter {
 class _Badge extends StatelessWidget {
   final int count;
   final bool isSmallScreen;
+  final bool isDark;
+  final ColorScheme cs;
 
   const _Badge({
     required this.count,
+    required this.isDark,
+    required this.cs,
     this.isSmallScreen = false,
   });
 
@@ -602,16 +641,16 @@ class _Badge extends StatelessWidget {
         minHeight: isSmallScreen ? 14 : 16,
       ),
       decoration: BoxDecoration(
-        color: AppColors.error,
+        color: isDark ? cs.error : AppColors.error,
         borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: AppColors.surface, width: 1),
+        border: Border.all(color: isDark ? cs.surface : AppColors.surface, width: 1),
       ),
       child: Text(
         txt,
         style: (Theme.of(context).textTheme.labelSmall ??
             AppTextStyles.caption.copyWith(fontSize: fontSize))
             .copyWith(
-          color: AppColors.onErrorColor,
+          color: isDark ? cs.onError : AppColors.onErrorColor,
           fontSize: fontSize,
           fontWeight: FontWeight.w900,
         ),

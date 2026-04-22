@@ -178,6 +178,7 @@ class _AutoOverlayState extends State<AutoOverlay>
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final bg = Theme.of(context).scaffoldBackgroundColor;
+    final cs = Theme.of(context).colorScheme;
 
     // NB: We intentionally avoid BackdropFilter blur here (it can be expensive
     // on low-end GPUs). The gradient gives depth without cost.
@@ -195,12 +196,12 @@ class _AutoOverlayState extends State<AutoOverlay>
         scale: _scale,
         child: SlideTransition(
           position: _slide,
-          child: _buildContent(context),
+          child: _buildContent(context, isDark, cs),
         ),
       ),
     );
 
-    return Positioned.fill(
+    return SizedBox.expand(
       child: FadeTransition(
         opacity: _fade,
         child: content,
@@ -208,20 +209,20 @@ class _AutoOverlayState extends State<AutoOverlay>
     );
   }
 
-  Widget _buildContent(BuildContext context) {
+  Widget _buildContent(BuildContext context, bool isDark, ColorScheme cs) {
     return SafeArea(
       child: _isLandscape(context)
-          ? _buildLandscapeLayout()
-          : _buildPortraitLayout(),
+          ? _buildLandscapeLayout(isDark, cs)
+          : _buildPortraitLayout(isDark, cs),
     );
   }
 
-  Widget _buildPortraitLayout() {
+  Widget _buildPortraitLayout(bool isDark, ColorScheme cs) {
     final s = _s(context);
 
     return Column(
       children: [
-        _buildPremiumHeader(context),
+        _buildPremiumHeader(context, isDark, cs),
         Expanded(
           child: RepaintBoundary(
             child: CustomScrollView(
@@ -229,20 +230,20 @@ class _AutoOverlayState extends State<AutoOverlay>
               slivers: [
                 SliverPadding(
                   padding: EdgeInsets.fromLTRB(16 * s, 0, 16 * s, 8 * s),
-                  sliver: SliverToBoxAdapter(child: _buildRouteCard(context)),
+                  sliver: SliverToBoxAdapter(child: _buildRouteCard(context, isDark, cs)),
                 ),
                 if (widget.autoStatus != null && widget.autoStatus != 'OK')
                   SliverPadding(
                     padding: EdgeInsets.only(left: 16 * s, right: 16 * s, top: 8 * s),
-                    sliver: SliverToBoxAdapter(child: _buildStatusBanner()),
+                    sliver: SliverToBoxAdapter(child: _buildStatusBanner(isDark, cs)),
                   ),
                 SliverPadding(
                   padding: EdgeInsets.symmetric(horizontal: 16 * s),
-                  sliver: SliverToBoxAdapter(child: _buildDivider()),
+                  sliver: SliverToBoxAdapter(child: _buildDivider(isDark, cs)),
                 ),
                 SliverPadding(
                   padding: EdgeInsets.fromLTRB(12 * s, 0, 12 * s, widget.bottomPadding + 10),
-                  sliver: SliverToBoxAdapter(child: _buildSuggestions()),
+                  sliver: SliverToBoxAdapter(child: _buildSuggestions(isDark, cs)),
                 ),
               ],
             ),
@@ -252,11 +253,11 @@ class _AutoOverlayState extends State<AutoOverlay>
     );
   }
 
-  Widget _buildLandscapeLayout() {
+  Widget _buildLandscapeLayout(bool isDark, ColorScheme cs) {
     final s = _s(context);
     return Column(
       children: [
-        _buildPremiumHeader(context),
+        _buildPremiumHeader(context, isDark, cs),
         Expanded(
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -269,26 +270,26 @@ class _AutoOverlayState extends State<AutoOverlay>
                     slivers: [
                       SliverPadding(
                         padding: EdgeInsets.fromLTRB(16 * s, 8 * s, 16 * s, 12 * s),
-                        sliver: SliverToBoxAdapter(child: _buildRouteCard(context)),
+                        sliver: SliverToBoxAdapter(child: _buildRouteCard(context, isDark, cs)),
                       ),
                       if (widget.autoStatus != null && widget.autoStatus != 'OK')
                         const SliverToBoxAdapter(child: SizedBox(height: 6)),
                       if (widget.autoStatus != null && widget.autoStatus != 'OK')
                         SliverPadding(
                           padding: EdgeInsets.symmetric(horizontal: 16 * s),
-                          sliver: SliverToBoxAdapter(child: _buildStatusBanner()),
+                          sliver: SliverToBoxAdapter(child: _buildStatusBanner(isDark, cs)),
                         ),
                     ],
                   ),
                 ),
               ),
-              Container(width: 1, color: AppColors.mintBgLight.withOpacity(.2)),
+              Container(width: 1, color: isDark ? cs.outline : AppColors.mintBgLight.withOpacity(.2)),
               Expanded(
                 flex: 55,
                 child: RepaintBoundary(
                   child: Padding(
                     padding: EdgeInsets.symmetric(horizontal: 12 * s),
-                    child: _buildSuggestions(),
+                    child: _buildSuggestions(isDark, cs),
                   ),
                 ),
               ),
@@ -299,7 +300,7 @@ class _AutoOverlayState extends State<AutoOverlay>
     );
   }
 
-  Widget _buildPremiumHeader(BuildContext context) {
+  Widget _buildPremiumHeader(BuildContext context, bool isDark, ColorScheme cs) {
     final t = Theme.of(context).textTheme;
     final s = _s(context);
 
@@ -311,23 +312,23 @@ class _AutoOverlayState extends State<AutoOverlay>
             button: true,
             label: 'Close search overlay',
             child: Material(
-              color: AppColors.primary.withOpacity(.12),
+              color: (isDark ? cs.primary : AppColors.primary).withOpacity(.12),
               borderRadius: BorderRadius.circular(14 * s),
               child: InkWell(
                 onTap: _handleClose,
                 borderRadius: BorderRadius.circular(14 * s),
-                splashColor: AppColors.primary.withOpacity(.2),
+                splashColor: (isDark ? cs.primary : AppColors.primary).withOpacity(.2),
                 child: Container(
                   width: 44 * s,
                   height: 44 * s,
                   decoration: BoxDecoration(
                     borderRadius: BorderRadius.circular(14 * s),
                     border: Border.all(
-                      color: AppColors.primary.withOpacity(.2),
+                      color: (isDark ? cs.primary : AppColors.primary).withOpacity(.2),
                       width: 1.2,
                     ),
                   ),
-                  child: Icon(Icons.close_rounded, color: AppColors.primary, size: 22 * s),
+                  child: Icon(Icons.close_rounded, color: isDark ? cs.primary : AppColors.primary, size: 22 * s),
                 ),
               ),
             ),
@@ -343,11 +344,11 @@ class _AutoOverlayState extends State<AutoOverlay>
                     Container(
                       padding: EdgeInsets.all(5 * s),
                       decoration: BoxDecoration(
-                        color: AppColors.primary.withOpacity(.10),
+                        color: (isDark ? cs.primary : AppColors.primary).withOpacity(.10),
                         borderRadius: BorderRadius.circular(6 * s),
                       ),
                       child: Icon(Icons.explore_rounded,
-                          color: AppColors.primary, size: 14 * s),
+                          color: isDark ? cs.primary : AppColors.primary, size: 14 * s),
                     ),
                     SizedBox(width: 6 * s),
                     Expanded(
@@ -358,6 +359,7 @@ class _AutoOverlayState extends State<AutoOverlay>
                           fontSize: 18 * s,
                           letterSpacing: -0.3,
                           height: 1.1,
+                          color: isDark ? cs.onSurface : AppColors.textPrimary,
                         ),
                       ),
                     ),
@@ -367,7 +369,7 @@ class _AutoOverlayState extends State<AutoOverlay>
                 Text(
                   'Search places & addresses near you',
                   style: t.bodySmall?.copyWith(
-                    color: AppColors.textSecondary,
+                    color: isDark ? cs.onSurfaceVariant : AppColors.textSecondary,
                     fontWeight: FontWeight.w500,
                     fontSize: 11 * s,
                   ),
@@ -394,13 +396,13 @@ class _AutoOverlayState extends State<AutoOverlay>
                       mainAxisSize: MainAxisSize.min,
                       children: [
                         Icon(Icons.swap_vert_rounded,
-                            size: 18 * s, color: AppColors.textPrimary.withOpacity(.9)),
+                            size: 18 * s, color: isDark ? cs.onSurface : AppColors.textPrimary.withOpacity(.9)),
                         SizedBox(width: 6 * s),
                         Text('Swap',
                             style: TextStyle(
                               fontSize: 13 * s,
                               fontWeight: FontWeight.w800,
-                              color: AppColors.textPrimary.withOpacity(.9),
+                              color: isDark ? cs.onSurface : AppColors.textPrimary.withOpacity(.9),
                             )),
                       ],
                     ),
@@ -414,15 +416,15 @@ class _AutoOverlayState extends State<AutoOverlay>
     );
   }
 
-  Widget _buildRouteCard(BuildContext context) {
+  Widget _buildRouteCard(BuildContext context, bool isDark, ColorScheme cs) {
     final s = _s(context);
     return Container(
       decoration: BoxDecoration(
-        color: Theme.of(context).cardColor,
+        color: isDark ? cs.surface : Theme.of(context).cardColor,
         borderRadius: BorderRadius.circular(18 * s),
-        border: Border.all(color: AppColors.mintBgLight.withOpacity(.3), width: 1),
+        border: Border.all(color: isDark ? cs.outline : AppColors.mintBgLight.withOpacity(.3), width: 1),
         boxShadow: [
-          BoxShadow(color: Colors.black.withOpacity(.06), blurRadius: 10, offset: Offset(0, 4 * s)),
+          BoxShadow(color: isDark ? Colors.black.withOpacity(0.5) : Colors.black.withOpacity(.06), blurRadius: 10, offset: Offset(0, 4 * s)),
         ],
       ),
       child: Padding(
@@ -441,25 +443,25 @@ class _AutoOverlayState extends State<AutoOverlay>
     );
   }
 
-  Widget _buildStatusBanner() {
+  Widget _buildStatusBanner(bool isDark, ColorScheme cs) {
     final msg = 'Places: ${widget.autoStatus}${widget.autoError != null ? ' — ${widget.autoError}' : ''}';
     return Container(
       margin: const EdgeInsets.only(bottom: 6),
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
       decoration: BoxDecoration(
-        color: const Color(0xFFFFF8E1),
+        color: isDark ? cs.errorContainer : const Color(0xFFFFF8E1),
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: const Color(0xFFFFE69C), width: 1),
+        border: Border.all(color: isDark ? cs.error : const Color(0xFFFFE69C), width: 1),
       ),
       child: Row(
         children: [
-          const Icon(Icons.info_outline_rounded, color: Color(0xFF856404), size: 16),
+          Icon(Icons.info_outline_rounded, color: isDark ? cs.onErrorContainer : const Color(0xFF856404), size: 16),
           const SizedBox(width: 8),
           Expanded(
             child: Text(
               msg,
-              style: const TextStyle(
-                color: Color(0xFF856404),
+              style: TextStyle(
+                color: isDark ? cs.onErrorContainer : const Color(0xFF856404),
                 fontSize: 12,
                 fontWeight: FontWeight.w700,
               ),
@@ -470,28 +472,28 @@ class _AutoOverlayState extends State<AutoOverlay>
     );
   }
 
-  Widget _buildDivider() {
+  Widget _buildDivider(bool isDark, ColorScheme cs) {
     return Container(
       height: 1,
       margin: const EdgeInsets.symmetric(vertical: 6),
       decoration: BoxDecoration(
         gradient: LinearGradient(
-          colors: [Colors.transparent, AppColors.mintBgLight.withOpacity(.3), Colors.transparent],
+          colors: [Colors.transparent, isDark ? cs.outline : AppColors.mintBgLight.withOpacity(.3), Colors.transparent],
         ),
       ),
     );
   }
 
-  Widget _buildSuggestions() {
+  Widget _buildSuggestions(bool isDark, ColorScheme cs) {
     if (widget.isTyping) {
-      return const Padding(
-        padding: EdgeInsets.symmetric(vertical: 48),
+      return Padding(
+        padding: const EdgeInsets.symmetric(vertical: 48),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            SizedBox(width: 44, height: 44, child: CircularProgressIndicator(strokeWidth: 3)),
-            SizedBox(height: 14),
-            Text('Searching places...', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
+            SizedBox(width: 44, height: 44, child: CircularProgressIndicator(strokeWidth: 3, color: isDark ? cs.primary : AppColors.primary)),
+            const SizedBox(height: 14),
+            Text('Searching places...', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: isDark ? cs.onSurface : AppColors.textPrimary)),
           ],
         ),
       );

@@ -155,6 +155,7 @@ class _AppMenuDrawerState extends State<AppMenuDrawer>
     final mq = MediaQuery.of(context);
     final s = _scale(context);
     final theme = Theme.of(context);
+    final cs = theme.colorScheme;
     final isDark = theme.brightness == Brightness.dark;
     final isLandscape = mq.orientation == Orientation.landscape;
 
@@ -174,7 +175,8 @@ class _AppMenuDrawerState extends State<AppMenuDrawer>
 
     return Drawer(
       width: drawerWidth,
-      backgroundColor: isDark ? AppColors.darkColor : Colors.white,
+      // FIXED: Uses sleek OLED surface color in dark mode, pure white in light mode
+      backgroundColor: isDark ? cs.surface : Colors.white,
       child: FadeTransition(
         opacity: _fadeAnim,
         child: SafeArea(
@@ -290,7 +292,7 @@ class _AppMenuDrawerState extends State<AppMenuDrawer>
                   border: Border(
                     top: BorderSide(
                       color: isDark
-                          ? Colors.white.withOpacity(0.08)
+                          ? cs.outline.withOpacity(0.5)
                           : Colors.black.withOpacity(0.06),
                     ),
                   ),
@@ -328,6 +330,8 @@ class _ProfileHeader extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+
     return Container(
       padding: EdgeInsets.all(16 * scale),
       decoration: BoxDecoration(
@@ -335,7 +339,7 @@ class _ProfileHeader extends StatelessWidget {
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
           colors: isDark
-              ? [AppColors.accentColor.withOpacity(0.25), AppColors.primary.withOpacity(0.15)]
+              ? [cs.primary.withOpacity(0.15), Colors.transparent]
               : [AppColors.primary.withOpacity(0.08), AppColors.accentColor.withOpacity(0.05)],
         ),
         borderRadius: BorderRadius.only(
@@ -350,7 +354,7 @@ class _ProfileHeader extends StatelessWidget {
             decoration: BoxDecoration(
               shape: BoxShape.circle,
               border: Border.all(
-                color: isDark ? Colors.white.withOpacity(0.3) : AppColors.primary.withOpacity(0.5),
+                color: isDark ? cs.primary.withOpacity(0.5) : AppColors.primary.withOpacity(0.5),
                 width: 2.5,
               ),
               boxShadow: [
@@ -363,10 +367,10 @@ class _ProfileHeader extends StatelessWidget {
             ),
             child: CircleAvatar(
               radius: 32 * scale,
-              backgroundColor: AppColors.mintBgLight,
+              backgroundColor: isDark ? cs.surfaceVariant : AppColors.mintBgLight,
               backgroundImage: avatarUrl != null ? NetworkImage(avatarUrl!) : null,
               child: avatarUrl == null
-                  ? Icon(Icons.person, size: 32 * scale, color: AppColors.primary)
+                  ? Icon(Icons.person, size: 32 * scale, color: isDark ? cs.primary : AppColors.primary)
                   : null,
             ),
           ),
@@ -385,7 +389,8 @@ class _ProfileHeader extends StatelessWidget {
                   style: TextStyle(
                     fontSize: (17 * scale).clamp(15.0, 20.0),
                     fontWeight: FontWeight.w900,
-                    color: isDark ? Colors.white : AppColors.textPrimary,
+                    // Uses pure theme colors
+                    color: isDark ? cs.onSurface : AppColors.textPrimary,
                     letterSpacing: -0.3,
                   ),
                 ),
@@ -397,9 +402,8 @@ class _ProfileHeader extends StatelessWidget {
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(
                       fontSize: (12 * scale).clamp(11.0, 14.0),
-                      color: isDark
-                          ? Colors.white.withOpacity(0.75)
-                          : AppColors.textSecondary,
+                      // Uses crisp grey for dark mode
+                      color: isDark ? cs.onSurfaceVariant : AppColors.textSecondary,
                       fontWeight: FontWeight.w600,
                     ),
                   ),
@@ -413,7 +417,7 @@ class _ProfileHeader extends StatelessWidget {
             icon: Icon(
               Icons.edit_rounded,
               size: 20 * scale,
-              color: isDark ? Colors.white : AppColors.primary,
+              color: isDark ? cs.primary : AppColors.primary,
             ),
             onPressed: onEditProfile,
             tooltip: 'Edit profile',
@@ -455,6 +459,8 @@ class _BalanceCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+
     return Container(
       padding: EdgeInsets.all(14 * scale),
       decoration: BoxDecoration(
@@ -462,13 +468,14 @@ class _BalanceCard extends StatelessWidget {
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
           colors: isDark
-              ? [AppColors.accentColor, AppColors.primary.withOpacity(0.85)]
+              ? [cs.primaryContainer, cs.surfaceVariant]
               : [AppColors.accentColor, AppColors.darkColor],
         ),
         borderRadius: BorderRadius.circular(16 * scale),
+        border: isDark ? Border.all(color: cs.primary.withOpacity(0.3), width: 1) : null,
         boxShadow: [
           BoxShadow(
-            color: AppColors.primary.withOpacity(0.35),
+            color: isDark ? cs.primary.withOpacity(0.15) : AppColors.primary.withOpacity(0.35),
             blurRadius: 12 * scale,
             offset: Offset(0, 4 * scale),
           ),
@@ -483,7 +490,7 @@ class _BalanceCard extends StatelessWidget {
             style: TextStyle(
               fontSize: (11 * scale).clamp(10.0, 13.0),
               fontWeight: FontWeight.w700,
-              color: Colors.white.withOpacity(0.85),
+              color: isDark ? cs.onPrimaryContainer.withOpacity(0.9) : Colors.white.withOpacity(0.85),
               letterSpacing: 0.3,
             ),
           ),
@@ -501,7 +508,7 @@ class _BalanceCard extends StatelessWidget {
                   style: TextStyle(
                     fontSize: (22 * scale).clamp(20.0, 28.0),
                     fontWeight: FontWeight.w900,
-                    color: Colors.white,
+                    color: isDark ? Colors.white : Colors.white,
                     letterSpacing: -0.5,
                   ),
                 ),
@@ -525,8 +532,8 @@ class _BalanceCard extends StatelessWidget {
                 ),
               ),
               style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.white,
-                foregroundColor: AppColors.accentColor,
+                backgroundColor: isDark ? cs.primary : Colors.white,
+                foregroundColor: isDark ? cs.onPrimary : AppColors.accentColor,
                 padding: EdgeInsets.symmetric(vertical: 10 * scale),
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(10 * scale),
@@ -585,6 +592,8 @@ class _BecomeDriverCardState extends State<_BecomeDriverCard>
 
   @override
   Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+
     return GestureDetector(
       onTapDown: (_) => _scaleCtrl.forward(),
       onTapUp: (_) {
@@ -604,8 +613,8 @@ class _BecomeDriverCardState extends State<_BecomeDriverCard>
               end: Alignment.bottomRight,
               colors: widget.isDark
                   ? [
-                const Color(0xFF1E7B5F).withOpacity(0.9),
-                const Color(0xFF0F4C3A).withOpacity(0.95),
+                cs.surfaceVariant,
+                cs.surfaceVariant.withOpacity(0.5),
               ]
                   : [
                 const Color(0xFF00D084).withOpacity(0.12),
@@ -615,13 +624,13 @@ class _BecomeDriverCardState extends State<_BecomeDriverCard>
             borderRadius: BorderRadius.circular(14 * widget.scale),
             border: Border.all(
               color: widget.isDark
-                  ? const Color(0xFF00D084).withOpacity(0.35)
+                  ? cs.primary.withOpacity(0.35)
                   : const Color(0xFF00D084).withOpacity(0.25),
               width: 1.2,
             ),
             boxShadow: [
               BoxShadow(
-                color: const Color(0xFF00D084).withOpacity(0.2),
+                color: widget.isDark ? cs.primary.withOpacity(0.1) : const Color(0xFF00D084).withOpacity(0.2),
                 blurRadius: 10 * widget.scale,
                 offset: Offset(0, 3 * widget.scale),
               ),
@@ -637,15 +646,15 @@ class _BecomeDriverCardState extends State<_BecomeDriverCard>
                     padding: EdgeInsets.all(8 * widget.scale),
                     decoration: BoxDecoration(
                       shape: BoxShape.circle,
-                      color: const Color(0xFF00D084).withOpacity(
-                        widget.isDark ? 0.25 : 0.15,
+                      color: (widget.isDark ? cs.primary : const Color(0xFF00D084)).withOpacity(
+                        widget.isDark ? 0.20 : 0.15,
                       ),
                     ),
                     child: Icon(
                       Icons.directions_car_rounded,
                       size: 20 * widget.scale,
                       color: widget.isDark
-                          ? const Color(0xFF00D084)
+                          ? cs.primary
                           : const Color(0xFF00A366),
                     ),
                   ),
@@ -660,7 +669,7 @@ class _BecomeDriverCardState extends State<_BecomeDriverCard>
                             fontSize: (14 * widget.scale).clamp(12.0, 16.0),
                             fontWeight: FontWeight.w900,
                             color: widget.isDark
-                                ? Colors.white
+                                ? cs.onSurface
                                 : const Color(0xFF1E7B5F),
                             letterSpacing: -0.3,
                           ),
@@ -672,7 +681,7 @@ class _BecomeDriverCardState extends State<_BecomeDriverCard>
                             fontSize: (11 * widget.scale).clamp(10.0, 12.0),
                             fontWeight: FontWeight.w600,
                             color: widget.isDark
-                                ? Colors.white.withOpacity(0.75)
+                                ? cs.onSurfaceVariant
                                 : const Color(0xFF1E7B5F).withOpacity(0.75),
                           ),
                         ),
@@ -683,7 +692,7 @@ class _BecomeDriverCardState extends State<_BecomeDriverCard>
                     Icons.arrow_forward_rounded,
                     size: 18 * widget.scale,
                     color: widget.isDark
-                        ? const Color(0xFF00D084)
+                        ? cs.primary
                         : const Color(0xFF00A366),
                   ),
                 ],
@@ -698,7 +707,7 @@ class _BecomeDriverCardState extends State<_BecomeDriverCard>
                   fontSize: (10 * widget.scale).clamp(9.0, 11.0),
                   fontWeight: FontWeight.w700,
                   color: widget.isDark
-                      ? Colors.white.withOpacity(0.85)
+                      ? cs.onSurfaceVariant
                       : const Color(0xFF1E7B5F).withOpacity(0.85),
                   letterSpacing: 0.2,
                 ),
@@ -707,7 +716,7 @@ class _BecomeDriverCardState extends State<_BecomeDriverCard>
               SizedBox(height: 6 * widget.scale),
 
               // Benefits list
-              ..._buildBenefits(widget.scale, widget.isDark),
+              ..._buildBenefits(widget.scale, widget.isDark, cs),
 
               SizedBox(height: 10 * widget.scale),
 
@@ -726,8 +735,8 @@ class _BecomeDriverCardState extends State<_BecomeDriverCard>
                     ),
                   ),
                   style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFF00D084),
-                    foregroundColor: Colors.white,
+                    backgroundColor: widget.isDark ? cs.primary : const Color(0xFF00D084),
+                    foregroundColor: widget.isDark ? cs.onPrimary : Colors.white,
                     padding: EdgeInsets.symmetric(vertical: 9 * widget.scale),
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(9 * widget.scale),
@@ -744,7 +753,7 @@ class _BecomeDriverCardState extends State<_BecomeDriverCard>
   }
 
   /// Build benefit items with optimized layout
-  List<Widget> _buildBenefits(double scale, bool isDark) {
+  List<Widget> _buildBenefits(double scale, bool isDark, ColorScheme cs) {
     const benefits = [
       ('Flexible hours', Icons.schedule_rounded),
       ('Competitive earnings', Icons.trending_up_rounded),
@@ -764,7 +773,7 @@ class _BecomeDriverCardState extends State<_BecomeDriverCard>
               e.value.$2,
               size: 14 * scale,
               color: isDark
-                  ? const Color(0xFF00D084)
+                  ? cs.primary
                   : const Color(0xFF00A366),
             ),
             SizedBox(width: 8 * scale),
@@ -775,7 +784,7 @@ class _BecomeDriverCardState extends State<_BecomeDriverCard>
                   fontSize: (10 * scale).clamp(9.0, 11.0),
                   fontWeight: FontWeight.w600,
                   color: isDark
-                      ? Colors.white.withOpacity(0.8)
+                      ? cs.onSurface.withOpacity(0.9)
                       : const Color(0xFF1E7B5F).withOpacity(0.8),
                 ),
               ),
@@ -801,6 +810,7 @@ class _SectionLabel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
     return Padding(
       padding: EdgeInsets.fromLTRB(12 * scale, 8 * scale, 12 * scale, 6 * scale),
       child: Text(
@@ -809,7 +819,7 @@ class _SectionLabel extends StatelessWidget {
           fontSize: (10 * scale).clamp(9.0, 12.0),
           fontWeight: FontWeight.w800,
           color: isDark
-              ? Colors.white.withOpacity(0.5)
+              ? cs.onSurfaceVariant
               : AppColors.textSecondary.withOpacity(0.7),
           letterSpacing: 1.2,
         ),
@@ -846,6 +856,8 @@ class _MenuItemState extends State<_MenuItem> {
 
   @override
   Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+
     return GestureDetector(
       onTapDown: (_) => setState(() => _pressed = true),
       onTapUp: (_) {
@@ -860,7 +872,7 @@ class _MenuItemState extends State<_MenuItem> {
         decoration: BoxDecoration(
           color: _pressed
               ? (widget.isDark
-              ? Colors.white.withOpacity(0.08)
+              ? cs.primary.withOpacity(0.15)
               : AppColors.primary.withOpacity(0.08))
               : Colors.transparent,
           borderRadius: BorderRadius.circular(10 * widget.scale),
@@ -870,7 +882,7 @@ class _MenuItemState extends State<_MenuItem> {
             Icon(
               widget.icon,
               size: 22 * widget.scale,
-              color: widget.isDark ? Colors.white : AppColors.primary,
+              color: widget.isDark ? cs.primary : AppColors.primary,
             ),
             SizedBox(width: 14 * widget.scale),
             Expanded(
@@ -879,7 +891,7 @@ class _MenuItemState extends State<_MenuItem> {
                 style: TextStyle(
                   fontSize: (14 * widget.scale).clamp(13.0, 16.0),
                   fontWeight: FontWeight.w700,
-                  color: widget.isDark ? Colors.white : AppColors.textPrimary,
+                  color: widget.isDark ? cs.onSurface : AppColors.textPrimary,
                 ),
               ),
             ),
@@ -887,7 +899,7 @@ class _MenuItemState extends State<_MenuItem> {
               Icons.chevron_right_rounded,
               size: 20 * widget.scale,
               color: widget.isDark
-                  ? Colors.white.withOpacity(0.4)
+                  ? cs.onSurfaceVariant
                   : AppColors.textSecondary.withOpacity(0.5),
             ),
           ],
@@ -921,6 +933,8 @@ class _SignOutButtonState extends State<_SignOutButton> {
 
   @override
   Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+
     return GestureDetector(
       onTapDown: (_) => setState(() => _pressed = true),
       onTapUp: (_) {
@@ -933,11 +947,11 @@ class _SignOutButtonState extends State<_SignOutButton> {
         padding: EdgeInsets.symmetric(horizontal: 12 * widget.scale, vertical: 12 * widget.scale),
         decoration: BoxDecoration(
           color: _pressed
-              ? AppColors.error.withOpacity(0.12)
-              : (widget.isDark ? Colors.white.withOpacity(0.04) : Colors.transparent),
+              ? cs.error.withOpacity(0.12)
+              : (widget.isDark ? cs.surfaceVariant.withOpacity(0.5) : Colors.transparent),
           borderRadius: BorderRadius.circular(10 * widget.scale),
           border: Border.all(
-            color: AppColors.error.withOpacity(_pressed ? 0.5 : 0.3),
+            color: cs.error.withOpacity(_pressed ? 0.5 : (widget.isDark ? 0.3 : 0.3)),
             width: 1,
           ),
         ),
@@ -947,7 +961,7 @@ class _SignOutButtonState extends State<_SignOutButton> {
             Icon(
               Icons.logout_rounded,
               size: 20 * widget.scale,
-              color: AppColors.error,
+              color: cs.error,
             ),
             SizedBox(width: 10 * widget.scale),
             Text(
@@ -955,7 +969,7 @@ class _SignOutButtonState extends State<_SignOutButton> {
               style: TextStyle(
                 fontSize: (14 * widget.scale).clamp(13.0, 16.0),
                 fontWeight: FontWeight.w800,
-                color: AppColors.error,
+                color: cs.error,
                 letterSpacing: 0.2,
               ),
             ),

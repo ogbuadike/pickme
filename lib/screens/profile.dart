@@ -255,23 +255,23 @@ class _ProfileScreenState extends State<ProfileScreen> with SingleTickerProvider
           style: TextStyle(
             fontSize: ui.font(18),
             fontWeight: FontWeight.w900,
-            color: isDark ? Colors.white : AppColors.textPrimary,
+            color: isDark ? cs.onSurface : AppColors.textPrimary,
           ),
         ),
         leading: IconButton(
-          icon: Icon(Icons.arrow_back_ios_new_rounded, size: ui.icon(20), color: isDark ? Colors.white : AppColors.textPrimary),
+          icon: Icon(Icons.arrow_back_ios_new_rounded, size: ui.icon(20), color: isDark ? cs.onSurface : AppColors.textPrimary),
           onPressed: () => Navigator.of(context).pop(),
         ),
       ),
       body: Stack(
         children: [
-          const BackgroundWidget(style: HoloStyle.vapor, intensity: 0.5, animate: false),
+          BackgroundWidget(style: HoloStyle.vapor, intensity: isDark ? 0.15 : 0.5, animate: false),
           SafeArea(
             child: _isLoading && _user.isEmpty
                 ? _buildPremiumSkeleton(ui, isDark)
                 : _hasError && _user.isEmpty
                 ? _buildErrorState(ui, isDark)
-                : _buildContent(ui, isDark),
+                : _buildContent(ui, cs, isDark),
           ),
           if (_isUploadingImage || (_isLoading && _user.isNotEmpty))
             Container(
@@ -280,10 +280,10 @@ class _ProfileScreenState extends State<ProfileScreen> with SingleTickerProvider
                 child: Container(
                   padding: EdgeInsets.all(ui.inset(20)),
                   decoration: BoxDecoration(
-                    color: cs.surface,
+                    color: isDark ? cs.surface : Colors.white,
                     borderRadius: BorderRadius.circular(ui.radius(16)),
                   ),
-                  child: const CircularProgressIndicator(color: AppColors.primary),
+                  child: CircularProgressIndicator(color: isDark ? cs.primary : AppColors.primary),
                 ),
               ),
             ),
@@ -292,24 +292,25 @@ class _ProfileScreenState extends State<ProfileScreen> with SingleTickerProvider
     );
   }
 
-  Widget _buildContent(UIScale ui, bool isDark) {
+  Widget _buildContent(UIScale ui, ColorScheme cs, bool isDark) {
     return SingleChildScrollView(
       physics: const BouncingScrollPhysics(),
       padding: EdgeInsets.fromLTRB(ui.inset(16), ui.gap(10), ui.inset(16), ui.gap(40)),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.center,
         children: [
-          _buildHeader(ui, isDark),
+          _buildHeader(ui, cs, isDark),
           SizedBox(height: ui.gap(24)),
 
           _buildCardContainer(
             ui: ui,
+            cs: cs,
             isDark: isDark,
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                _buildSectionHeader(ui, 'Safety & Security', Icons.shield_rounded),
-                _buildSafety(ui, isDark),
+                _buildSectionHeader(ui, cs, isDark, 'Safety & Security', Icons.shield_rounded),
+                _buildSafety(ui, cs, isDark),
               ],
             ),
           ),
@@ -318,12 +319,13 @@ class _ProfileScreenState extends State<ProfileScreen> with SingleTickerProvider
 
           _buildCardContainer(
             ui: ui,
+            cs: cs,
             isDark: isDark,
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                _buildSectionHeader(ui, 'Account Management', Icons.manage_accounts_rounded),
-                _buildAccount(ui, isDark),
+                _buildSectionHeader(ui, cs, isDark, 'Account Management', Icons.manage_accounts_rounded),
+                _buildAccount(ui, cs, isDark),
               ],
             ),
           ),
@@ -332,36 +334,37 @@ class _ProfileScreenState extends State<ProfileScreen> with SingleTickerProvider
 
           _buildCardContainer(
             ui: ui,
+            cs: cs,
             isDark: isDark,
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                _buildSectionHeader(ui, 'About & Legal', Icons.info_outline_rounded),
-                _buildAbout(ui, isDark),
+                _buildSectionHeader(ui, cs, isDark, 'About & Legal', Icons.info_outline_rounded),
+                _buildAbout(ui, cs, isDark),
               ],
             ),
           ),
 
           SizedBox(height: ui.gap(32)),
-          _buildDangerZone(ui, isDark),
+          _buildDangerZone(ui, cs, isDark),
         ],
       ),
     );
   }
 
-  Widget _buildCardContainer({required UIScale ui, required bool isDark, required Widget child}) {
+  Widget _buildCardContainer({required UIScale ui, required ColorScheme cs, required bool isDark, required Widget child}) {
     return ClipRRect(
       borderRadius: BorderRadius.circular(ui.radius(20)),
       child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: 16, sigmaY: 16), // <--- Fixed: Removed "ui." prefix
+        filter: ImageFilter.blur(sigmaX: 16, sigmaY: 16),
         child: Container(
           decoration: BoxDecoration(
-            color: isDark ? AppColors.darkColor.withOpacity(0.7) : Colors.white.withOpacity(0.85),
+            color: isDark ? cs.surface.withOpacity(0.85) : Colors.white.withOpacity(0.85),
             borderRadius: BorderRadius.circular(ui.radius(20)),
-            border: Border.all(color: AppColors.mintBgLight.withOpacity(0.3)),
+            border: Border.all(color: isDark ? cs.outline.withOpacity(0.4) : AppColors.mintBgLight.withOpacity(0.3)),
             boxShadow: [
               BoxShadow(
-                color: Colors.black.withOpacity(0.04),
+                color: Colors.black.withOpacity(isDark ? 0.3 : 0.04),
                 blurRadius: 20,
                 offset: const Offset(0, 8),
               ),
@@ -373,20 +376,20 @@ class _ProfileScreenState extends State<ProfileScreen> with SingleTickerProvider
     );
   }
 
-  Widget _buildSectionHeader(UIScale ui, String title, IconData icon) {
+  Widget _buildSectionHeader(UIScale ui, ColorScheme cs, bool isDark, String title, IconData icon) {
     return Padding(
       padding: EdgeInsets.fromLTRB(ui.inset(16), ui.inset(16), ui.inset(16), ui.inset(8)),
       child: Row(
         children: [
-          Icon(icon, size: ui.icon(18), color: AppColors.primary),
+          Icon(icon, size: ui.icon(18), color: isDark ? cs.primary : AppColors.primary),
           SizedBox(width: ui.gap(8)),
-          Text(title, style: TextStyle(fontSize: ui.font(14), fontWeight: FontWeight.w800, color: AppColors.primary)),
+          Text(title, style: TextStyle(fontSize: ui.font(14), fontWeight: FontWeight.w800, color: isDark ? cs.primary : AppColors.primary)),
         ],
       ),
     );
   }
 
-  Widget _buildHeader(UIScale ui, bool isDark) {
+  Widget _buildHeader(UIScale ui, ColorScheme cs, bool isDark) {
     final avatarUrl = _user['user_logo']?.toString() ?? '';
     final fName = _user['user_fname']?.toString() ?? '';
     final lName = _user['user_lname']?.toString() ?? '';
@@ -421,15 +424,15 @@ class _ProfileScreenState extends State<ProfileScreen> with SingleTickerProvider
                 height: ui.inset(100),
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,
-                  color: AppColors.mintBgLight.withOpacity(0.2),
-                  border: Border.all(color: AppColors.primary, width: 3),
+                  color: isDark ? cs.surfaceVariant : AppColors.mintBgLight.withOpacity(0.2),
+                  border: Border.all(color: isDark ? cs.primary : AppColors.primary, width: 3),
                   boxShadow: [
-                    BoxShadow(color: AppColors.primary.withOpacity(0.3), blurRadius: 20, offset: const Offset(0, 8)),
+                    BoxShadow(color: (isDark ? cs.primary : AppColors.primary).withOpacity(0.3), blurRadius: 20, offset: const Offset(0, 8)),
                   ],
                   image: avatarUrl.isNotEmpty ? DecorationImage(image: NetworkImage(avatarUrl), fit: BoxFit.cover) : null,
                 ),
                 child: avatarUrl.isEmpty
-                    ? Center(child: Text(initials.toUpperCase(), style: TextStyle(fontSize: ui.font(32), fontWeight: FontWeight.w900, color: AppColors.primary)))
+                    ? Center(child: Text(initials.toUpperCase(), style: TextStyle(fontSize: ui.font(32), fontWeight: FontWeight.w900, color: isDark ? cs.primary : AppColors.primary)))
                     : null,
               ),
             ),
@@ -439,11 +442,11 @@ class _ProfileScreenState extends State<ProfileScreen> with SingleTickerProvider
               child: Container(
                 padding: EdgeInsets.all(ui.inset(8)),
                 decoration: BoxDecoration(
-                  color: AppColors.secondary,
+                  color: isDark ? cs.surfaceVariant : AppColors.secondary,
                   shape: BoxShape.circle,
-                  border: Border.all(color: isDark ? AppColors.darkColor : Colors.white, width: 3),
+                  border: Border.all(color: isDark ? cs.surface : Colors.white, width: 3),
                 ),
-                child: Icon(Icons.camera_alt_rounded, size: ui.icon(16), color: Colors.white),
+                child: Icon(Icons.camera_alt_rounded, size: ui.icon(16), color: isDark ? cs.onSurface : Colors.white),
               ),
             ),
           ],
@@ -451,13 +454,13 @@ class _ProfileScreenState extends State<ProfileScreen> with SingleTickerProvider
         SizedBox(height: ui.gap(16)),
         Text(
           name.isNotEmpty ? name : 'Pick Me User',
-          style: TextStyle(fontSize: ui.font(22), fontWeight: FontWeight.w900, color: isDark ? Colors.white : AppColors.textPrimary),
+          style: TextStyle(fontSize: ui.font(22), fontWeight: FontWeight.w900, color: isDark ? cs.onSurface : AppColors.textPrimary),
         ),
         if (email.isNotEmpty || phone.isNotEmpty) ...[
           SizedBox(height: ui.gap(4)),
           Text(
             [if (phone.isNotEmpty) phone, if (email.isNotEmpty) email].join(' • '),
-            style: TextStyle(fontSize: ui.font(13), fontWeight: FontWeight.w600, color: AppColors.textSecondary),
+            style: TextStyle(fontSize: ui.font(13), fontWeight: FontWeight.w600, color: isDark ? cs.onSurfaceVariant : AppColors.textSecondary),
           ),
         ],
         SizedBox(height: ui.gap(20)),
@@ -466,18 +469,18 @@ class _ProfileScreenState extends State<ProfileScreen> with SingleTickerProvider
         Container(
           padding: EdgeInsets.symmetric(vertical: ui.gap(16), horizontal: ui.inset(16)),
           decoration: BoxDecoration(
-            color: AppColors.primary.withOpacity(0.05),
+            color: (isDark ? cs.primary : AppColors.primary).withOpacity(0.05),
             borderRadius: BorderRadius.circular(ui.radius(20)),
-            border: Border.all(color: AppColors.primary.withOpacity(0.15)),
+            border: Border.all(color: (isDark ? cs.primary : AppColors.primary).withOpacity(0.15)),
           ),
           child: Row(
             mainAxisAlignment: MainAxisAlignment.spaceEvenly,
             children: [
-              _buildDashboardStat(ui, isDark, Icons.local_taxi_rounded, totalTrips.toString(), 'Trips'),
-              Container(width: 1, height: 40, color: AppColors.primary.withOpacity(0.2)),
-              _buildDashboardStat(ui, isDark, Icons.star_rounded, rating, 'Rating', color: const Color(0xFFFFD54F)),
-              Container(width: 1, height: 40, color: AppColors.primary.withOpacity(0.2)),
-              _buildDashboardStat(ui, isDark, Icons.calendar_month_rounded, memberSince, 'Joined', color: AppColors.secondary),
+              _buildDashboardStat(ui, cs, isDark, Icons.local_taxi_rounded, totalTrips.toString(), 'Trips', color: isDark ? cs.primary : AppColors.primary),
+              Container(width: 1, height: 40, color: (isDark ? cs.primary : AppColors.primary).withOpacity(0.2)),
+              _buildDashboardStat(ui, cs, isDark, Icons.star_rounded, rating, 'Rating', color: const Color(0xFFFFD54F)),
+              Container(width: 1, height: 40, color: (isDark ? cs.primary : AppColors.primary).withOpacity(0.2)),
+              _buildDashboardStat(ui, cs, isDark, Icons.calendar_month_rounded, memberSince, 'Joined', color: isDark ? cs.secondary : AppColors.secondary),
             ],
           ),
         )
@@ -485,7 +488,7 @@ class _ProfileScreenState extends State<ProfileScreen> with SingleTickerProvider
     );
   }
 
-  Widget _buildDashboardStat(UIScale ui, bool isDark, IconData icon, String val, String label, {Color color = AppColors.primary}) {
+  Widget _buildDashboardStat(UIScale ui, ColorScheme cs, bool isDark, IconData icon, String val, String label, {required Color color}) {
     return Column(
       children: [
         Row(
@@ -493,31 +496,31 @@ class _ProfileScreenState extends State<ProfileScreen> with SingleTickerProvider
           children: [
             Icon(icon, size: ui.icon(18), color: color),
             SizedBox(width: ui.gap(6)),
-            Text(val, style: TextStyle(fontSize: ui.font(16), fontWeight: FontWeight.w900, color: isDark ? Colors.white : AppColors.textPrimary)),
+            Text(val, style: TextStyle(fontSize: ui.font(16), fontWeight: FontWeight.w900, color: isDark ? cs.onSurface : AppColors.textPrimary)),
           ],
         ),
         SizedBox(height: ui.gap(2)),
-        Text(label, style: TextStyle(fontSize: ui.font(11), color: AppColors.textSecondary, fontWeight: FontWeight.w700)),
+        Text(label, style: TextStyle(fontSize: ui.font(11), color: isDark ? cs.onSurfaceVariant : AppColors.textSecondary, fontWeight: FontWeight.w700)),
       ],
     );
   }
 
-  Widget _buildSafety(UIScale ui, bool isDark) {
+  Widget _buildSafety(UIScale ui, ColorScheme cs, bool isDark) {
     final contact = (_user['emergency_contact']?.toString() ?? '').trim();
     final hasContact = contact.isNotEmpty;
 
     return Column(
       children: [
-        Divider(color: AppColors.mintBgLight.withOpacity(0.2), height: 1),
+        Divider(color: isDark ? cs.outline.withOpacity(0.3) : AppColors.mintBgLight.withOpacity(0.2), height: 1),
         ListTile(
           contentPadding: EdgeInsets.symmetric(horizontal: ui.inset(16), vertical: ui.inset(4)),
           leading: Container(
             padding: EdgeInsets.all(ui.inset(10)),
-            decoration: BoxDecoration(color: AppColors.error.withOpacity(0.1), shape: BoxShape.circle),
-            child: Icon(Icons.contact_phone_rounded, color: AppColors.error, size: ui.icon(20)),
+            decoration: BoxDecoration(color: cs.error.withOpacity(0.1), shape: BoxShape.circle),
+            child: Icon(Icons.contact_phone_rounded, color: cs.error, size: ui.icon(20)),
           ),
-          title: Text('Emergency Contact', style: TextStyle(fontWeight: FontWeight.w800, fontSize: ui.font(14), color: isDark ? Colors.white : AppColors.textPrimary)),
-          subtitle: Text(hasContact ? contact : 'Not set for emergencies', style: TextStyle(fontSize: ui.font(12), color: AppColors.textSecondary, fontWeight: FontWeight.w600)),
+          title: Text('Emergency Contact', style: TextStyle(fontWeight: FontWeight.w800, fontSize: ui.font(14), color: isDark ? cs.onSurface : AppColors.textPrimary)),
+          subtitle: Text(hasContact ? contact : 'Not set for emergencies', style: TextStyle(fontSize: ui.font(12), color: isDark ? cs.onSurfaceVariant : AppColors.textSecondary, fontWeight: FontWeight.w600)),
           trailing: TextButton(
             onPressed: () => _showEditBottomSheet(
               title: 'Emergency Contact',
@@ -527,7 +530,7 @@ class _ProfileScreenState extends State<ProfileScreen> with SingleTickerProvider
               hint: 'e.g. John Doe - 08012345678',
               icon: Icons.contact_phone_rounded,
             ),
-            style: TextButton.styleFrom(foregroundColor: AppColors.error, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
+            style: TextButton.styleFrom(foregroundColor: cs.error, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
             child: Text(hasContact ? 'Edit' : 'Add', style: const TextStyle(fontWeight: FontWeight.w800)),
           ),
         ),
@@ -535,40 +538,40 @@ class _ProfileScreenState extends State<ProfileScreen> with SingleTickerProvider
     );
   }
 
-  Widget _buildAccount(UIScale ui, bool isDark) {
+  Widget _buildAccount(UIScale ui, ColorScheme cs, bool isDark) {
     return Column(
       children: [
-        Divider(color: AppColors.mintBgLight.withOpacity(0.2), height: 1),
-        _buildListTile(ui, isDark, 'Change Password', Icons.lock_outline_rounded, AppColors.secondary, onTap: _showPasswordBottomSheet),
-        Divider(color: AppColors.mintBgLight.withOpacity(0.2), height: 1),
-        _buildListTile(ui, isDark, 'Update Transaction Code', Icons.pin_rounded, const Color(0xFFB8860B), onTap: _showTransactionCodeBottomSheet),
-        Divider(color: AppColors.mintBgLight.withOpacity(0.2), height: 1),
-        _buildListTile(ui, isDark, 'Sign Out', Icons.logout_rounded, AppColors.textSecondary, onTap: _showLogoutBottomSheet),
+        Divider(color: isDark ? cs.outline.withOpacity(0.3) : AppColors.mintBgLight.withOpacity(0.2), height: 1),
+        _buildListTile(ui, cs, isDark, 'Change Password', Icons.lock_outline_rounded, isDark ? cs.secondary : AppColors.secondary, onTap: _showPasswordBottomSheet),
+        Divider(color: isDark ? cs.outline.withOpacity(0.3) : AppColors.mintBgLight.withOpacity(0.2), height: 1),
+        _buildListTile(ui, cs, isDark, 'Update Transaction Code', Icons.pin_rounded, const Color(0xFFB8860B), onTap: _showTransactionCodeBottomSheet),
+        Divider(color: isDark ? cs.outline.withOpacity(0.3) : AppColors.mintBgLight.withOpacity(0.2), height: 1),
+        _buildListTile(ui, cs, isDark, 'Sign Out', Icons.logout_rounded, isDark ? cs.onSurfaceVariant : AppColors.textSecondary, onTap: _showLogoutBottomSheet),
       ],
     );
   }
 
-  Widget _buildAbout(UIScale ui, bool isDark) {
+  Widget _buildAbout(UIScale ui, ColorScheme cs, bool isDark) {
     return Column(
       children: [
-        Divider(color: AppColors.mintBgLight.withOpacity(0.2), height: 1),
+        Divider(color: isDark ? cs.outline.withOpacity(0.3) : AppColors.mintBgLight.withOpacity(0.2), height: 1),
         ListTile(
           contentPadding: EdgeInsets.symmetric(horizontal: ui.inset(16), vertical: ui.inset(4)),
           leading: Container(
             padding: EdgeInsets.all(ui.inset(10)),
-            decoration: BoxDecoration(color: AppColors.primary.withOpacity(0.1), shape: BoxShape.circle),
-            child: Icon(Icons.info_outline_rounded, color: AppColors.primary, size: ui.icon(20)),
+            decoration: BoxDecoration(color: (isDark ? cs.primary : AppColors.primary).withOpacity(0.1), shape: BoxShape.circle),
+            child: Icon(Icons.info_outline_rounded, color: isDark ? cs.primary : AppColors.primary, size: ui.icon(20)),
           ),
-          title: Text('App Version', style: TextStyle(fontWeight: FontWeight.w800, fontSize: ui.font(14), color: isDark ? Colors.white : AppColors.textPrimary)),
-          trailing: Text(_appVersion, style: TextStyle(fontWeight: FontWeight.w900, color: AppColors.textSecondary)),
+          title: Text('App Version', style: TextStyle(fontWeight: FontWeight.w800, fontSize: ui.font(14), color: isDark ? cs.onSurface : AppColors.textPrimary)),
+          trailing: Text(_appVersion, style: TextStyle(fontWeight: FontWeight.w900, color: isDark ? cs.onSurfaceVariant : AppColors.textSecondary)),
         ),
-        Divider(color: AppColors.mintBgLight.withOpacity(0.2), height: 1),
-        _buildListTile(ui, isDark, 'Privacy Policy', Icons.privacy_tip_outlined, const Color(0xFF1E8E3E), onTap: () => _launchUrl(_privacyPolicyUrl)),
+        Divider(color: isDark ? cs.outline.withOpacity(0.3) : AppColors.mintBgLight.withOpacity(0.2), height: 1),
+        _buildListTile(ui, cs, isDark, 'Privacy Policy', Icons.privacy_tip_outlined, const Color(0xFF1E8E3E), onTap: () => _launchUrl(_privacyPolicyUrl)),
       ],
     );
   }
 
-  Widget _buildListTile(UIScale ui, bool isDark, String title, IconData icon, Color iconColor, {VoidCallback? onTap}) {
+  Widget _buildListTile(UIScale ui, ColorScheme cs, bool isDark, String title, IconData icon, Color iconColor, {VoidCallback? onTap}) {
     return ListTile(
       contentPadding: EdgeInsets.symmetric(horizontal: ui.inset(16), vertical: ui.inset(4)),
       leading: Container(
@@ -576,8 +579,8 @@ class _ProfileScreenState extends State<ProfileScreen> with SingleTickerProvider
         decoration: BoxDecoration(color: iconColor.withOpacity(0.1), shape: BoxShape.circle),
         child: Icon(icon, color: iconColor, size: ui.icon(20)),
       ),
-      title: Text(title, style: TextStyle(fontWeight: FontWeight.w800, fontSize: ui.font(14), color: isDark ? Colors.white : AppColors.textPrimary)),
-      trailing: Icon(Icons.chevron_right_rounded, color: AppColors.textSecondary.withOpacity(0.5)),
+      title: Text(title, style: TextStyle(fontWeight: FontWeight.w800, fontSize: ui.font(14), color: isDark ? cs.onSurface : AppColors.textPrimary)),
+      trailing: Icon(Icons.chevron_right_rounded, color: isDark ? cs.onSurfaceVariant : AppColors.textSecondary.withOpacity(0.5)),
       onTap: () {
         HapticFeedback.lightImpact();
         if (onTap != null) onTap();
@@ -585,20 +588,20 @@ class _ProfileScreenState extends State<ProfileScreen> with SingleTickerProvider
     );
   }
 
-  Widget _buildDangerZone(UIScale ui, bool isDark) {
+  Widget _buildDangerZone(UIScale ui, ColorScheme cs, bool isDark) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Padding(
           padding: EdgeInsets.only(left: ui.inset(16), bottom: ui.gap(8)),
-          child: Text('DANGER ZONE', style: TextStyle(color: AppColors.error, fontWeight: FontWeight.w900, fontSize: ui.font(12), letterSpacing: 1.2)),
+          child: Text('DANGER ZONE', style: TextStyle(color: cs.error, fontWeight: FontWeight.w900, fontSize: ui.font(12), letterSpacing: 1.2)),
         ),
         Container(
           width: double.infinity,
           decoration: BoxDecoration(
-            color: AppColors.error.withOpacity(0.05),
+            color: cs.error.withOpacity(0.05),
             borderRadius: BorderRadius.circular(ui.radius(20)),
-            border: Border.all(color: AppColors.error.withOpacity(0.3)),
+            border: Border.all(color: cs.error.withOpacity(0.3)),
           ),
           child: Material(
             color: Colors.transparent,
@@ -614,21 +617,21 @@ class _ProfileScreenState extends State<ProfileScreen> with SingleTickerProvider
                   children: [
                     Container(
                       padding: EdgeInsets.all(ui.inset(10)),
-                      decoration: BoxDecoration(color: AppColors.error.withOpacity(0.15), shape: BoxShape.circle),
-                      child: Icon(Icons.delete_forever_rounded, color: AppColors.error, size: ui.icon(20)),
+                      decoration: BoxDecoration(color: cs.error.withOpacity(0.15), shape: BoxShape.circle),
+                      child: Icon(Icons.delete_forever_rounded, color: cs.error, size: ui.icon(20)),
                     ),
                     SizedBox(width: ui.gap(16)),
                     Expanded(
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Text('Delete Account', style: TextStyle(fontSize: ui.font(15), fontWeight: FontWeight.w900, color: AppColors.error)),
+                          Text('Delete Account', style: TextStyle(fontSize: ui.font(15), fontWeight: FontWeight.w900, color: cs.error)),
                           SizedBox(height: ui.gap(4)),
-                          Text('Permanently remove all data.', style: TextStyle(fontSize: ui.font(12), color: AppColors.error.withOpacity(0.8), fontWeight: FontWeight.w700)),
+                          Text('Permanently remove all data.', style: TextStyle(fontSize: ui.font(12), color: cs.error.withOpacity(0.8), fontWeight: FontWeight.w700)),
                         ],
                       ),
                     ),
-                    Icon(Icons.chevron_right_rounded, color: AppColors.error.withOpacity(0.5)),
+                    Icon(Icons.chevron_right_rounded, color: cs.error.withOpacity(0.5)),
                   ],
                 ),
               ),
@@ -683,23 +686,24 @@ class _ProfileScreenState extends State<ProfileScreen> with SingleTickerProvider
   }
 
   Widget _buildErrorState(UIScale ui, bool isDark) {
+    final cs = Theme.of(context).colorScheme;
     return Center(
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          Icon(Icons.wifi_off_rounded, size: ui.icon(60), color: AppColors.error.withOpacity(0.5)),
+          Icon(Icons.wifi_off_rounded, size: ui.icon(60), color: cs.error.withOpacity(0.5)),
           SizedBox(height: ui.gap(16)),
-          Text('Connection Error', style: TextStyle(fontSize: ui.font(20), fontWeight: FontWeight.w900, color: isDark ? Colors.white : AppColors.textPrimary)),
+          Text('Connection Error', style: TextStyle(fontSize: ui.font(20), fontWeight: FontWeight.w900, color: isDark ? cs.onSurface : AppColors.textPrimary)),
           SizedBox(height: ui.gap(8)),
-          Text('Unable to load your profile data.', style: TextStyle(color: AppColors.textSecondary, fontWeight: FontWeight.w600)),
+          Text('Unable to load your profile data.', style: TextStyle(color: isDark ? cs.onSurfaceVariant : AppColors.textSecondary, fontWeight: FontWeight.w600)),
           SizedBox(height: ui.gap(24)),
           ElevatedButton.icon(
             onPressed: _fetchUser,
             icon: const Icon(Icons.refresh_rounded),
             label: const Text('Try Again', style: TextStyle(fontWeight: FontWeight.w800)),
             style: ElevatedButton.styleFrom(
-              backgroundColor: AppColors.primary,
-              foregroundColor: Colors.white,
+              backgroundColor: isDark ? cs.primary : AppColors.primary,
+              foregroundColor: isDark ? cs.onPrimary : Colors.white,
               padding: EdgeInsets.symmetric(horizontal: ui.inset(24), vertical: ui.inset(12)),
               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(ui.radius(30))),
             ),
@@ -728,7 +732,7 @@ class _ProfileScreenState extends State<ProfileScreen> with SingleTickerProvider
     );
   }
 
-  Widget _bottomSheetHeader(String title, String subtitle, IconData icon, Color color, bool isDark) {
+  Widget _bottomSheetHeader(String title, String subtitle, IconData icon, Color color, bool isDark, ColorScheme cs) {
     return Column(
       children: [
         Container(width: 40, height: 4, decoration: BoxDecoration(color: Colors.grey.withOpacity(0.3), borderRadius: BorderRadius.circular(2))),
@@ -739,9 +743,9 @@ class _ProfileScreenState extends State<ProfileScreen> with SingleTickerProvider
           child: Icon(icon, size: 36, color: color),
         ),
         const SizedBox(height: 16),
-        Text(title, style: TextStyle(fontSize: 22, fontWeight: FontWeight.w900, color: isDark ? Colors.white : AppColors.textPrimary)),
+        Text(title, style: TextStyle(fontSize: 22, fontWeight: FontWeight.w900, color: isDark ? cs.onSurface : AppColors.textPrimary)),
         const SizedBox(height: 8),
-        Text(subtitle, textAlign: TextAlign.center, style: TextStyle(fontSize: 14, color: AppColors.textSecondary, fontWeight: FontWeight.w600)),
+        Text(subtitle, textAlign: TextAlign.center, style: TextStyle(fontSize: 14, color: isDark ? cs.onSurfaceVariant : AppColors.textSecondary, fontWeight: FontWeight.w600)),
         const SizedBox(height: 24),
       ],
     );
@@ -749,28 +753,30 @@ class _ProfileScreenState extends State<ProfileScreen> with SingleTickerProvider
 
   void _showEditBottomSheet({required String title, required String dbKey, required String dbAction, required String initialValue, required String hint, required IconData icon}) {
     final ctrl = TextEditingController(text: initialValue);
-    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+    final cs = theme.colorScheme;
 
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
       builder: (c) => Container(
-        decoration: BoxDecoration(color: isDark ? AppColors.darkColor : Colors.white, borderRadius: const BorderRadius.vertical(top: Radius.circular(28))),
+        decoration: BoxDecoration(color: isDark ? cs.surface : Colors.white, borderRadius: const BorderRadius.vertical(top: Radius.circular(28))),
         padding: EdgeInsets.fromLTRB(24, 16, 24, MediaQuery.of(context).viewInsets.bottom + 24),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            _bottomSheetHeader(title, 'Update your information below.', icon, AppColors.primary, isDark),
+            _bottomSheetHeader(title, 'Update your information below.', icon, isDark ? cs.primary : AppColors.primary, isDark, cs),
             TextField(
               controller: ctrl,
               autofocus: true,
-              style: TextStyle(color: isDark ? Colors.white : AppColors.textPrimary, fontWeight: FontWeight.w600),
+              style: TextStyle(color: isDark ? cs.onSurface : AppColors.textPrimary, fontWeight: FontWeight.w600),
               decoration: InputDecoration(
                 hintText: hint,
-                hintStyle: TextStyle(color: AppColors.textSecondary.withOpacity(0.5)),
+                hintStyle: TextStyle(color: isDark ? cs.onSurfaceVariant : AppColors.textSecondary.withOpacity(0.5)),
                 filled: true,
-                fillColor: isDark ? Colors.white.withOpacity(0.05) : AppColors.mintBgLight.withOpacity(0.3),
+                fillColor: isDark ? cs.surfaceVariant : AppColors.mintBgLight.withOpacity(0.3),
                 border: OutlineInputBorder(borderRadius: BorderRadius.circular(16), borderSide: BorderSide.none),
                 contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 18),
               ),
@@ -786,7 +792,7 @@ class _ProfileScreenState extends State<ProfileScreen> with SingleTickerProvider
                     _update({dbKey: ctrl.text.trim()}, dbAction);
                   }
                 },
-                style: ElevatedButton.styleFrom(backgroundColor: AppColors.primary, foregroundColor: Colors.white, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)), elevation: 0),
+                style: ElevatedButton.styleFrom(backgroundColor: isDark ? cs.primary : AppColors.primary, foregroundColor: isDark ? cs.onPrimary : Colors.white, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)), elevation: 0),
                 child: const Text('Save Changes', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 16)),
               ),
             ),
@@ -800,24 +806,26 @@ class _ProfileScreenState extends State<ProfileScreen> with SingleTickerProvider
     final oldC = TextEditingController();
     final newC = TextEditingController();
     final confC = TextEditingController();
-    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+    final cs = theme.colorScheme;
 
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
       builder: (c) => Container(
-        decoration: BoxDecoration(color: isDark ? AppColors.darkColor : Colors.white, borderRadius: const BorderRadius.vertical(top: Radius.circular(28))),
+        decoration: BoxDecoration(color: isDark ? cs.surface : Colors.white, borderRadius: const BorderRadius.vertical(top: Radius.circular(28))),
         padding: EdgeInsets.fromLTRB(24, 16, 24, MediaQuery.of(context).viewInsets.bottom + 24),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            _bottomSheetHeader('Change Password', 'Secure your account with a new password.', Icons.lock_outline_rounded, AppColors.secondary, isDark),
-            _buildDialogTextField(oldC, 'Old Password', isDark),
+            _bottomSheetHeader('Change Password', 'Secure your account with a new password.', Icons.lock_outline_rounded, isDark ? cs.secondary : AppColors.secondary, isDark, cs),
+            _buildDialogTextField(oldC, 'Old Password', isDark, cs),
             const SizedBox(height: 12),
-            _buildDialogTextField(newC, 'New Password', isDark),
+            _buildDialogTextField(newC, 'New Password', isDark, cs),
             const SizedBox(height: 12),
-            _buildDialogTextField(confC, 'Confirm New Password', isDark),
+            _buildDialogTextField(confC, 'Confirm New Password', isDark, cs),
             const SizedBox(height: 24),
             SizedBox(
               width: double.infinity,
@@ -829,7 +837,7 @@ class _ProfileScreenState extends State<ProfileScreen> with SingleTickerProvider
                   Navigator.pop(c);
                   _update({'old_password': oldC.text, 'new_password': newC.text}, 'update_password');
                 },
-                style: ElevatedButton.styleFrom(backgroundColor: AppColors.primary, foregroundColor: Colors.white, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)), elevation: 0),
+                style: ElevatedButton.styleFrom(backgroundColor: isDark ? cs.primary : AppColors.primary, foregroundColor: isDark ? cs.onPrimary : Colors.white, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)), elevation: 0),
                 child: const Text('Update Password', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 16)),
               ),
             ),
@@ -843,24 +851,26 @@ class _ProfileScreenState extends State<ProfileScreen> with SingleTickerProvider
     final oldC = TextEditingController();
     final newC = TextEditingController();
     final confC = TextEditingController();
-    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+    final cs = theme.colorScheme;
 
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
       builder: (c) => Container(
-        decoration: BoxDecoration(color: isDark ? AppColors.darkColor : Colors.white, borderRadius: const BorderRadius.vertical(top: Radius.circular(28))),
+        decoration: BoxDecoration(color: isDark ? cs.surface : Colors.white, borderRadius: const BorderRadius.vertical(top: Radius.circular(28))),
         padding: EdgeInsets.fromLTRB(24, 16, 24, MediaQuery.of(context).viewInsets.bottom + 24),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            _bottomSheetHeader('Transaction Code', 'Update your 4-digit security code.', Icons.pin_rounded, const Color(0xFFB8860B), isDark),
-            _buildDialogTextField(oldC, 'Old 4-Digit Code', isDark, isNumber: true),
+            _bottomSheetHeader('Transaction Code', 'Update your 4-digit security code.', Icons.pin_rounded, const Color(0xFFB8860B), isDark, cs),
+            _buildDialogTextField(oldC, 'Old 4-Digit Code', isDark, cs, isNumber: true),
             const SizedBox(height: 12),
-            _buildDialogTextField(newC, 'New 4-Digit Code', isDark, isNumber: true),
+            _buildDialogTextField(newC, 'New 4-Digit Code', isDark, cs, isNumber: true),
             const SizedBox(height: 12),
-            _buildDialogTextField(confC, 'Confirm New Code', isDark, isNumber: true),
+            _buildDialogTextField(confC, 'Confirm New Code', isDark, cs, isNumber: true),
             const SizedBox(height: 24),
             SizedBox(
               width: double.infinity,
@@ -884,25 +894,27 @@ class _ProfileScreenState extends State<ProfileScreen> with SingleTickerProvider
   }
 
   void _showLogoutBottomSheet() {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+    final cs = theme.colorScheme;
 
     showModalBottomSheet(
       context: context,
       backgroundColor: Colors.transparent,
       builder: (c) => Container(
-        decoration: BoxDecoration(color: isDark ? AppColors.darkColor : Colors.white, borderRadius: const BorderRadius.vertical(top: Radius.circular(28))),
+        decoration: BoxDecoration(color: isDark ? cs.surface : Colors.white, borderRadius: const BorderRadius.vertical(top: Radius.circular(28))),
         padding: const EdgeInsets.fromLTRB(24, 16, 24, 40),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            _bottomSheetHeader('Sign Out', 'You will need your password to log back in.', Icons.logout_rounded, AppColors.textSecondary, isDark),
+            _bottomSheetHeader('Sign Out', 'You will need your password to log back in.', Icons.logout_rounded, isDark ? cs.onSurfaceVariant : AppColors.textSecondary, isDark, cs),
             Row(
               children: [
                 Expanded(
                   child: TextButton(
                     onPressed: () => Navigator.pop(c),
                     style: TextButton.styleFrom(padding: const EdgeInsets.symmetric(vertical: 16), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16))),
-                    child: Text('Cancel', style: TextStyle(color: AppColors.textSecondary, fontWeight: FontWeight.w800, fontSize: 16)),
+                    child: Text('Cancel', style: TextStyle(color: isDark ? cs.onSurfaceVariant : AppColors.textSecondary, fontWeight: FontWeight.w800, fontSize: 16)),
                   ),
                 ),
                 const SizedBox(width: 16),
@@ -913,7 +925,7 @@ class _ProfileScreenState extends State<ProfileScreen> with SingleTickerProvider
                       await _prefs.clear();
                       if (mounted) Navigator.of(context).pushNamedAndRemoveUntil(AppRoutes.login, (route) => false);
                     },
-                    style: ElevatedButton.styleFrom(backgroundColor: AppColors.error, foregroundColor: Colors.white, elevation: 0, padding: const EdgeInsets.symmetric(vertical: 16), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16))),
+                    style: ElevatedButton.styleFrom(backgroundColor: cs.error, foregroundColor: cs.onError, elevation: 0, padding: const EdgeInsets.symmetric(vertical: 16), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16))),
                     child: const Text('Sign Out', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 16)),
                   ),
                 ),
@@ -927,29 +939,31 @@ class _ProfileScreenState extends State<ProfileScreen> with SingleTickerProvider
 
   void _showDeleteAccountBottomSheet() {
     final confC = TextEditingController();
-    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+    final cs = theme.colorScheme;
 
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
       builder: (c) => Container(
-        decoration: BoxDecoration(color: isDark ? AppColors.darkColor : Colors.white, borderRadius: const BorderRadius.vertical(top: Radius.circular(28))),
+        decoration: BoxDecoration(color: isDark ? cs.surface : Colors.white, borderRadius: const BorderRadius.vertical(top: Radius.circular(28))),
         padding: EdgeInsets.fromLTRB(24, 16, 24, MediaQuery.of(context).viewInsets.bottom + 24),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            _bottomSheetHeader('Delete Account', 'This action is permanent and cannot be undone. All your ride history, wallet balance, and profile data will be permanently wiped.', Icons.warning_amber_rounded, AppColors.error, isDark),
+            _bottomSheetHeader('Delete Account', 'This action is permanent and cannot be undone. All your ride history, wallet balance, and profile data will be permanently wiped.', Icons.warning_amber_rounded, cs.error, isDark, cs),
             TextField(
               controller: confC,
-              style: const TextStyle(fontWeight: FontWeight.w900, color: AppColors.error, letterSpacing: 2),
+              style: TextStyle(fontWeight: FontWeight.w900, color: cs.error, letterSpacing: 2),
               decoration: InputDecoration(
                 hintText: 'Type DELETE to confirm',
-                hintStyle: TextStyle(color: AppColors.error.withOpacity(0.5), letterSpacing: 0, fontWeight: FontWeight.w600),
+                hintStyle: TextStyle(color: cs.error.withOpacity(0.5), letterSpacing: 0, fontWeight: FontWeight.w600),
                 filled: true,
-                fillColor: AppColors.error.withOpacity(0.05),
-                border: OutlineInputBorder(borderRadius: BorderRadius.circular(16), borderSide: BorderSide(color: AppColors.error.withOpacity(0.3))),
-                focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(16), borderSide: const BorderSide(color: AppColors.error, width: 2)),
+                fillColor: cs.error.withOpacity(0.05),
+                border: OutlineInputBorder(borderRadius: BorderRadius.circular(16), borderSide: BorderSide(color: cs.error.withOpacity(0.3))),
+                focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(16), borderSide: BorderSide(color: cs.error, width: 2)),
                 contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 18),
               ),
             ),
@@ -960,7 +974,7 @@ class _ProfileScreenState extends State<ProfileScreen> with SingleTickerProvider
                   child: TextButton(
                     onPressed: () => Navigator.pop(c),
                     style: TextButton.styleFrom(padding: const EdgeInsets.symmetric(vertical: 16), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16))),
-                    child: Text('Cancel', style: TextStyle(color: AppColors.textSecondary, fontWeight: FontWeight.w800, fontSize: 16)),
+                    child: Text('Cancel', style: TextStyle(color: isDark ? cs.onSurfaceVariant : AppColors.textSecondary, fontWeight: FontWeight.w800, fontSize: 16)),
                   ),
                 ),
                 const SizedBox(width: 16),
@@ -974,7 +988,7 @@ class _ProfileScreenState extends State<ProfileScreen> with SingleTickerProvider
                         _fail('You must type DELETE to confirm.');
                       }
                     },
-                    style: ElevatedButton.styleFrom(backgroundColor: AppColors.error, foregroundColor: Colors.white, elevation: 0, padding: const EdgeInsets.symmetric(vertical: 16), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16))),
+                    style: ElevatedButton.styleFrom(backgroundColor: cs.error, foregroundColor: cs.onError, elevation: 0, padding: const EdgeInsets.symmetric(vertical: 16), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16))),
                     child: const Text('Delete Forever', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 16)),
                   ),
                 ),
@@ -986,18 +1000,18 @@ class _ProfileScreenState extends State<ProfileScreen> with SingleTickerProvider
     );
   }
 
-  Widget _buildDialogTextField(TextEditingController ctrl, String hint, bool isDark, {bool isNumber = false}) {
+  Widget _buildDialogTextField(TextEditingController ctrl, String hint, bool isDark, ColorScheme cs, {bool isNumber = false}) {
     return TextField(
       controller: ctrl,
       obscureText: true,
-      style: TextStyle(color: isDark ? Colors.white : AppColors.textPrimary, fontWeight: FontWeight.w700, letterSpacing: 2),
+      style: TextStyle(color: isDark ? cs.onSurface : AppColors.textPrimary, fontWeight: FontWeight.w700, letterSpacing: 2),
       keyboardType: isNumber ? TextInputType.number : TextInputType.text,
       inputFormatters: isNumber ? [FilteringTextInputFormatter.digitsOnly, LengthLimitingTextInputFormatter(4)] : null,
       decoration: InputDecoration(
         hintText: hint,
-        hintStyle: TextStyle(color: AppColors.textSecondary.withOpacity(0.5), letterSpacing: 0, fontWeight: FontWeight.w500),
+        hintStyle: TextStyle(color: isDark ? cs.onSurfaceVariant : AppColors.textSecondary.withOpacity(0.5), letterSpacing: 0, fontWeight: FontWeight.w500),
         filled: true,
-        fillColor: isDark ? Colors.white.withOpacity(0.05) : AppColors.mintBgLight.withOpacity(0.3),
+        fillColor: isDark ? cs.surfaceVariant : AppColors.mintBgLight.withOpacity(0.3),
         border: OutlineInputBorder(borderRadius: BorderRadius.circular(16), borderSide: BorderSide.none),
         contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 18),
       ),

@@ -195,18 +195,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
       ),
       body: Stack(
         children: [
-          const BackgroundWidget(style: HoloStyle.vapor, intensity: 0.5, animate: false),
+          BackgroundWidget(style: HoloStyle.vapor, intensity: isDark ? 0.15 : 0.5, animate: false),
           SafeArea(
             child: _isLoading
-                ? const Center(child: CircularProgressIndicator(color: AppColors.primary))
-                : _buildContent(ui, isDark),
+                ? Center(child: CircularProgressIndicator(color: isDark ? cs.primary : AppColors.primary))
+                : _buildContent(ui, cs, isDark),
           ),
         ],
       ),
     );
   }
 
-  Widget _buildContent(UIScale ui, bool isDark) {
+  Widget _buildContent(UIScale ui, ColorScheme cs, bool isDark) {
     return SingleChildScrollView(
       physics: const BouncingScrollPhysics(),
       padding: EdgeInsets.fromLTRB(ui.inset(16), ui.gap(10), ui.inset(16), ui.gap(40)),
@@ -215,23 +215,26 @@ class _SettingsScreenState extends State<SettingsScreen> {
         children: [
           _buildCardContainer(
             ui: ui,
+            cs: cs,
             isDark: isDark,
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                _buildSectionHeader(ui, 'App Preferences', Icons.tune_rounded),
+                _buildSectionHeader(ui, cs, isDark, 'App Preferences', Icons.tune_rounded),
                 _buildNavigationTile(
                   ui: ui,
+                  cs: cs,
                   isDark: isDark,
                   title: 'Language',
                   subtitle: _selectedLanguage,
                   icon: Icons.language_rounded,
-                  iconColor: AppColors.primary,
+                  iconColor: isDark ? cs.primary : AppColors.primary,
                   onTap: _showLanguageBottomSheet,
                 ),
-                Divider(color: AppColors.mintBgLight.withOpacity(0.2), height: 1),
+                Divider(color: isDark ? cs.outline.withOpacity(0.3) : AppColors.mintBgLight.withOpacity(0.2), height: 1),
                 _buildNavigationTile(
                   ui: ui,
+                  cs: cs,
                   isDark: isDark,
                   title: 'Theme',
                   subtitle: _selectedTheme,
@@ -247,35 +250,39 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
           _buildCardContainer(
             ui: ui,
+            cs: cs,
             isDark: isDark,
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                _buildSectionHeader(ui, 'Notifications', Icons.notifications_active_outlined),
+                _buildSectionHeader(ui, cs, isDark, 'Notifications', Icons.notifications_active_outlined),
                 _buildSwitchTile(
                   ui: ui,
+                  cs: cs,
                   isDark: isDark,
                   title: 'Push Notifications',
                   subtitle: 'Ride updates and driver arrivals',
                   icon: Icons.app_shortcut_rounded,
-                  iconColor: AppColors.primary,
+                  iconColor: isDark ? cs.primary : AppColors.primary,
                   value: _pushNotifications,
                   onChanged: (v) => _toggleBoolSetting('set_push_notif', 'push_notif', v, (val) => _pushNotifications = val),
                 ),
-                Divider(color: AppColors.mintBgLight.withOpacity(0.2), height: 1),
+                Divider(color: isDark ? cs.outline.withOpacity(0.3) : AppColors.mintBgLight.withOpacity(0.2), height: 1),
                 _buildSwitchTile(
                   ui: ui,
+                  cs: cs,
                   isDark: isDark,
                   title: 'SMS Alerts',
                   subtitle: 'Important trip alerts via text',
                   icon: Icons.sms_rounded,
-                  iconColor: AppColors.secondary,
+                  iconColor: isDark ? cs.secondary : AppColors.secondary,
                   value: _smsNotifications,
                   onChanged: (v) => _toggleBoolSetting('set_sms_notif', 'sms_notif', v, (val) => _smsNotifications = val),
                 ),
-                Divider(color: AppColors.mintBgLight.withOpacity(0.2), height: 1),
+                Divider(color: isDark ? cs.outline.withOpacity(0.3) : AppColors.mintBgLight.withOpacity(0.2), height: 1),
                 _buildSwitchTile(
                   ui: ui,
+                  cs: cs,
                   isDark: isDark,
                   title: 'Email Promotions',
                   subtitle: 'Discounts, receipts, and news',
@@ -292,18 +299,20 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
           _buildCardContainer(
             ui: ui,
+            cs: cs,
             isDark: isDark,
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                _buildSectionHeader(ui, 'Privacy & Location', Icons.security_rounded),
+                _buildSectionHeader(ui, cs, isDark, 'Privacy & Location', Icons.security_rounded),
                 _buildSwitchTile(
                   ui: ui,
+                  cs: cs,
                   isDark: isDark,
                   title: 'Location Services',
                   subtitle: 'Allow precise pickup tracking',
                   icon: Icons.my_location_rounded,
-                  iconColor: AppColors.primary,
+                  iconColor: isDark ? cs.primary : AppColors.primary,
                   value: _locationAccess,
                   onChanged: (v) {
                     if (v == false) {
@@ -312,9 +321,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     _toggleBoolSetting('set_loc_access', 'loc_access', v, (val) => _locationAccess = val);
                   },
                 ),
-                Divider(color: AppColors.mintBgLight.withOpacity(0.2), height: 1),
+                Divider(color: isDark ? cs.outline.withOpacity(0.3) : AppColors.mintBgLight.withOpacity(0.2), height: 1),
                 _buildSwitchTile(
                   ui: ui,
+                  cs: cs,
                   isDark: isDark,
                   title: 'Share Ride Status',
                   subtitle: 'Automatically send trips to emergency contacts',
@@ -331,26 +341,29 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
           _buildCardContainer(
             ui: ui,
+            cs: cs,
             isDark: isDark,
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                _buildSectionHeader(ui, 'Support & Legal', Icons.support_agent_rounded),
+                _buildSectionHeader(ui, cs, isDark, 'Support & Legal', Icons.support_agent_rounded),
                 _buildNavigationTile(
                   ui: ui,
+                  cs: cs,
                   isDark: isDark,
                   title: 'Help Center',
                   icon: Icons.help_outline_rounded,
-                  iconColor: AppColors.primary,
+                  iconColor: isDark ? cs.primary : AppColors.primary,
                   onTap: () => Navigator.pushNamed(context, AppRoutes.help),
                 ),
-                Divider(color: AppColors.mintBgLight.withOpacity(0.2), height: 1),
+                Divider(color: isDark ? cs.outline.withOpacity(0.3) : AppColors.mintBgLight.withOpacity(0.2), height: 1),
                 _buildNavigationTile(
                   ui: ui,
+                  cs: cs,
                   isDark: isDark,
                   title: 'Terms of Service',
                   icon: Icons.gavel_rounded,
-                  iconColor: AppColors.textSecondary,
+                  iconColor: isDark ? cs.onSurfaceVariant : AppColors.textSecondary,
                   onTap: () => _launchUrl(_termsOfServiceUrl),
                 ),
               ],
@@ -363,18 +376,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
-  Widget _buildCardContainer({required UIScale ui, required bool isDark, required Widget child}) {
+  Widget _buildCardContainer({required UIScale ui, required ColorScheme cs, required bool isDark, required Widget child}) {
     return ClipRRect(
       borderRadius: BorderRadius.circular(ui.radius(20)),
       child: BackdropFilter(
         filter: ImageFilter.blur(sigmaX: 16, sigmaY: 16),
         child: Container(
           decoration: BoxDecoration(
-            color: isDark ? AppColors.darkColor.withOpacity(0.7) : Colors.white.withOpacity(0.85),
+            color: isDark ? cs.surface.withOpacity(0.85) : Colors.white.withOpacity(0.85), // Uses true surface color
             borderRadius: BorderRadius.circular(ui.radius(20)),
-            border: Border.all(color: AppColors.mintBgLight.withOpacity(0.3)),
+            border: Border.all(color: isDark ? cs.outline.withOpacity(0.4) : AppColors.mintBgLight.withOpacity(0.3)),
             boxShadow: [
-              BoxShadow(color: Colors.black.withOpacity(0.04), blurRadius: 20, offset: const Offset(0, 8)),
+              BoxShadow(color: Colors.black.withOpacity(isDark ? 0.3 : 0.04), blurRadius: 20, offset: const Offset(0, 8)),
             ],
           ),
           child: child,
@@ -383,14 +396,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
-  Widget _buildSectionHeader(UIScale ui, String title, IconData icon) {
+  Widget _buildSectionHeader(UIScale ui, ColorScheme cs, bool isDark, String title, IconData icon) {
     return Padding(
       padding: EdgeInsets.fromLTRB(ui.inset(16), ui.inset(16), ui.inset(16), ui.inset(8)),
       child: Row(
         children: [
-          Icon(icon, size: ui.icon(18), color: AppColors.primary),
+          Icon(icon, size: ui.icon(18), color: isDark ? cs.primary : AppColors.primary),
           SizedBox(width: ui.gap(8)),
-          Text(title, style: TextStyle(fontSize: ui.font(14), fontWeight: FontWeight.w800, color: AppColors.primary)),
+          Text(title, style: TextStyle(fontSize: ui.font(14), fontWeight: FontWeight.w800, color: isDark ? cs.primary : AppColors.primary)),
         ],
       ),
     );
@@ -398,6 +411,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   Widget _buildSwitchTile({
     required UIScale ui,
+    required ColorScheme cs,
     required bool isDark,
     required String title,
     required String subtitle,
@@ -422,15 +436,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
               children: [
                 Text(title, style: TextStyle(fontWeight: FontWeight.w800, fontSize: ui.font(14), color: isDark ? Colors.white : AppColors.textPrimary)),
                 SizedBox(height: ui.gap(2)),
-                Text(subtitle, style: TextStyle(fontWeight: FontWeight.w600, fontSize: ui.font(11.5), color: AppColors.textSecondary)),
+                // FIXED THE FENTY TEXT - Now uses cs.onSurfaceVariant for high visibility in dark mode
+                Text(subtitle, style: TextStyle(fontWeight: FontWeight.w600, fontSize: ui.font(11.5), color: isDark ? cs.onSurfaceVariant : AppColors.textSecondary)),
               ],
             ),
           ),
           Switch.adaptive(
             value: value,
             onChanged: onChanged,
-            activeColor: AppColors.primary,
-            activeTrackColor: AppColors.primary.withOpacity(0.3),
+            activeColor: isDark ? cs.primary : AppColors.primary,
+            activeTrackColor: (isDark ? cs.primary : AppColors.primary).withOpacity(0.3),
             inactiveThumbColor: isDark ? Colors.grey.shade400 : Colors.white,
             inactiveTrackColor: isDark ? Colors.white.withOpacity(0.1) : Colors.black.withOpacity(0.1),
           ),
@@ -441,6 +456,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   Widget _buildNavigationTile({
     required UIScale ui,
+    required ColorScheme cs,
     required bool isDark,
     required String title,
     String? subtitle,
@@ -469,10 +485,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 child: Text(title, style: TextStyle(fontWeight: FontWeight.w800, fontSize: ui.font(14), color: isDark ? Colors.white : AppColors.textPrimary)),
               ),
               if (subtitle != null) ...[
-                Text(subtitle, style: TextStyle(fontWeight: FontWeight.w700, fontSize: ui.font(13), color: AppColors.textSecondary)),
+                // FIXED THE FENTY TEXT
+                Text(subtitle, style: TextStyle(fontWeight: FontWeight.w700, fontSize: ui.font(13), color: isDark ? cs.onSurfaceVariant : AppColors.textSecondary)),
                 SizedBox(width: ui.gap(8)),
               ],
-              Icon(Icons.chevron_right_rounded, color: AppColors.textSecondary.withOpacity(0.5)),
+              Icon(Icons.chevron_right_rounded, color: isDark ? cs.onSurfaceVariant : AppColors.textSecondary.withOpacity(0.5)),
             ],
           ),
         ),
@@ -485,12 +502,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
   void _showLanguageBottomSheet() {
     final languages = ['English', 'French', 'Spanish', 'Igbo', 'Hausa', 'Yoruba'];
     final isDark = Theme.of(context).brightness == Brightness.dark;
+    final cs = Theme.of(context).colorScheme;
 
     showModalBottomSheet(
       context: context,
       backgroundColor: Colors.transparent,
       builder: (c) => Container(
-        decoration: BoxDecoration(color: isDark ? AppColors.darkColor : Colors.white, borderRadius: const BorderRadius.vertical(top: Radius.circular(28))),
+        decoration: BoxDecoration(color: isDark ? cs.surface : Colors.white, borderRadius: const BorderRadius.vertical(top: Radius.circular(28))),
         padding: const EdgeInsets.fromLTRB(24, 16, 24, 24),
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -501,7 +519,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             const SizedBox(height: 16),
             ...languages.map((lang) => ListTile(
               title: Text(lang, style: TextStyle(fontWeight: FontWeight.w700, color: isDark ? Colors.white : AppColors.textPrimary)),
-              trailing: _selectedLanguage == lang ? const Icon(Icons.check_circle_rounded, color: AppColors.primary) : null,
+              trailing: _selectedLanguage == lang ? Icon(Icons.check_circle_rounded, color: isDark ? cs.primary : AppColors.primary) : null,
               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
               onTap: () async {
                 HapticFeedback.selectionClick();
@@ -520,12 +538,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
   void _showThemeBottomSheet() {
     final themes = ['System', 'Light', 'Dark'];
     final isDark = Theme.of(context).brightness == Brightness.dark;
+    final cs = Theme.of(context).colorScheme;
 
     showModalBottomSheet(
       context: context,
       backgroundColor: Colors.transparent,
       builder: (c) => Container(
-        decoration: BoxDecoration(color: isDark ? AppColors.darkColor : Colors.white, borderRadius: const BorderRadius.vertical(top: Radius.circular(28))),
+        decoration: BoxDecoration(color: isDark ? cs.surface : Colors.white, borderRadius: const BorderRadius.vertical(top: Radius.circular(28))),
         padding: const EdgeInsets.fromLTRB(24, 16, 24, 24),
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -536,7 +555,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             const SizedBox(height: 16),
             ...themes.map((theme) => ListTile(
               title: Text(theme, style: TextStyle(fontWeight: FontWeight.w700, color: isDark ? Colors.white : AppColors.textPrimary)),
-              trailing: _selectedTheme == theme ? const Icon(Icons.check_circle_rounded, color: AppColors.primary) : null,
+              trailing: _selectedTheme == theme ? Icon(Icons.check_circle_rounded, color: isDark ? cs.primary : AppColors.primary) : null,
               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
               onTap: () async {
                 HapticFeedback.selectionClick();

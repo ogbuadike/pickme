@@ -1,11 +1,12 @@
+// lib/widgets/route_sheet.dart
 import 'dart:math' as math;
 import 'dart:ui' show ImageFilter;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
-import '../../../themes/app_theme.dart';
-import '../../../ui/ui_scale.dart';
+import '../themes/app_theme.dart';
+import '../ui/ui_scale.dart';
 import '../screens/state/home_models.dart';
 
 /// Premium, ultra-compact, production-safe route sheet.
@@ -120,15 +121,15 @@ class _RouteSheetState extends State<RouteSheet>
     return raw.clamp(12.0, upperBound);
   }
 
-  Widget _optionalGpsAction() {
+  Widget _optionalGpsAction(bool isDark, ColorScheme cs) {
     if (!widget.hasGps || widget.onUseCurrentPickup == null) {
       return const SizedBox.shrink();
     }
 
     return TextButton.icon(
       onPressed: widget.onUseCurrentPickup,
-      icon: const Icon(Icons.my_location_rounded, size: 16),
-      label: const Text('Use current location'),
+      icon: Icon(Icons.my_location_rounded, size: 16, color: isDark ? cs.primary : AppColors.primary),
+      label: Text('Use current location', style: TextStyle(color: isDark ? cs.primary : AppColors.primary)),
       style: TextButton.styleFrom(
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
         tapTargetSize: MaterialTapTargetSize.shrinkWrap,
@@ -142,6 +143,7 @@ class _RouteSheetState extends State<RouteSheet>
     final mq = MediaQuery.of(context);
     final ui = UIScale.of(context);
     final theme = Theme.of(context);
+    final cs = theme.colorScheme;
     final isDark = theme.brightness == Brightness.dark;
 
     final sheetHeight = _sheetHeight(mq, ui);
@@ -166,17 +168,17 @@ class _RouteSheetState extends State<RouteSheet>
               child: DecoratedBox(
                 decoration: BoxDecoration(
                   color: isDark
-                      ? theme.scaffoldBackgroundColor.withOpacity(0.95)
+                      ? cs.surface.withOpacity(0.95)
                       : Colors.white.withOpacity(0.97),
                   border: Border(
                     top: BorderSide(
-                      color: AppColors.mintBgLight.withOpacity(0.30),
+                      color: isDark ? cs.outline.withOpacity(0.5) : AppColors.mintBgLight.withOpacity(0.30),
                       width: 1,
                     ),
                   ),
                   boxShadow: [
                     BoxShadow(
-                      color: Colors.black.withOpacity(isDark ? 0.24 : 0.10),
+                      color: Colors.black.withOpacity(isDark ? 0.40 : 0.10),
                       blurRadius: ui.reduceFx ? 12 : 22,
                       offset: const Offset(0, -8),
                     ),
@@ -204,12 +206,14 @@ class _RouteSheetState extends State<RouteSheet>
                         return _MicroLayout(
                           ui: ui,
                           theme: theme,
+                          cs: cs,
+                          isDark: isDark,
                           ctaKey: widget.ctaKey,
                           ctaLabel: widget.ctaLabel ?? 'Set destination',
                           recentDestinations: widget.recentDestinations,
                           onSearchTap: widget.onSearchTap,
                           onRecentTap: widget.onRecentTap,
-                          gpsAction: _optionalGpsAction(),
+                          gpsAction: _optionalGpsAction(isDark, cs),
                         );
                       }
 
@@ -217,25 +221,29 @@ class _RouteSheetState extends State<RouteSheet>
                         return _LandscapeLayout(
                           ui: ui,
                           theme: theme,
+                          cs: cs,
+                          isDark: isDark,
                           ctaKey: widget.ctaKey,
                           ctaLabel: widget.ctaLabel ?? 'Set destination',
                           recentDestinations: widget.recentDestinations,
                           onSearchTap: widget.onSearchTap,
                           onRecentTap: widget.onRecentTap,
-                          gpsAction: _optionalGpsAction(),
+                          gpsAction: _optionalGpsAction(isDark, cs),
                         );
                       }
 
                       return _PortraitLayout(
                         ui: ui,
                         theme: theme,
+                        cs: cs,
+                        isDark: isDark,
                         compact: maxH < 210,
                         ctaKey: widget.ctaKey,
                         ctaLabel: widget.ctaLabel ?? 'Set destination',
                         recentDestinations: widget.recentDestinations,
                         onSearchTap: widget.onSearchTap,
                         onRecentTap: widget.onRecentTap,
-                        gpsAction: _optionalGpsAction(),
+                        gpsAction: _optionalGpsAction(isDark, cs),
                       );
                     },
                   ),
@@ -252,6 +260,8 @@ class _RouteSheetState extends State<RouteSheet>
 class _PortraitLayout extends StatelessWidget {
   final UIScale ui;
   final ThemeData theme;
+  final ColorScheme cs;
+  final bool isDark;
   final bool compact;
   final Key? ctaKey;
   final String ctaLabel;
@@ -263,6 +273,8 @@ class _PortraitLayout extends StatelessWidget {
   const _PortraitLayout({
     required this.ui,
     required this.theme,
+    required this.cs,
+    required this.isDark,
     required this.compact,
     required this.ctaKey,
     required this.ctaLabel,
@@ -276,7 +288,7 @@ class _PortraitLayout extends StatelessWidget {
   Widget build(BuildContext context) {
     return Column(
       children: [
-        _SheetHandle(ui: ui),
+        _SheetHandle(ui: ui, isDark: isDark, cs: cs),
         SizedBox(height: ui.gap(compact ? 4 : 6)),
         Align(
           alignment: Alignment.centerLeft,
@@ -288,6 +300,7 @@ class _PortraitLayout extends StatelessWidget {
               fontSize: ui.font(compact ? 12.5 : 13.5),
               fontWeight: FontWeight.w900,
               letterSpacing: -0.25,
+              color: isDark ? cs.onSurface : AppColors.textPrimary,
             ),
           ),
         ),
@@ -299,6 +312,8 @@ class _PortraitLayout extends StatelessWidget {
           icon: Icons.search_rounded,
           badge: 'Now',
           onTap: onSearchTap,
+          isDark: isDark,
+          cs: cs,
         ),
         SizedBox(height: ui.gap(compact ? 8 : 12)),
         Expanded(
@@ -306,7 +321,8 @@ class _PortraitLayout extends StatelessWidget {
             ui: ui,
             items: recentDestinations,
             onTap: onRecentTap,
-            isDark: theme.brightness == Brightness.dark,
+            isDark: isDark,
+            cs: cs,
             emptyTrailing: gpsAction,
           ),
         ),
@@ -318,6 +334,8 @@ class _PortraitLayout extends StatelessWidget {
 class _LandscapeLayout extends StatelessWidget {
   final UIScale ui;
   final ThemeData theme;
+  final ColorScheme cs;
+  final bool isDark;
   final Key? ctaKey;
   final String ctaLabel;
   final List<Suggestion> recentDestinations;
@@ -328,6 +346,8 @@ class _LandscapeLayout extends StatelessWidget {
   const _LandscapeLayout({
     required this.ui,
     required this.theme,
+    required this.cs,
+    required this.isDark,
     required this.ctaKey,
     required this.ctaLabel,
     required this.recentDestinations,
@@ -343,7 +363,7 @@ class _LandscapeLayout extends StatelessWidget {
 
     return Column(
       children: [
-        _SheetHandle(ui: ui),
+        _SheetHandle(ui: ui, isDark: isDark, cs: cs),
         SizedBox(height: ui.gap(6)),
         Expanded(
           child: Row(
@@ -362,6 +382,7 @@ class _LandscapeLayout extends StatelessWidget {
                         fontSize: ui.font(13),
                         fontWeight: FontWeight.w900,
                         letterSpacing: -0.25,
+                        color: isDark ? cs.onSurface : AppColors.textPrimary,
                       ),
                     ),
                     SizedBox(height: ui.gap(8)),
@@ -372,6 +393,8 @@ class _LandscapeLayout extends StatelessWidget {
                       icon: Icons.search_rounded,
                       badge: 'Now',
                       onTap: onSearchTap,
+                      isDark: isDark,
+                      cs: cs,
                     ),
                   ],
                 ),
@@ -383,7 +406,8 @@ class _LandscapeLayout extends StatelessWidget {
                   ui: ui,
                   items: recentDestinations,
                   onTap: onRecentTap,
-                  isDark: theme.brightness == Brightness.dark,
+                  isDark: isDark,
+                  cs: cs,
                   crossAxisCount: crossAxisCount,
                   emptyTrailing: gpsAction,
                 ),
@@ -399,6 +423,8 @@ class _LandscapeLayout extends StatelessWidget {
 class _MicroLayout extends StatelessWidget {
   final UIScale ui;
   final ThemeData theme;
+  final ColorScheme cs;
+  final bool isDark;
   final Key? ctaKey;
   final String ctaLabel;
   final List<Suggestion> recentDestinations;
@@ -409,6 +435,8 @@ class _MicroLayout extends StatelessWidget {
   const _MicroLayout({
     required this.ui,
     required this.theme,
+    required this.cs,
+    required this.isDark,
     required this.ctaKey,
     required this.ctaLabel,
     required this.recentDestinations,
@@ -425,7 +453,7 @@ class _MicroLayout extends StatelessWidget {
       physics: const BouncingScrollPhysics(),
       padding: EdgeInsets.zero,
       children: [
-        _SheetHandle(ui: ui),
+        _SheetHandle(ui: ui, isDark: isDark, cs: cs),
         SizedBox(height: ui.gap(6)),
         _TapableTile(
           key: ctaKey,
@@ -434,12 +462,16 @@ class _MicroLayout extends StatelessWidget {
           icon: Icons.search_rounded,
           badge: 'Now',
           onTap: onSearchTap,
+          isDark: isDark,
+          cs: cs,
         ),
         SizedBox(height: ui.gap(8)),
         if (recentDestinations.isNotEmpty) ...[
           _RecentsHeader(
             ui: ui,
             count: math.min(recentDestinations.length, 6),
+            isDark: isDark,
+            cs: cs,
           ),
           SizedBox(
             height: ui.landscape ? ui.gap(46) : ui.gap(52),
@@ -455,6 +487,8 @@ class _MicroLayout extends StatelessWidget {
                   child: _MicroRecentTile(
                     ui: ui,
                     item: item,
+                    isDark: isDark,
+                    cs: cs,
                     onTap: () {
                       HapticFeedback.lightImpact();
                       onRecentTap(item);
@@ -474,8 +508,10 @@ class _MicroLayout extends StatelessWidget {
 
 class _SheetHandle extends StatelessWidget {
   final UIScale ui;
+  final bool isDark;
+  final ColorScheme cs;
 
-  const _SheetHandle({required this.ui});
+  const _SheetHandle({required this.ui, required this.isDark, required this.cs});
 
   @override
   Widget build(BuildContext context) {
@@ -484,7 +520,7 @@ class _SheetHandle extends StatelessWidget {
         width: ui.landscape ? 44 : 50,
         height: 4,
         decoration: BoxDecoration(
-          color: AppColors.textSecondary.withOpacity(0.22),
+          color: isDark ? cs.onSurfaceVariant.withOpacity(0.5) : AppColors.textSecondary.withOpacity(0.22),
           borderRadius: BorderRadius.circular(999),
         ),
       ),
@@ -498,6 +534,8 @@ class _TapableTile extends StatefulWidget {
   final IconData icon;
   final VoidCallback onTap;
   final String? badge;
+  final bool isDark;
+  final ColorScheme cs;
 
   const _TapableTile({
     super.key,
@@ -505,6 +543,8 @@ class _TapableTile extends StatefulWidget {
     required this.label,
     required this.icon,
     required this.onTap,
+    required this.isDark,
+    required this.cs,
     this.badge,
   });
 
@@ -542,14 +582,15 @@ class _TapableTileState extends State<_TapableTile> {
   @override
   Widget build(BuildContext context) {
     final ui = widget.ui;
-    final theme = Theme.of(context);
+    final isDark = widget.isDark;
+    final cs = widget.cs;
     final height = math.max(40.0, ui.landscape ? ui.gap(44) : ui.gap(50));
 
     return Semantics(
       button: true,
       label: widget.label,
       child: Material(
-        color: theme.cardColor,
+        color: isDark ? cs.surfaceVariant.withOpacity(0.5) : Theme.of(context).cardColor,
         borderRadius: BorderRadius.circular(ui.radius(16)),
         child: InkWell(
           borderRadius: BorderRadius.circular(ui.radius(16)),
@@ -564,7 +605,7 @@ class _TapableTileState extends State<_TapableTile> {
               decoration: BoxDecoration(
                 borderRadius: BorderRadius.circular(ui.radius(16)),
                 border: Border.all(
-                  color: AppColors.mintBgLight.withOpacity(0.22),
+                  color: isDark ? cs.outline : AppColors.mintBgLight.withOpacity(0.22),
                   width: 1.0,
                 ),
               ),
@@ -573,7 +614,7 @@ class _TapableTileState extends State<_TapableTile> {
                   Icon(
                     widget.icon,
                     size: ui.icon(18),
-                    color: AppColors.textPrimary.withOpacity(0.92),
+                    color: isDark ? cs.primary : AppColors.textPrimary.withOpacity(0.92),
                   ),
                   SizedBox(width: ui.gap(8)),
                   Expanded(
@@ -585,7 +626,7 @@ class _TapableTileState extends State<_TapableTile> {
                         fontSize: ui.font(13.5),
                         fontWeight: FontWeight.w800,
                         letterSpacing: -0.15,
-                        color: AppColors.textPrimary.withOpacity(0.92),
+                        color: isDark ? cs.onSurface : AppColors.textPrimary.withOpacity(0.92),
                       ),
                     ),
                   ),
@@ -597,7 +638,7 @@ class _TapableTileState extends State<_TapableTile> {
                         vertical: ui.inset(3),
                       ),
                       decoration: BoxDecoration(
-                        color: AppColors.primary.withOpacity(0.10),
+                        color: (isDark ? cs.primary : AppColors.primary).withOpacity(0.15),
                         borderRadius: BorderRadius.circular(ui.radius(6)),
                       ),
                       child: Text(
@@ -605,7 +646,7 @@ class _TapableTileState extends State<_TapableTile> {
                         style: TextStyle(
                           fontSize: ui.font(8.8),
                           fontWeight: FontWeight.w900,
-                          color: AppColors.primary,
+                          color: isDark ? cs.primary : AppColors.primary,
                           letterSpacing: -0.1,
                         ),
                       ),
@@ -626,6 +667,7 @@ class _RecentsList extends StatelessWidget {
   final List<Suggestion> items;
   final void Function(Suggestion) onTap;
   final bool isDark;
+  final ColorScheme cs;
   final Widget emptyTrailing;
 
   const _RecentsList({
@@ -633,13 +675,14 @@ class _RecentsList extends StatelessWidget {
     required this.items,
     required this.onTap,
     required this.isDark,
+    required this.cs,
     required this.emptyTrailing,
   });
 
   @override
   Widget build(BuildContext context) {
     if (items.isEmpty) {
-      return _Empty(ui: ui, trailing: emptyTrailing);
+      return _Empty(ui: ui, isDark: isDark, cs: cs, trailing: emptyTrailing);
     }
 
     final count = math.min(items.length, 6);
@@ -647,7 +690,7 @@ class _RecentsList extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        _RecentsHeader(ui: ui, count: count),
+        _RecentsHeader(ui: ui, count: count, isDark: isDark, cs: cs),
         Expanded(
           child: RepaintBoundary(
             child: ListView.separated(
@@ -662,6 +705,7 @@ class _RecentsList extends StatelessWidget {
                   ui: ui,
                   item: item,
                   isDark: isDark,
+                  cs: cs,
                   onTap: () {
                     HapticFeedback.lightImpact();
                     onTap(item);
@@ -682,6 +726,7 @@ class _RecentsGrid extends StatelessWidget {
   final List<Suggestion> items;
   final void Function(Suggestion) onTap;
   final bool isDark;
+  final ColorScheme cs;
   final Widget emptyTrailing;
 
   const _RecentsGrid({
@@ -689,6 +734,7 @@ class _RecentsGrid extends StatelessWidget {
     required this.items,
     required this.onTap,
     required this.isDark,
+    required this.cs,
     required this.crossAxisCount,
     required this.emptyTrailing,
   });
@@ -696,7 +742,7 @@ class _RecentsGrid extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (items.isEmpty) {
-      return _Empty(ui: ui, trailing: emptyTrailing);
+      return _Empty(ui: ui, isDark: isDark, cs: cs, trailing: emptyTrailing);
     }
 
     final count = math.min(items.length, 8);
@@ -704,7 +750,7 @@ class _RecentsGrid extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        _RecentsHeader(ui: ui, count: count),
+        _RecentsHeader(ui: ui, count: count, isDark: isDark, cs: cs),
         Expanded(
           child: RepaintBoundary(
             child: GridView.builder(
@@ -724,6 +770,7 @@ class _RecentsGrid extends StatelessWidget {
                   ui: ui,
                   item: item,
                   isDark: isDark,
+                  cs: cs,
                   onTap: () {
                     HapticFeedback.lightImpact();
                     onTap(item);
@@ -741,10 +788,14 @@ class _RecentsGrid extends StatelessWidget {
 class _RecentsHeader extends StatelessWidget {
   final UIScale ui;
   final int count;
+  final bool isDark;
+  final ColorScheme cs;
 
   const _RecentsHeader({
     required this.ui,
     required this.count,
+    required this.isDark,
+    required this.cs,
   });
 
   @override
@@ -756,13 +807,13 @@ class _RecentsHeader extends StatelessWidget {
           Container(
             padding: EdgeInsets.all(ui.gap(4)),
             decoration: BoxDecoration(
-              color: AppColors.primary.withOpacity(0.10),
+              color: (isDark ? cs.primary : AppColors.primary).withOpacity(0.15),
               borderRadius: BorderRadius.circular(ui.radius(6)),
             ),
             child: Icon(
               Icons.history_rounded,
               size: ui.icon(12),
-              color: AppColors.primary,
+              color: isDark ? cs.primary : AppColors.primary,
             ),
           ),
           SizedBox(width: ui.gap(7)),
@@ -775,6 +826,7 @@ class _RecentsHeader extends StatelessWidget {
                 fontSize: ui.font(11.8),
                 fontWeight: FontWeight.w900,
                 letterSpacing: -0.2,
+                color: isDark ? cs.onSurface : AppColors.textPrimary,
               ),
             ),
           ),
@@ -784,7 +836,7 @@ class _RecentsHeader extends StatelessWidget {
             style: TextStyle(
               fontSize: ui.font(10.5),
               fontWeight: FontWeight.w800,
-              color: AppColors.primary,
+              color: isDark ? cs.primary : AppColors.primary,
             ),
           ),
         ],
@@ -797,6 +849,7 @@ class _RecentTile extends StatelessWidget {
   final UIScale ui;
   final Suggestion item;
   final bool isDark;
+  final ColorScheme cs;
   final VoidCallback onTap;
 
   const _RecentTile({
@@ -804,6 +857,7 @@ class _RecentTile extends StatelessWidget {
     required this.ui,
     required this.item,
     required this.isDark,
+    required this.cs,
     required this.onTap,
   });
 
@@ -831,7 +885,7 @@ class _RecentTile extends StatelessWidget {
               borderRadius: BorderRadius.circular(ui.radius(12)),
               border: Border.all(
                 color: isDark
-                    ? Colors.white.withOpacity(0.08)
+                    ? cs.outline
                     : AppColors.mintBgLight.withOpacity(0.20),
                 width: 1,
               ),
@@ -844,12 +898,12 @@ class _RecentTile extends StatelessWidget {
                   alignment: Alignment.center,
                   decoration: BoxDecoration(
                     borderRadius: BorderRadius.circular(ui.radius(8)),
-                    color: AppColors.mintBgLight.withOpacity(0.15),
+                    color: isDark ? cs.surfaceVariant : AppColors.mintBgLight.withOpacity(0.15),
                   ),
                   child: Icon(
                     Icons.location_on_rounded,
                     size: ui.icon(15),
-                    color: AppColors.textPrimary,
+                    color: isDark ? cs.primary : AppColors.textPrimary,
                   ),
                 ),
                 SizedBox(width: ui.gap(9)),
@@ -866,6 +920,7 @@ class _RecentTile extends StatelessWidget {
                           fontSize: ui.font(12.2),
                           fontWeight: FontWeight.w700,
                           letterSpacing: -0.1,
+                          color: isDark ? cs.onSurface : AppColors.textPrimary,
                         ),
                       ),
                       if (hasSecondary) ...[
@@ -877,7 +932,7 @@ class _RecentTile extends StatelessWidget {
                           style: TextStyle(
                             fontSize: ui.font(10.3),
                             fontWeight: FontWeight.w500,
-                            color: AppColors.textSecondary.withOpacity(0.72),
+                            color: isDark ? cs.onSurfaceVariant : AppColors.textSecondary.withOpacity(0.72),
                           ),
                         ),
                       ],
@@ -888,7 +943,7 @@ class _RecentTile extends StatelessWidget {
                 Icon(
                   Icons.chevron_right_rounded,
                   size: ui.icon(15),
-                  color: AppColors.textSecondary.withOpacity(0.52),
+                  color: isDark ? cs.onSurfaceVariant : AppColors.textSecondary.withOpacity(0.52),
                 ),
               ],
             ),
@@ -902,19 +957,23 @@ class _RecentTile extends StatelessWidget {
 class _MicroRecentTile extends StatelessWidget {
   final UIScale ui;
   final Suggestion item;
+  final bool isDark;
+  final ColorScheme cs;
   final VoidCallback onTap;
 
   const _MicroRecentTile({
     super.key,
     required this.ui,
     required this.item,
+    required this.isDark,
+    required this.cs,
     required this.onTap,
   });
 
   @override
   Widget build(BuildContext context) {
     return Material(
-      color: Theme.of(context).cardColor,
+      color: isDark ? cs.surface : Theme.of(context).cardColor,
       borderRadius: BorderRadius.circular(ui.radius(12)),
       child: InkWell(
         borderRadius: BorderRadius.circular(ui.radius(12)),
@@ -927,7 +986,7 @@ class _MicroRecentTile extends StatelessWidget {
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(ui.radius(12)),
             border: Border.all(
-              color: AppColors.mintBgLight.withOpacity(0.20),
+              color: isDark ? cs.outline : AppColors.mintBgLight.withOpacity(0.20),
               width: 1,
             ),
           ),
@@ -936,7 +995,7 @@ class _MicroRecentTile extends StatelessWidget {
               Icon(
                 Icons.history_rounded,
                 size: ui.icon(14),
-                color: AppColors.primary,
+                color: isDark ? cs.primary : AppColors.primary,
               ),
               SizedBox(width: ui.gap(7)),
               Expanded(
@@ -948,6 +1007,7 @@ class _MicroRecentTile extends StatelessWidget {
                     fontSize: ui.font(11.8),
                     fontWeight: FontWeight.w700,
                     letterSpacing: -0.1,
+                    color: isDark ? cs.onSurface : AppColors.textPrimary,
                   ),
                 ),
               ),
@@ -961,10 +1021,14 @@ class _MicroRecentTile extends StatelessWidget {
 
 class _Empty extends StatelessWidget {
   final UIScale ui;
+  final bool isDark;
+  final ColorScheme cs;
   final Widget trailing;
 
   const _Empty({
     required this.ui,
+    required this.isDark,
+    required this.cs,
     required this.trailing,
   });
 
@@ -982,12 +1046,12 @@ class _Empty extends StatelessWidget {
               padding: EdgeInsets.all(ui.inset(10)),
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
-                color: AppColors.primary.withOpacity(0.08),
+                color: (isDark ? cs.primary : AppColors.primary).withOpacity(0.15),
               ),
               child: Icon(
                 Icons.explore_off_rounded,
                 size: ui.icon(22),
-                color: AppColors.primary.withOpacity(0.60),
+                color: (isDark ? cs.primary : AppColors.primary).withOpacity(0.80),
               ),
             ),
             SizedBox(height: ui.gap(10)),
@@ -997,6 +1061,7 @@ class _Empty extends StatelessWidget {
               style: TextStyle(
                 fontSize: ui.font(12.5),
                 fontWeight: FontWeight.w900,
+                color: isDark ? cs.onSurface : AppColors.textPrimary,
               ),
             ),
             SizedBox(height: ui.gap(4)),
@@ -1005,7 +1070,7 @@ class _Empty extends StatelessWidget {
               textAlign: TextAlign.center,
               style: TextStyle(
                 fontSize: ui.font(10),
-                color: AppColors.textSecondary.withOpacity(0.70),
+                color: isDark ? cs.onSurfaceVariant : AppColors.textSecondary.withOpacity(0.70),
               ),
             ),
             if (hasTrailing) ...[

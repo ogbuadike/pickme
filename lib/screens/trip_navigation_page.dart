@@ -99,9 +99,7 @@ class TripNavigationArgs {
     this.role = TripNavigationRole.rider,
     this.tickEvery = const Duration(seconds: 2),
     this.routeMinGap = const Duration(seconds: 2),
-    // --- HYBRID FIX: Increased default from 35m to 150m ---
     this.arrivalMeters = 150.0,
-    // ------------------------------------------------------
     this.routeMoveThresholdMeters = 8.0,
     this.autoFollowCamera = true,
     this.showStartTripButton = true,
@@ -249,6 +247,34 @@ class _TripNavigationPageState extends State<TripNavigationPage> with WidgetsBin
       if (gap <= 120.0) return _riderLL!;
     }
     return _driverLL ?? _riderLL;
+  }
+
+  // --- MAP STYLE FOR OLED DARK MODE ---
+  String? _getMapStyle(bool isDark) {
+    if (!isDark) return null;
+    return '''[
+      {"elementType":"geometry","stylers":[{"color":"#212121"}]},
+      {"elementType":"labels.icon","stylers":[{"visibility":"off"}]},
+      {"elementType":"labels.text.fill","stylers":[{"color":"#757575"}]},
+      {"elementType":"labels.text.stroke","stylers":[{"color":"#212121"}]},
+      {"featureType":"administrative","elementType":"geometry","stylers":[{"color":"#757575"}]},
+      {"featureType":"administrative.country","elementType":"labels.text.fill","stylers":[{"color":"#9e9e9e"}]},
+      {"featureType":"administrative.land_parcel","stylers":[{"visibility":"off"}]},
+      {"featureType":"administrative.locality","elementType":"labels.text.fill","stylers":[{"color":"#bdbdbd"}]},
+      {"featureType":"poi","elementType":"labels.text.fill","stylers":[{"color":"#757575"}]},
+      {"featureType":"poi.park","elementType":"geometry","stylers":[{"color":"#181818"}]},
+      {"featureType":"poi.park","elementType":"labels.text.fill","stylers":[{"color":"#616161"}]},
+      {"featureType":"poi.park","elementType":"labels.text.stroke","stylers":[{"color":"#1b1b1b"}]},
+      {"featureType":"road","elementType":"geometry.fill","stylers":[{"color":"#2c2c2c"}]},
+      {"featureType":"road","elementType":"labels.text.fill","stylers":[{"color":"#8a8a8a"}]},
+      {"featureType":"road.arterial","elementType":"geometry","stylers":[{"color":"#373737"}]},
+      {"featureType":"road.highway","elementType":"geometry","stylers":[{"color":"#3c3c3c"}]},
+      {"featureType":"road.highway.controlled_access","elementType":"geometry","stylers":[{"color":"#4e4e4e"}]},
+      {"featureType":"road.local","elementType":"labels.text.fill","stylers":[{"color":"#616161"}]},
+      {"featureType":"transit","elementType":"labels.text.fill","stylers":[{"color":"#757575"}]},
+      {"featureType":"water","elementType":"geometry","stylers":[{"color":"#000000"}]},
+      {"featureType":"water","elementType":"labels.text.fill","stylers":[{"color":"#3d3d3d"}]}
+    ]''';
   }
 
   @override
@@ -467,8 +493,6 @@ class _TripNavigationPageState extends State<TripNavigationPage> with WidgetsBin
     final double pickupGap = _haversine(_driverLL!, _effectivePickupLL);
     final double destGap = _haversine(_driverLL!, _currentTarget);
 
-    // --- HYBRID FIX: Force UI buttons to enable at safe distances ---
-    // Even if parent passed 35m, we guarantee at least 150m for buttons to light up.
     final double safeArrivalMeters = math.max(_arrivalMeters, 150.0);
     final double safeCompletionMeters = math.max(_arrivalMeters + 50.0, 200.0);
 
@@ -571,12 +595,15 @@ class _TripNavigationPageState extends State<TripNavigationPage> with WidgetsBin
       final List<LatLng> precisionPoints = <LatLng>[from, ...route.points, to];
       _latestRoutePoints = precisionPoints;
 
+      // Adapt polyline color to the theme context here
+      final isDark = Theme.of(context).brightness == Brightness.dark;
+
       _polylines
         ..clear()
         ..add(Polyline(
           polylineId: const PolylineId('nav_halo'),
           points: precisionPoints,
-          color: Colors.white.withOpacity(0.94),
+          color: isDark ? Colors.white.withOpacity(0.9) : Colors.black.withOpacity(0.8),
           width: 10,
           geodesic: true,
           jointType: JointType.round,
@@ -1053,6 +1080,9 @@ class _TripNavigationPageState extends State<TripNavigationPage> with WidgetsBin
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+    final cs = theme.colorScheme;
     final _ScreenMetrics metrics = _ScreenMetrics(context);
     final bool showLandscapePanel = metrics.isLandscape;
     final double landscapePanelWidth = showLandscapePanel ? metrics.landscapePanelWidth : 0;
@@ -1062,7 +1092,7 @@ class _TripNavigationPageState extends State<TripNavigationPage> with WidgetsBin
     return WillPopScope(
       onWillPop: () async => true,
       child: Scaffold(
-        backgroundColor: Colors.black,
+        backgroundColor: isDark ? Colors.black : AppColors.offWhite,
         body: Stack(
           children: <Widget>[
             Positioned.fill(
@@ -1089,6 +1119,10 @@ class _TripNavigationPageState extends State<TripNavigationPage> with WidgetsBin
                 polylines: _polylines,
                 onMapCreated: (GoogleMapController c) {
                   _map = c;
+                  // Apply dark map style if OLED theme is active
+                  if (isDark) {
+                    _map!.setMapStyle(_getMapStyle(isDark));
+                  }
                   _tick(force: true);
                 },
               ),
@@ -1100,13 +1134,22 @@ class _TripNavigationPageState extends State<TripNavigationPage> with WidgetsBin
                     gradient: LinearGradient(
                       begin: Alignment.topCenter,
                       end: Alignment.bottomCenter,
-                      colors: <Color>[
-                        Colors.black.withOpacity(0.58),
-                        Colors.black.withOpacity(0.16),
+                      colors: isDark
+                          ? <Color>[
+                        Colors.black.withOpacity(0.85),
+                        Colors.black.withOpacity(0.40),
                         Colors.transparent,
                         Colors.transparent,
-                        Colors.black.withOpacity(0.10),
-                        Colors.black.withOpacity(0.44),
+                        Colors.black.withOpacity(0.30),
+                        Colors.black.withOpacity(0.70),
+                      ]
+                          : <Color>[
+                        Colors.white.withOpacity(0.85),
+                        Colors.white.withOpacity(0.40),
+                        Colors.transparent,
+                        Colors.transparent,
+                        Colors.white.withOpacity(0.30),
+                        Colors.white.withOpacity(0.70),
                       ],
                       stops: const <double>[0.0, 0.16, 0.34, 0.56, 0.78, 1.0],
                     ),
@@ -1123,6 +1166,8 @@ class _TripNavigationPageState extends State<TripNavigationPage> with WidgetsBin
                 phaseLabel: _phaseLabel(),
                 distanceText: _distanceText ?? '—',
                 durationText: _durationText ?? '—',
+                isDark: isDark,
+                cs: cs,
                 onBack: () => Navigator.of(context).maybePop(),
               ),
             ),
@@ -1136,6 +1181,8 @@ class _TripNavigationPageState extends State<TripNavigationPage> with WidgetsBin
                 onOverviewMode: _activateOverviewMode,
                 onRecenter: _recenterMap,
                 metrics: metrics,
+                isDark: isDark,
+                cs: cs,
               ),
             ),
             if (showLandscapePanel)
@@ -1147,6 +1194,8 @@ class _TripNavigationPageState extends State<TripNavigationPage> with WidgetsBin
                 child: SafeArea(
                   top: false,
                   child: _PanelContainer(
+                    isDark: isDark,
+                    cs: cs,
                     child: _SheetContent(
                       controller: null,
                       metrics: metrics,
@@ -1171,6 +1220,8 @@ class _TripNavigationPageState extends State<TripNavigationPage> with WidgetsBin
                       onCancelTrip: _cancelTripPressed,
                       showMetaCard: widget.args.showMetaCard,
                       errorText: _lastErrorText,
+                      isDark: isDark,
+                      cs: cs,
                     ),
                   ),
                 ),
@@ -1193,6 +1244,8 @@ class _TripNavigationPageState extends State<TripNavigationPage> with WidgetsBin
                     maxChildSize: metrics.bottomSheetMaxSize,
                     builder: (BuildContext ctx, ScrollController controller) {
                       return _PanelContainer(
+                        isDark: isDark,
+                        cs: cs,
                         child: _SheetContent(
                           controller: controller,
                           metrics: metrics,
@@ -1217,6 +1270,8 @@ class _TripNavigationPageState extends State<TripNavigationPage> with WidgetsBin
                           onCancelTrip: _cancelTripPressed,
                           showMetaCard: widget.args.showMetaCard,
                           errorText: _lastErrorText,
+                          isDark: isDark,
+                          cs: cs,
                         ),
                       );
                     },
@@ -1276,20 +1331,22 @@ class _TripNavigationPageState extends State<TripNavigationPage> with WidgetsBin
 
 class _PanelContainer extends StatelessWidget {
   final Widget child;
-  const _PanelContainer({required this.child});
+  final bool isDark;
+  final ColorScheme cs;
+
+  const _PanelContainer({required this.child, required this.isDark, required this.cs});
 
   @override
   Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
     return ClipRRect(
       borderRadius: BorderRadius.circular(18),
       child: BackdropFilter(
         filter: ui.ImageFilter.blur(sigmaX: 16, sigmaY: 16),
         child: Container(
           decoration: BoxDecoration(
-            color: Theme.of(context).cardColor.withOpacity(0.95),
+            color: isDark ? cs.surface.withOpacity(0.95) : Theme.of(context).cardColor.withOpacity(0.95),
             borderRadius: BorderRadius.circular(18),
-            border: Border.all(color: cs.onSurface.withOpacity(0.08), width: 0.8),
+            border: Border.all(color: isDark ? cs.outline.withOpacity(0.3) : cs.onSurface.withOpacity(0.08), width: 0.8),
             boxShadow: <BoxShadow>[
               BoxShadow(color: Colors.black.withOpacity(0.2), blurRadius: 20, offset: const Offset(0, 8)),
             ],
@@ -1306,6 +1363,8 @@ class _ThinHeader extends StatelessWidget {
   final String phaseLabel;
   final String distanceText;
   final String durationText;
+  final bool isDark;
+  final ColorScheme cs;
   final VoidCallback onBack;
 
   const _ThinHeader({
@@ -1313,6 +1372,8 @@ class _ThinHeader extends StatelessWidget {
     required this.phaseLabel,
     required this.distanceText,
     required this.durationText,
+    required this.isDark,
+    required this.cs,
     required this.onBack,
   });
 
@@ -1326,38 +1387,39 @@ class _ThinHeader extends StatelessWidget {
           height: 48 * metrics.scale,
           padding: EdgeInsets.symmetric(horizontal: metrics.spacing8),
           decoration: BoxDecoration(
-            color: Colors.black.withOpacity(0.42),
+            color: isDark ? cs.surfaceVariant.withOpacity(0.85) : Colors.white.withOpacity(0.90),
             borderRadius: BorderRadius.circular(metrics.radiusLarge),
-            border: Border.all(color: Colors.white.withOpacity(0.15), width: 0.8),
+            border: Border.all(color: isDark ? cs.outline : AppColors.mintBgLight.withOpacity(0.4), width: 0.8),
+            boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.1), blurRadius: 8, offset: const Offset(0, 2))],
           ),
           child: Row(
             children: <Widget>[
               IconButton(
                 onPressed: onBack,
-                icon: Icon(Icons.arrow_back_ios_new_rounded, color: Colors.white, size: 18 * metrics.scale),
+                icon: Icon(Icons.arrow_back_ios_new_rounded, color: isDark ? cs.onSurface : AppColors.textPrimary, size: 18 * metrics.scale),
                 padding: EdgeInsets.zero,
                 constraints: const BoxConstraints(),
               ),
               SizedBox(width: metrics.spacing10),
-              Container(width: 1, height: 24 * metrics.scale, color: Colors.white.withOpacity(0.15)),
+              Container(width: 1, height: 24 * metrics.scale, color: isDark ? cs.outline : AppColors.mintBgLight.withOpacity(0.8)),
               SizedBox(width: metrics.spacing10),
-              Icon(Icons.trip_origin_rounded, color: AppColors.primary, size: 14 * metrics.scale),
+              Icon(Icons.trip_origin_rounded, color: isDark ? cs.primary : AppColors.primary, size: 14 * metrics.scale),
               SizedBox(width: metrics.spacing6),
               Expanded(
                 child: Text(
                   phaseLabel,
                   overflow: TextOverflow.ellipsis,
-                  style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: metrics.fontBase, letterSpacing: 0.5),
+                  style: TextStyle(color: isDark ? cs.onSurface : AppColors.textPrimary, fontWeight: FontWeight.w800, fontSize: metrics.fontBase, letterSpacing: 0.5),
                 ),
               ),
-              Container(width: 1, height: 24 * metrics.scale, color: Colors.white.withOpacity(0.15)),
+              Container(width: 1, height: 24 * metrics.scale, color: isDark ? cs.outline : AppColors.mintBgLight.withOpacity(0.8)),
               SizedBox(width: metrics.spacing10),
               Column(
                 mainAxisAlignment: MainAxisAlignment.center,
                 crossAxisAlignment: CrossAxisAlignment.end,
                 children: <Widget>[
-                  Text(durationText, style: TextStyle(color: AppColors.primary, fontWeight: FontWeight.w900, fontSize: metrics.fontLarge, height: 1.1)),
-                  Text(distanceText, style: TextStyle(color: Colors.white70, fontWeight: FontWeight.w600, fontSize: metrics.fontTiny, height: 1.1)),
+                  Text(durationText, style: TextStyle(color: isDark ? cs.primary : AppColors.primary, fontWeight: FontWeight.w900, fontSize: metrics.fontLarge, height: 1.1)),
+                  Text(distanceText, style: TextStyle(color: isDark ? cs.onSurfaceVariant : AppColors.textSecondary, fontWeight: FontWeight.w600, fontSize: metrics.fontTiny, height: 1.1)),
                 ],
               ),
               SizedBox(width: metrics.spacing6),
@@ -1376,6 +1438,8 @@ class _ActionRail extends StatelessWidget {
   final VoidCallback onOverviewMode;
   final VoidCallback onRecenter;
   final _ScreenMetrics metrics;
+  final bool isDark;
+  final ColorScheme cs;
 
   const _ActionRail({
     required this.isNavigationMode,
@@ -1384,6 +1448,8 @@ class _ActionRail extends StatelessWidget {
     required this.onOverviewMode,
     required this.onRecenter,
     required this.metrics,
+    required this.isDark,
+    required this.cs,
   });
 
   @override
@@ -1396,20 +1462,21 @@ class _ActionRail extends StatelessWidget {
           width: 48 * metrics.scale,
           padding: EdgeInsets.symmetric(vertical: metrics.spacing8),
           decoration: BoxDecoration(
-            color: Colors.black.withOpacity(0.4),
+            color: isDark ? cs.surfaceVariant.withOpacity(0.85) : Colors.white.withOpacity(0.90),
             borderRadius: BorderRadius.circular(metrics.radiusLarge),
-            border: Border.all(color: Colors.white.withOpacity(0.15), width: 0.8),
+            border: Border.all(color: isDark ? cs.outline : AppColors.mintBgLight.withOpacity(0.4), width: 0.8),
+            boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.1), blurRadius: 8, offset: const Offset(0, 2))],
           ),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: <Widget>[
-              _ThinIconButton(icon: Icons.navigation_rounded, isActive: isNavigationMode, onTap: onNavigationMode, metrics: metrics),
+              _ThinIconButton(icon: Icons.navigation_rounded, isActive: isNavigationMode, onTap: onNavigationMode, metrics: metrics, isDark: isDark, cs: cs),
               SizedBox(height: metrics.spacing10),
-              _ThinIconButton(icon: Icons.map_rounded, isActive: !isNavigationMode, onTap: onOverviewMode, metrics: metrics),
+              _ThinIconButton(icon: Icons.map_rounded, isActive: !isNavigationMode, onTap: onOverviewMode, metrics: metrics, isDark: isDark, cs: cs),
               SizedBox(height: metrics.spacing10),
-              Container(height: 1, width: 24 * metrics.scale, color: Colors.white.withOpacity(0.15)),
+              Container(height: 1, width: 24 * metrics.scale, color: isDark ? cs.outline : AppColors.mintBgLight.withOpacity(0.8)),
               SizedBox(height: metrics.spacing10),
-              _ThinIconButton(icon: Icons.gps_fixed_rounded, isActive: isFollowCameraEnabled, onTap: onRecenter, metrics: metrics),
+              _ThinIconButton(icon: Icons.gps_fixed_rounded, isActive: isFollowCameraEnabled, onTap: onRecenter, metrics: metrics, isDark: isDark, cs: cs),
             ],
           ),
         ),
@@ -1423,12 +1490,16 @@ class _ThinIconButton extends StatelessWidget {
   final bool isActive;
   final VoidCallback onTap;
   final _ScreenMetrics metrics;
+  final bool isDark;
+  final ColorScheme cs;
 
   const _ThinIconButton({
     required this.icon,
     required this.isActive,
     required this.onTap,
     required this.metrics,
+    required this.isDark,
+    required this.cs,
   });
 
   @override
@@ -1439,11 +1510,11 @@ class _ThinIconButton extends StatelessWidget {
         width: 32 * metrics.scale,
         height: 32 * metrics.scale,
         decoration: BoxDecoration(
-          color: isActive ? AppColors.primary.withOpacity(0.2) : Colors.transparent,
+          color: isActive ? (isDark ? cs.primary.withOpacity(0.2) : AppColors.primary.withOpacity(0.1)) : Colors.transparent,
           shape: BoxShape.circle,
-          border: Border.all(color: isActive ? AppColors.primary : Colors.transparent, width: 0.8),
+          border: Border.all(color: isActive ? (isDark ? cs.primary : AppColors.primary) : Colors.transparent, width: 0.8),
         ),
-        child: Icon(icon, color: isActive ? AppColors.primary : Colors.white70, size: 16 * metrics.scale),
+        child: Icon(icon, color: isActive ? (isDark ? cs.primary : AppColors.primary) : (isDark ? cs.onSurfaceVariant : AppColors.textSecondary), size: 16 * metrics.scale),
       ),
     );
   }
@@ -1473,6 +1544,8 @@ class _SheetContent extends StatelessWidget {
   final VoidCallback onCancelTrip;
   final bool showMetaCard;
   final String? errorText;
+  final bool isDark;
+  final ColorScheme cs;
 
   const _SheetContent({
     required this.controller,
@@ -1498,11 +1571,12 @@ class _SheetContent extends StatelessWidget {
     required this.onCancelTrip,
     required this.showMetaCard,
     required this.errorText,
+    required this.isDark,
+    required this.cs,
   });
 
   @override
   Widget build(BuildContext context) {
-    final Color onSurface = Theme.of(context).colorScheme.onSurface;
     final List<Widget> children = <Widget>[
       if (controller != null) ...<Widget>[
         SizedBox(height: metrics.spacing8),
@@ -1511,7 +1585,7 @@ class _SheetContent extends StatelessWidget {
             width: 34,
             height: 4,
             decoration: BoxDecoration(
-              color: onSurface.withOpacity(0.18),
+              color: isDark ? cs.onSurfaceVariant.withOpacity(0.5) : AppColors.textSecondary.withOpacity(0.18),
               borderRadius: BorderRadius.circular(10),
             ),
           ),
@@ -1520,42 +1594,42 @@ class _SheetContent extends StatelessWidget {
       ] else SizedBox(height: metrics.spacing16),
       Text(
         role == TripNavigationRole.driver ? 'DRIVER COMMAND VIEW' : 'RIDER LIVE VIEW',
-        style: TextStyle(color: onSurface.withOpacity(0.5), fontSize: metrics.fontTiny, fontWeight: FontWeight.w800, letterSpacing: 0.6),
+        style: TextStyle(color: isDark ? cs.onSurfaceVariant : AppColors.textSecondary, fontSize: metrics.fontTiny, fontWeight: FontWeight.w800, letterSpacing: 0.6),
       ),
       SizedBox(height: metrics.spacing8),
-      _DataRowDense(label1: role == TripNavigationRole.driver ? 'RIDER' : 'DRIVER', value1: driverName, label2: 'VEHICLE', value2: vehicleType, metrics: metrics),
+      _DataRowDense(label1: role == TripNavigationRole.driver ? 'RIDER' : 'DRIVER', value1: driverName, label2: 'VEHICLE', value2: vehicleType, metrics: metrics, isDark: isDark, cs: cs),
       SizedBox(height: metrics.spacing8),
-      _DataRowDense(label1: 'PLATE', value1: carPlate.isEmpty ? '—' : carPlate, label2: 'RATING', value2: rating > 0 ? '★ ${rating.toStringAsFixed(1)}' : '—', metrics: metrics),
+      _DataRowDense(label1: 'PLATE', value1: carPlate.isEmpty ? '—' : carPlate, label2: 'RATING', value2: rating > 0 ? '★ ${rating.toStringAsFixed(1)}' : '—', metrics: metrics, isDark: isDark, cs: cs),
       SizedBox(height: metrics.spacing12),
-      Divider(color: onSurface.withOpacity(0.1), height: 1, thickness: 0.8),
+      Divider(color: isDark ? cs.outline.withOpacity(0.5) : AppColors.mintBgLight.withOpacity(0.5), height: 1, thickness: 0.8),
       SizedBox(height: metrics.spacing12),
       if (showMetaCard)
         Container(
           padding: EdgeInsets.all(metrics.spacing10),
           decoration: BoxDecoration(
-            color: AppColors.primary.withOpacity(0.08),
+            color: (isDark ? cs.primary : AppColors.primary).withOpacity(0.08),
             borderRadius: BorderRadius.circular(metrics.radiusMedium),
-            border: Border.all(color: AppColors.primary.withOpacity(0.18)),
+            border: Border.all(color: (isDark ? cs.primary : AppColors.primary).withOpacity(0.18)),
           ),
           child: Row(
             children: <Widget>[
-              Icon(Icons.near_me_rounded, color: AppColors.primary, size: 16 * metrics.scale),
+              Icon(Icons.near_me_rounded, color: isDark ? cs.primary : AppColors.primary, size: 16 * metrics.scale),
               SizedBox(width: metrics.spacing8),
               Expanded(
                 child: Text(
                   'TARGET: $currentTarget',
                   maxLines: 2,
                   overflow: TextOverflow.ellipsis,
-                  style: TextStyle(color: AppColors.primary, fontWeight: FontWeight.w800, fontSize: metrics.fontSmall),
+                  style: TextStyle(color: isDark ? cs.primary : AppColors.primary, fontWeight: FontWeight.w800, fontSize: metrics.fontSmall),
                 ),
               ),
             ],
           ),
         ),
       if (showMetaCard) SizedBox(height: metrics.spacing12),
-      Text('TRIP ROUTE', style: TextStyle(color: onSurface.withOpacity(0.5), fontSize: metrics.fontTiny, fontWeight: FontWeight.w800, letterSpacing: 0.5)),
+      Text('TRIP ROUTE', style: TextStyle(color: isDark ? cs.onSurfaceVariant : AppColors.textSecondary, fontSize: metrics.fontTiny, fontWeight: FontWeight.w800, letterSpacing: 0.5)),
       SizedBox(height: metrics.spacing8),
-      _PathLine(label: 'FROM', value: from, isHighlight: true, metrics: metrics),
+      _PathLine(label: 'FROM', value: from, isHighlight: true, metrics: metrics, isDark: isDark, cs: cs),
       if (dropOffTexts.isNotEmpty)
         for (int i = 0; i < dropOffTexts.length; i++) ...<Widget>[
           SizedBox(height: metrics.spacing6),
@@ -1564,27 +1638,29 @@ class _SheetContent extends StatelessWidget {
             value: dropOffTexts[i],
             isHighlight: activeStopIndex == i && phaseLabel.contains('DESTINATION'),
             metrics: metrics,
+            isDark: isDark,
+            cs: cs,
           ),
         ],
       SizedBox(height: metrics.spacing6),
-      _PathLine(label: 'TO', value: to, isHighlight: phaseLabel.contains('DESTINATION') || phaseLabel == 'COMPLETED', metrics: metrics),
+      _PathLine(label: 'TO', value: to, isHighlight: phaseLabel.contains('DESTINATION') || phaseLabel == 'COMPLETED', metrics: metrics, isDark: isDark, cs: cs),
       if (errorText != null && errorText!.trim().isNotEmpty) ...<Widget>[
         SizedBox(height: metrics.spacing12),
         Container(
           padding: EdgeInsets.all(metrics.spacing10),
           decoration: BoxDecoration(
-            color: AppColors.error.withOpacity(0.08),
+            color: cs.error.withOpacity(0.08),
             borderRadius: BorderRadius.circular(metrics.radiusMedium),
-            border: Border.all(color: AppColors.error.withOpacity(0.18)),
+            border: Border.all(color: cs.error.withOpacity(0.18)),
           ),
           child: Row(
             children: <Widget>[
-              Icon(Icons.error_outline_rounded, color: AppColors.error, size: 16 * metrics.scale),
+              Icon(Icons.error_outline_rounded, color: cs.error, size: 16 * metrics.scale),
               SizedBox(width: metrics.spacing8),
               Expanded(
                 child: Text(
                   errorText!,
-                  style: TextStyle(color: AppColors.error, fontWeight: FontWeight.w700, fontSize: metrics.fontSmall),
+                  style: TextStyle(color: cs.error, fontWeight: FontWeight.w700, fontSize: metrics.fontSmall),
                 ),
               ),
             ],
@@ -1602,6 +1678,8 @@ class _SheetContent extends StatelessWidget {
         primaryEnabled: primaryEnabled,
         onPrimaryAction: onPrimaryAction,
         onCancelTrip: onCancelTrip,
+        isDark: isDark,
+        cs: cs,
       ),
       SizedBox(height: metrics.spacing16),
     ];
@@ -1626,6 +1704,8 @@ class _SheetContent extends StatelessWidget {
 class _DataRowDense extends StatelessWidget {
   final String label1, value1, label2, value2;
   final _ScreenMetrics metrics;
+  final bool isDark;
+  final ColorScheme cs;
 
   const _DataRowDense({
     required this.label1,
@@ -1633,20 +1713,21 @@ class _DataRowDense extends StatelessWidget {
     required this.label2,
     required this.value2,
     required this.metrics,
+    required this.isDark,
+    required this.cs,
   });
 
   @override
   Widget build(BuildContext context) {
-    final Color onSurface = Theme.of(context).colorScheme.onSurface;
     return Row(
       children: <Widget>[
         Expanded(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: <Widget>[
-              Text(label1, style: TextStyle(color: onSurface.withOpacity(0.5), fontSize: metrics.fontTiny, fontWeight: FontWeight.w800)),
+              Text(label1, style: TextStyle(color: isDark ? cs.onSurfaceVariant : AppColors.textSecondary, fontSize: metrics.fontTiny, fontWeight: FontWeight.w800)),
               const SizedBox(height: 2),
-              Text(value1, style: TextStyle(color: onSurface, fontSize: metrics.fontBase, fontWeight: FontWeight.w600)),
+              Text(value1, style: TextStyle(color: isDark ? cs.onSurface : AppColors.textPrimary, fontSize: metrics.fontBase, fontWeight: FontWeight.w600)),
             ],
           ),
         ),
@@ -1654,9 +1735,9 @@ class _DataRowDense extends StatelessWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: <Widget>[
-              Text(label2, style: TextStyle(color: onSurface.withOpacity(0.5), fontSize: metrics.fontTiny, fontWeight: FontWeight.w800)),
+              Text(label2, style: TextStyle(color: isDark ? cs.onSurfaceVariant : AppColors.textSecondary, fontSize: metrics.fontTiny, fontWeight: FontWeight.w800)),
               const SizedBox(height: 2),
-              Text(value2, style: TextStyle(color: onSurface, fontSize: metrics.fontBase, fontWeight: FontWeight.w600)),
+              Text(value2, style: TextStyle(color: isDark ? cs.onSurface : AppColors.textPrimary, fontSize: metrics.fontBase, fontWeight: FontWeight.w600)),
             ],
           ),
         ),
@@ -1670,17 +1751,20 @@ class _PathLine extends StatelessWidget {
   final String value;
   final bool isHighlight;
   final _ScreenMetrics metrics;
+  final bool isDark;
+  final ColorScheme cs;
 
   const _PathLine({
     required this.label,
     required this.value,
     required this.isHighlight,
     required this.metrics,
+    required this.isDark,
+    required this.cs,
   });
 
   @override
   Widget build(BuildContext context) {
-    final Color onSurface = Theme.of(context).colorScheme.onSurface;
     return Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: <Widget>[
@@ -1688,7 +1772,7 @@ class _PathLine extends StatelessWidget {
           width: 52 * metrics.scale,
           child: Text(
             label,
-            style: TextStyle(color: isHighlight ? AppColors.primary : onSurface.withOpacity(0.5), fontSize: metrics.fontTiny, fontWeight: FontWeight.w800),
+            style: TextStyle(color: isHighlight ? (isDark ? cs.primary : AppColors.primary) : (isDark ? cs.onSurfaceVariant : AppColors.textSecondary), fontSize: metrics.fontTiny, fontWeight: FontWeight.w800),
           ),
         ),
         Expanded(
@@ -1696,7 +1780,7 @@ class _PathLine extends StatelessWidget {
             value,
             maxLines: 2,
             overflow: TextOverflow.ellipsis,
-            style: TextStyle(color: isHighlight ? onSurface : onSurface.withOpacity(0.72), fontSize: metrics.fontSmall, fontWeight: isHighlight ? FontWeight.w700 : FontWeight.w500),
+            style: TextStyle(color: isHighlight ? (isDark ? cs.onSurface : AppColors.textPrimary) : (isDark ? cs.onSurfaceVariant : AppColors.textSecondary.withOpacity(0.8)), fontSize: metrics.fontSmall, fontWeight: isHighlight ? FontWeight.w700 : FontWeight.w500),
           ),
         ),
       ],
@@ -1714,6 +1798,8 @@ class _ActionRow extends StatelessWidget {
   final bool primaryEnabled;
   final VoidCallback onPrimaryAction;
   final VoidCallback onCancelTrip;
+  final bool isDark;
+  final ColorScheme cs;
 
   const _ActionRow({
     required this.metrics,
@@ -1725,6 +1811,8 @@ class _ActionRow extends StatelessWidget {
     required this.primaryEnabled,
     required this.onPrimaryAction,
     required this.onCancelTrip,
+    required this.isDark,
+    required this.cs,
   });
 
   @override
@@ -1741,6 +1829,8 @@ class _ActionRow extends StatelessWidget {
               isPrimary: true,
               onTap: onPrimaryAction,
               metrics: metrics,
+              isDark: isDark,
+              cs: cs,
             ),
           ),
         if (showPrimaryAction && showCancelButton) SizedBox(width: metrics.spacing10),
@@ -1754,6 +1844,8 @@ class _ActionRow extends StatelessWidget {
               isPrimary: false,
               onTap: onCancelTrip,
               metrics: metrics,
+              isDark: isDark,
+              cs: cs,
             ),
           ),
       ],
@@ -1768,6 +1860,8 @@ class _ActionButton extends StatelessWidget {
   final bool isPrimary;
   final VoidCallback onTap;
   final _ScreenMetrics metrics;
+  final bool isDark;
+  final ColorScheme cs;
 
   const _ActionButton({
     required this.label,
@@ -1776,22 +1870,24 @@ class _ActionButton extends StatelessWidget {
     required this.isPrimary,
     required this.onTap,
     required this.metrics,
+    required this.isDark,
+    required this.cs,
   });
 
   @override
   Widget build(BuildContext context) {
-    final Color onSurface = Theme.of(context).colorScheme.onSurface;
     final bool disabled = isLoading || isDisabled;
+    final primaryTheme = isDark ? cs.primary : AppColors.primary;
 
     final Color bgColor = isPrimary
-        ? (disabled ? AppColors.primary.withOpacity(0.32) : AppColors.primary)
+        ? (disabled ? primaryTheme.withOpacity(0.32) : primaryTheme)
         : Colors.transparent;
     final Color borderColor = isPrimary
-        ? (disabled ? AppColors.primary.withOpacity(0.28) : AppColors.primary)
-        : onSurface.withOpacity(disabled ? 0.1 : 0.2);
+        ? (disabled ? primaryTheme.withOpacity(0.28) : primaryTheme)
+        : (isDark ? cs.outline.withOpacity(disabled ? 0.3 : 0.8) : AppColors.mintBgLight.withOpacity(disabled ? 0.5 : 1.0));
     final Color textColor = isPrimary
-        ? Colors.white.withOpacity(disabled ? 0.68 : 1.0)
-        : onSurface.withOpacity(disabled ? 0.4 : 0.82);
+        ? (isDark ? cs.onPrimary : Colors.white).withOpacity(disabled ? 0.68 : 1.0)
+        : (isDark ? cs.onSurface : AppColors.textPrimary).withOpacity(disabled ? 0.4 : 0.82);
 
     return GestureDetector(
       onTap: disabled ? null : onTap,

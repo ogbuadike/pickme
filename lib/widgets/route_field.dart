@@ -1,4 +1,4 @@
-// lib/screens/home/widgets/route_field.dart
+// lib/widgets/route_field.dart
 // Single route input field with inline suffix actions (Use current / Remove X)
 // Stronger, always-visible outline + bolder focus state.
 
@@ -6,7 +6,8 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
-import '../../../themes/app_theme.dart';
+// FIXED: Corrected import paths to match lib/widgets/ folder placement
+import '../themes/app_theme.dart';
 import '../screens/state/home_models.dart';
 
 class RouteField extends StatefulWidget {
@@ -91,15 +92,17 @@ class _RouteFieldState extends State<RouteField> {
   @override
   Widget build(BuildContext context) {
     final s = _s(context);
-    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+    final cs = theme.colorScheme;
 
-    // ⬇️ More visible borders (both themes)
+    // ⬇️ More visible borders (OLED optimized)
     final Color baseBorder = isDark
-        ? Colors.white.withOpacity(.28)          // was .10
-        : AppColors.mintBgLight.withOpacity(.58); // was .28
+        ? cs.outline.withOpacity(0.5)            // Sleek grey line in dark mode
+        : AppColors.mintBgLight.withOpacity(.58);
 
     final Color focusBorder = isDark
-        ? Colors.white.withOpacity(.70)
+        ? cs.primary                             // Neon green glow when focused
         : AppColors.mintBgLight.withOpacity(.95);
 
     final showCheck = widget.point.latLng != null;
@@ -110,7 +113,7 @@ class _RouteFieldState extends State<RouteField> {
       mainAxisSize: MainAxisSize.min,
       children: [
         if (showCheck) ...[
-          Icon(Icons.check_circle_rounded, size: 18 * s, color: AppColors.primary),
+          Icon(Icons.check_circle_rounded, size: 18 * s, color: isDark ? cs.primary : AppColors.primary),
           SizedBox(width: 6 * s),
         ],
         if (canUseCurrent)
@@ -129,7 +132,7 @@ class _RouteFieldState extends State<RouteField> {
               style: TextStyle(
                 fontSize: 11 * s,
                 fontWeight: FontWeight.w800,
-                color: AppColors.primary,
+                color: isDark ? cs.primary : AppColors.primary,
                 letterSpacing: -0.1,
               ),
             ),
@@ -148,7 +151,8 @@ class _RouteFieldState extends State<RouteField> {
               child: Icon(
                 Icons.close_rounded,
                 size: 18 * s,
-                color: AppColors.textSecondary.withOpacity(.85),
+                // Highly visible grey in dark mode
+                color: isDark ? cs.onSurfaceVariant : AppColors.textSecondary.withOpacity(.85),
               ),
             ),
           ),
@@ -157,21 +161,24 @@ class _RouteFieldState extends State<RouteField> {
     );
 
     return Material(
-      color: Theme.of(context).cardColor,
+      // We use transparent here so the animated container handles the color
+      color: Colors.transparent,
       borderRadius: BorderRadius.circular(14 * s),
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 160),
         curve: Curves.easeOut,
         decoration: BoxDecoration(
+          // Use Surface Variant (dark grey) in dark mode to lift it off the black background
+          color: isDark ? cs.surfaceVariant : theme.cardColor,
           borderRadius: BorderRadius.circular(14 * s),
           border: Border.all(
             color: _focus.hasFocus ? focusBorder : baseBorder,
-            width: _focus.hasFocus ? 2.0 : 1.6, // ⬅️ thicker, crisper
+            width: _focus.hasFocus ? 2.0 : 1.6, // thicker, crisper
           ),
-          // Subtle lift for separation from background (keeps your design)
+          // Subtle lift for separation from background
           boxShadow: [
             BoxShadow(
-              color: (isDark ? Colors.black : Colors.black).withOpacity(0.06),
+              color: isDark ? Colors.black.withOpacity(0.5) : Colors.black.withOpacity(0.06),
               blurRadius: 8 * s,
               offset: Offset(0, 2 * s),
             ),
@@ -184,8 +191,9 @@ class _RouteFieldState extends State<RouteField> {
           onChanged: widget.onTyping,
           onTap: () => widget.onFocused(widget.index),
           textInputAction: TextInputAction.search,
+          // FIXED: The typed text is now pure white in dark mode
           style: TextStyle(
-            color: AppColors.textPrimary,
+            color: isDark ? cs.onSurface : AppColors.textPrimary,
             fontWeight: FontWeight.w700,
             fontSize: 14 * s,
             letterSpacing: -0.1,
@@ -195,15 +203,17 @@ class _RouteFieldState extends State<RouteField> {
             border: InputBorder.none,
             contentPadding: EdgeInsets.symmetric(vertical: 8 * s),
             labelText: _label(),
+            // FIXED: The label text is now crisp grey in dark mode
             labelStyle: TextStyle(
               fontSize: 11 * s,
               fontWeight: FontWeight.w800,
-              color: AppColors.textSecondary.withOpacity(.9),
+              color: isDark ? cs.onSurfaceVariant : AppColors.textSecondary.withOpacity(.9),
               letterSpacing: -0.2,
             ),
             hintText: widget.point.hint,
+            // FIXED: The hint placeholder text is now crisp grey in dark mode
             hintStyle: TextStyle(
-              color: AppColors.textSecondary.withOpacity(.65),
+              color: isDark ? cs.onSurfaceVariant.withOpacity(0.8) : AppColors.textSecondary.withOpacity(.65),
               fontSize: 13 * s,
             ),
             suffixIcon: suffix,

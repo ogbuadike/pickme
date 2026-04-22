@@ -2,11 +2,9 @@ import 'dart:convert';
 import 'dart:math' as math;
 import 'dart:ui' show ImageFilter;
 
-import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_svg/flutter_svg.dart';
-import 'package:google_sign_in/google_sign_in.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -35,7 +33,6 @@ class _RegistrationScreenState extends State<RegistrationScreen>
 
   final _formKey = GlobalKey<FormState>();
   final _deviceInfo = DeviceInfoService();
-  final _auth = FirebaseAuth.instance;
 
   late final ApiClient _api;
   late final AnimationController _logoController;
@@ -161,75 +158,32 @@ class _RegistrationScreenState extends State<RegistrationScreen>
     }
   }
 
-  Future<void> _googleSignup() async {
-    setState(() => _busy = true);
-    try {
-      final g = GoogleSignIn();
-      final account = await g.signIn();
-      if (account == null) {
-        if (mounted) setState(() => _busy = false);
-        return;
-      }
-
-      final auth = await account.authentication;
-      final cred = GoogleAuthProvider.credential(
-        accessToken: auth.accessToken,
-        idToken: auth.idToken,
-      );
-      final userCred = await _auth.signInWithCredential(cred);
-      final user = userCred.user;
-
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setString('user_id', user?.uid ?? '');
-      await prefs.setString('user_name', user?.displayName ?? '');
-      await prefs.setString('user_logo', user?.photoURL ?? '');
-      await prefs.setString('user_pin', '');
-
-      if (!mounted) return;
-      showToastNotification(
-        context: context,
-        title: 'Welcome',
-        message: 'Signed in as ${user?.displayName ?? 'User'}',
-        isSuccess: true,
-      );
-      Navigator.of(context).pushReplacementNamed(AppRoutes.set_user_pin);
-    } catch (_) {
-      if (!mounted) return;
-      showToastNotification(
-        context: context,
-        title: 'Google Sign-In failed',
-        message: 'Please try again',
-        isSuccess: false,
-      );
-    } finally {
-      if (mounted) setState(() => _busy = false);
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
     final ui = UIScale.of(context);
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final cs = Theme.of(context).colorScheme;
 
     return Scaffold(
-      backgroundColor: Theme.of(context).colorScheme.background,
+      backgroundColor: isDark ? Colors.black : Theme.of(context).colorScheme.background,
       body: Stack(
         children: [
-          const BackgroundWidget(
+          BackgroundWidget(
             style: HoloStyle.vapor,
             animate: true,
-            intensity: 0.8,
+            intensity: isDark ? 0.3 : 0.8,
           ),
           SafeArea(
             child: ui.useSplitAuth
-                ? _buildSplitLayout(ui)
-                : _buildCompactLayout(ui),
+                ? _buildSplitLayout(ui, isDark, cs)
+                : _buildCompactLayout(ui, isDark, cs),
           ),
         ],
       ),
     );
   }
 
-  Widget _buildCompactLayout(UIScale ui) {
+  Widget _buildCompactLayout(UIScale ui, bool isDark, ColorScheme cs) {
     return Center(
       child: SingleChildScrollView(
         keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
@@ -238,13 +192,13 @@ class _RegistrationScreenState extends State<RegistrationScreen>
         ),
         child: ConstrainedBox(
           constraints: BoxConstraints(maxWidth: ui.authCardMaxWidth),
-          child: _buildRegistrationCard(ui, isLandscape: false),
+          child: _buildRegistrationCard(ui, isLandscape: false, isDark: isDark, cs: cs),
         ),
       ),
     );
   }
 
-  Widget _buildSplitLayout(UIScale ui) {
+  Widget _buildSplitLayout(UIScale ui, bool isDark, ColorScheme cs) {
     return LayoutBuilder(
       builder: (context, constraints) {
         return SingleChildScrollView(
@@ -269,7 +223,7 @@ class _RegistrationScreenState extends State<RegistrationScreen>
                       ),
                       child: Padding(
                         padding: EdgeInsets.symmetric(vertical: ui.gap(10)),
-                        child: _buildBrandingSection(ui),
+                        child: _buildBrandingSection(ui, isDark, cs),
                       ),
                     ),
                   ),
@@ -281,7 +235,7 @@ class _RegistrationScreenState extends State<RegistrationScreen>
                     alignment: Alignment.center,
                     child: ConstrainedBox(
                       constraints: BoxConstraints(maxWidth: ui.authCardMaxWidth),
-                      child: _buildRegistrationCard(ui, isLandscape: true),
+                      child: _buildRegistrationCard(ui, isLandscape: true, isDark: isDark, cs: cs),
                     ),
                   ),
                 ),
@@ -293,13 +247,13 @@ class _RegistrationScreenState extends State<RegistrationScreen>
     );
   }
 
-  Widget _buildBrandingSection(UIScale ui) {
+  Widget _buildBrandingSection(UIScale ui, bool isDark, ColorScheme cs) {
     final featureIconSize = ui.icon(18);
 
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
-        _buildAnimatedLogo(ui.heroLogoSize),
+        _buildAnimatedLogo(ui.heroLogoSize, isDark, cs),
         SizedBox(height: ui.gap(18)),
         Text(
           'Pick Me',
@@ -307,7 +261,7 @@ class _RegistrationScreenState extends State<RegistrationScreen>
           style: TextStyle(
             fontSize: ui.font(ui.tablet ? 42 : 34),
             fontWeight: FontWeight.w900,
-            color: AppColors.textPrimary,
+            color: isDark ? cs.onSurface : AppColors.textPrimary,
             letterSpacing: -1,
           ),
         ),
@@ -317,7 +271,7 @@ class _RegistrationScreenState extends State<RegistrationScreen>
           textAlign: TextAlign.center,
           style: TextStyle(
             fontSize: ui.font(15),
-            color: AppColors.textSecondary,
+            color: isDark ? cs.onSurfaceVariant : AppColors.textSecondary,
             letterSpacing: 0.3,
           ),
         ),
@@ -326,14 +280,13 @@ class _RegistrationScreenState extends State<RegistrationScreen>
           padding: EdgeInsets.all(ui.inset(ui.compact ? 14 : 18)),
           decoration: BoxDecoration(
             gradient: LinearGradient(
-              colors: [
-                AppColors.primary.withOpacity(0.08),
-                AppColors.secondary.withOpacity(0.08),
-              ],
+              colors: isDark
+                  ? [cs.primary.withOpacity(0.15), cs.secondary.withOpacity(0.15)]
+                  : [AppColors.primary.withOpacity(0.08), AppColors.secondary.withOpacity(0.08)],
             ),
             borderRadius: BorderRadius.circular(ui.radius(16)),
             border: Border.all(
-              color: AppColors.mintBgLight.withOpacity(0.35),
+              color: isDark ? cs.outline.withOpacity(0.5) : AppColors.mintBgLight.withOpacity(0.35),
               width: 1,
             ),
           ),
@@ -347,14 +300,16 @@ class _RegistrationScreenState extends State<RegistrationScreen>
                   child: SvgPicture.asset(
                     'assets/icons/street_ride.svg',
                     fit: BoxFit.contain,
-                    colorFilter: const ColorFilter.mode(
-                      AppColors.primary,
+                    colorFilter: ColorFilter.mode(
+                      isDark ? cs.primary : AppColors.primary,
                       BlendMode.srcIn,
                     ),
                   ),
                 ),
                 'Street Rides',
                 ui,
+                isDark,
+                cs,
               ),
               SizedBox(height: ui.gap(10)),
               _buildFeatureItemWidget(
@@ -364,14 +319,16 @@ class _RegistrationScreenState extends State<RegistrationScreen>
                   child: SvgPicture.asset(
                     'assets/icons/campus_ride_monochrome.svg',
                     fit: BoxFit.contain,
-                    colorFilter: const ColorFilter.mode(
-                      AppColors.primary,
+                    colorFilter: ColorFilter.mode(
+                      isDark ? cs.primary : AppColors.primary,
                       BlendMode.srcIn,
                     ),
                   ),
                 ),
                 'Campus Rides',
                 ui,
+                isDark,
+                cs,
               ),
               SizedBox(height: ui.gap(10)),
               _buildFeatureItemWidget(
@@ -381,14 +338,16 @@ class _RegistrationScreenState extends State<RegistrationScreen>
                   child: SvgPicture.asset(
                     'assets/icons/dispatch.svg',
                     fit: BoxFit.contain,
-                    colorFilter: const ColorFilter.mode(
-                      AppColors.primary,
+                    colorFilter: ColorFilter.mode(
+                      isDark ? cs.primary : AppColors.primary,
                       BlendMode.srcIn,
                     ),
                   ),
                 ),
                 'Package Dispatch',
                 ui,
+                isDark,
+                cs,
               ),
             ],
           ),
@@ -397,7 +356,7 @@ class _RegistrationScreenState extends State<RegistrationScreen>
     );
   }
 
-  Widget _buildAnimatedLogo(double size) {
+  Widget _buildAnimatedLogo(double size, bool isDark, ColorScheme cs) {
     return AnimatedBuilder(
       animation: _logoRotation,
       builder: (context, child) {
@@ -409,20 +368,19 @@ class _RegistrationScreenState extends State<RegistrationScreen>
             gradient: LinearGradient(
               begin: Alignment.topLeft,
               end: Alignment.bottomRight,
-              colors: [
-                AppColors.surface,
-                AppColors.mintBgLight.withOpacity(0.9),
-              ],
+              colors: isDark
+                  ? [cs.surfaceVariant, cs.primary.withOpacity(0.2)]
+                  : [AppColors.surface, AppColors.mintBgLight.withOpacity(0.9)],
               transform: GradientRotation(_logoRotation.value),
             ),
             boxShadow: [
               BoxShadow(
-                color: AppColors.primary.withOpacity(0.28),
+                color: (isDark ? cs.primary : AppColors.primary).withOpacity(0.28),
                 blurRadius: 24,
                 spreadRadius: 2,
               ),
               BoxShadow(
-                color: AppColors.secondary.withOpacity(0.18),
+                color: (isDark ? cs.secondary : AppColors.secondary).withOpacity(0.18),
                 blurRadius: 18,
                 spreadRadius: 1,
               ),
@@ -430,7 +388,10 @@ class _RegistrationScreenState extends State<RegistrationScreen>
           ),
           child: Padding(
             padding: EdgeInsets.all(size * 0.24),
-            child: Image.asset('image/pickme.png', fit: BoxFit.contain),
+            child: Image.asset(
+              'image/pickme.png',
+              fit: BoxFit.contain,
+            ),
           ),
         );
       },
@@ -440,6 +401,8 @@ class _RegistrationScreenState extends State<RegistrationScreen>
   Widget _buildRegistrationCard(
       UIScale ui, {
         required bool isLandscape,
+        required bool isDark,
+        required ColorScheme cs,
       }) {
     return ClipRRect(
       borderRadius: BorderRadius.circular(ui.cardRadius),
@@ -454,19 +417,18 @@ class _RegistrationScreenState extends State<RegistrationScreen>
             gradient: LinearGradient(
               begin: Alignment.topLeft,
               end: Alignment.bottomRight,
-              colors: [
-                AppColors.surface.withOpacity(0.92),
-                AppColors.mintBgLight.withOpacity(0.28),
-              ],
+              colors: isDark
+                  ? [cs.surface.withOpacity(0.95), cs.surfaceVariant.withOpacity(0.8)]
+                  : [AppColors.surface.withOpacity(0.92), AppColors.mintBgLight.withOpacity(0.28)],
             ),
             borderRadius: BorderRadius.circular(ui.cardRadius),
             border: Border.all(
-              color: AppColors.mintBgLight.withOpacity(0.45),
+              color: isDark ? cs.outline.withOpacity(0.5) : AppColors.mintBgLight.withOpacity(0.45),
               width: 1,
             ),
             boxShadow: [
               BoxShadow(
-                color: AppColors.deep.withOpacity(ui.reduceFx ? 0.05 : 0.10),
+                color: isDark ? Colors.black.withOpacity(0.5) : AppColors.deep.withOpacity(ui.reduceFx ? 0.05 : 0.10),
                 blurRadius: ui.reduceFx ? 12 : 20,
                 offset: const Offset(0, 8),
               ),
@@ -480,7 +442,7 @@ class _RegistrationScreenState extends State<RegistrationScreen>
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   if (!isLandscape) ...[
-                    _buildCompactLogo(ui),
+                    _buildCompactLogo(ui, isDark, cs),
                     SizedBox(height: ui.gap(16)),
                   ],
                   Text(
@@ -489,7 +451,7 @@ class _RegistrationScreenState extends State<RegistrationScreen>
                     style: TextStyle(
                       fontSize: ui.font(ui.compact ? 22 : 28),
                       fontWeight: FontWeight.w800,
-                      color: AppColors.textPrimary,
+                      color: isDark ? cs.onSurface : AppColors.textPrimary,
                     ),
                   ),
                   SizedBox(height: ui.gap(6)),
@@ -498,27 +460,23 @@ class _RegistrationScreenState extends State<RegistrationScreen>
                     textAlign: TextAlign.center,
                     style: TextStyle(
                       fontSize: ui.font(13),
-                      color: AppColors.textSecondary,
+                      color: isDark ? cs.onSurfaceVariant : AppColors.textSecondary,
                     ),
                   ),
                   SizedBox(height: ui.gap(18)),
-                  _fieldWrapper(ui, _buildNameField(ui)),
+                  _fieldWrapper(ui, isDark, cs, _buildNameField(ui, isDark, cs)),
                   SizedBox(height: ui.gap(12)),
-                  _fieldWrapper(ui, _buildEmailField(ui)),
+                  _fieldWrapper(ui, isDark, cs, _buildEmailField(ui, isDark, cs)),
                   SizedBox(height: ui.gap(12)),
-                  _fieldWrapper(ui, _buildPasswordField(ui)),
+                  _fieldWrapper(ui, isDark, cs, _buildPasswordField(ui, isDark, cs)),
                   SizedBox(height: ui.gap(10)),
-                  _buildStrengthMeter(ui),
+                  _buildStrengthMeter(ui, isDark, cs),
                   SizedBox(height: ui.gap(12)),
-                  _fieldWrapper(ui, _buildConfirmField(ui)),
+                  _fieldWrapper(ui, isDark, cs, _buildConfirmField(ui, isDark, cs)),
                   SizedBox(height: ui.gap(16)),
-                  _primaryGradientButton(ui),
-                  SizedBox(height: ui.gap(14)),
-                  _divider(ui),
-                  SizedBox(height: ui.gap(14)),
-                  _googleButton(ui),
-                  SizedBox(height: ui.gap(12)),
-                  _loginLink(ui),
+                  _primaryGradientButton(ui, isDark, cs),
+                  SizedBox(height: ui.gap(16)),
+                  _loginLink(ui, isDark, cs),
                 ],
               ),
             ),
@@ -528,19 +486,19 @@ class _RegistrationScreenState extends State<RegistrationScreen>
     );
   }
 
-  Widget _buildCompactLogo(UIScale ui) {
+  Widget _buildCompactLogo(UIScale ui, bool isDark, ColorScheme cs) {
     final size = ui.compactLogoSize;
     return Container(
       width: size,
       height: size,
       decoration: BoxDecoration(
         shape: BoxShape.circle,
-        gradient: const LinearGradient(
-          colors: [AppColors.primary, AppColors.secondary],
+        gradient: LinearGradient(
+          colors: isDark ? [cs.primary, cs.secondary] : [AppColors.primary, AppColors.secondary],
         ),
         boxShadow: [
           BoxShadow(
-            color: AppColors.primary.withOpacity(0.22),
+            color: (isDark ? cs.primary : AppColors.primary).withOpacity(0.22),
             blurRadius: ui.reduceFx ? 10 : 20,
             spreadRadius: 1,
           ),
@@ -551,19 +509,19 @@ class _RegistrationScreenState extends State<RegistrationScreen>
         child: Image.asset(
           'image/pickme.png',
           fit: BoxFit.contain,
-          color: AppColors.surface,
+          color: isDark ? cs.onPrimary : AppColors.surface,
         ),
       ),
     );
   }
 
-  Widget _fieldWrapper(UIScale ui, Widget child) {
+  Widget _fieldWrapper(UIScale ui, bool isDark, ColorScheme cs, Widget child) {
     return Container(
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(ui.radius(16)),
         boxShadow: [
           BoxShadow(
-            color: AppColors.deep.withOpacity(0.05),
+            color: isDark ? Colors.black.withOpacity(0.3) : AppColors.deep.withOpacity(0.05),
             blurRadius: ui.reduceFx ? 6 : 10,
             offset: const Offset(0, 4),
           ),
@@ -573,13 +531,18 @@ class _RegistrationScreenState extends State<RegistrationScreen>
     );
   }
 
-  Widget _buildNameField(UIScale ui) {
+  Widget _buildNameField(UIScale ui, bool isDark, ColorScheme cs) {
     return TextFormField(
       controller: _name,
       textInputAction: TextInputAction.next,
-      style: TextStyle(fontSize: ui.font(14)),
+      style: TextStyle(
+        fontSize: ui.font(14),
+        color: isDark ? cs.onSurface : AppColors.textPrimary,
+      ),
       decoration: _inputDecoration(
         ui,
+        isDark,
+        cs,
         label: 'Legal full name',
         icon: Icons.person_rounded,
       ),
@@ -592,15 +555,20 @@ class _RegistrationScreenState extends State<RegistrationScreen>
     );
   }
 
-  Widget _buildEmailField(UIScale ui) {
+  Widget _buildEmailField(UIScale ui, bool isDark, ColorScheme cs) {
     return TextFormField(
       controller: _email,
       textInputAction: TextInputAction.next,
       keyboardType: TextInputType.emailAddress,
       autofillHints: const [AutofillHints.email, AutofillHints.username],
-      style: TextStyle(fontSize: ui.font(14)),
+      style: TextStyle(
+        fontSize: ui.font(14),
+        color: isDark ? cs.onSurface : AppColors.textPrimary,
+      ),
       decoration: _inputDecoration(
         ui,
+        isDark,
+        cs,
         label: 'Email Address',
         icon: Icons.email_rounded,
       ),
@@ -608,15 +576,20 @@ class _RegistrationScreenState extends State<RegistrationScreen>
     );
   }
 
-  Widget _buildPasswordField(UIScale ui) {
+  Widget _buildPasswordField(UIScale ui, bool isDark, ColorScheme cs) {
     return TextFormField(
       controller: _pass,
       obscureText: !_showPass,
       textInputAction: TextInputAction.next,
       autofillHints: const [AutofillHints.newPassword],
-      style: TextStyle(fontSize: ui.font(14)),
+      style: TextStyle(
+        fontSize: ui.font(14),
+        color: isDark ? cs.onSurface : AppColors.textPrimary,
+      ),
       decoration: _inputDecoration(
         ui,
+        isDark,
+        cs,
         label: 'Password',
         icon: Icons.lock_rounded,
         trailing: IconButton(
@@ -625,7 +598,7 @@ class _RegistrationScreenState extends State<RegistrationScreen>
             _showPass
                 ? Icons.visibility_rounded
                 : Icons.visibility_off_rounded,
-            color: AppColors.textSecondary,
+            color: isDark ? cs.onSurfaceVariant : AppColors.textSecondary,
           ),
         ),
       ),
@@ -641,16 +614,21 @@ class _RegistrationScreenState extends State<RegistrationScreen>
     );
   }
 
-  Widget _buildConfirmField(UIScale ui) {
+  Widget _buildConfirmField(UIScale ui, bool isDark, ColorScheme cs) {
     return TextFormField(
       controller: _confirm,
       obscureText: !_showConfirm,
       textInputAction: TextInputAction.done,
       autofillHints: const [AutofillHints.newPassword],
       onFieldSubmitted: (_) => _busy ? null : _register(),
-      style: TextStyle(fontSize: ui.font(14)),
+      style: TextStyle(
+        fontSize: ui.font(14),
+        color: isDark ? cs.onSurface : AppColors.textPrimary,
+      ),
       decoration: _inputDecoration(
         ui,
+        isDark,
+        cs,
         label: 'Confirm password',
         icon: Icons.lock_person_rounded,
         trailing: IconButton(
@@ -659,7 +637,7 @@ class _RegistrationScreenState extends State<RegistrationScreen>
             _showConfirm
                 ? Icons.visibility_rounded
                 : Icons.visibility_off_rounded,
-            color: AppColors.textSecondary,
+            color: isDark ? cs.onSurfaceVariant : AppColors.textSecondary,
           ),
         ),
       ),
@@ -670,7 +648,9 @@ class _RegistrationScreenState extends State<RegistrationScreen>
   }
 
   InputDecoration _inputDecoration(
-      UIScale ui, {
+      UIScale ui,
+      bool isDark,
+      ColorScheme cs, {
         required String label,
         required IconData icon,
         Widget? trailing,
@@ -678,6 +658,9 @@ class _RegistrationScreenState extends State<RegistrationScreen>
     return InputDecoration(
       isDense: ui.compact,
       labelText: label,
+      labelStyle: TextStyle(
+        color: isDark ? cs.onSurfaceVariant : AppColors.textSecondary.withOpacity(.9),
+      ),
       contentPadding: EdgeInsets.symmetric(
         horizontal: ui.inset(14),
         vertical: ui.inputVerticalPadding,
@@ -686,15 +669,15 @@ class _RegistrationScreenState extends State<RegistrationScreen>
         padding: EdgeInsets.all(ui.inset(8)),
         child: Container(
           decoration: BoxDecoration(
-            color: AppColors.primary.withOpacity(0.10),
+            color: (isDark ? cs.primary : AppColors.primary).withOpacity(0.10),
             shape: BoxShape.circle,
           ),
-          child: Icon(icon, size: ui.icon(18), color: AppColors.primary),
+          child: Icon(icon, size: ui.icon(18), color: isDark ? cs.primary : AppColors.primary),
         ),
       ),
       suffixIcon: trailing,
       filled: true,
-      fillColor: AppColors.surface,
+      fillColor: isDark ? cs.surfaceVariant.withOpacity(0.5) : AppColors.surface,
       border: OutlineInputBorder(
         borderRadius: BorderRadius.circular(ui.radius(16)),
         borderSide: BorderSide.none,
@@ -702,17 +685,17 @@ class _RegistrationScreenState extends State<RegistrationScreen>
       enabledBorder: OutlineInputBorder(
         borderRadius: BorderRadius.circular(ui.radius(16)),
         borderSide: BorderSide(
-          color: AppColors.mintBgLight.withOpacity(0.30),
+          color: isDark ? cs.outline.withOpacity(0.5) : AppColors.mintBgLight.withOpacity(0.30),
           width: 1,
         ),
       ),
       focusedBorder: OutlineInputBorder(
         borderRadius: BorderRadius.circular(ui.radius(16)),
-        borderSide: const BorderSide(color: AppColors.primary, width: 2),
+        borderSide: BorderSide(color: isDark ? cs.primary : AppColors.primary, width: 2),
       ),
       errorBorder: OutlineInputBorder(
         borderRadius: BorderRadius.circular(ui.radius(16)),
-        borderSide: const BorderSide(color: AppColors.error, width: 1),
+        borderSide: BorderSide(color: cs.error, width: 1),
       ),
     );
   }
@@ -721,6 +704,8 @@ class _RegistrationScreenState extends State<RegistrationScreen>
       Widget icon,
       String label,
       UIScale ui,
+      bool isDark,
+      ColorScheme cs,
       ) {
     return Row(
       mainAxisSize: MainAxisSize.min,
@@ -728,7 +713,7 @@ class _RegistrationScreenState extends State<RegistrationScreen>
         Container(
           padding: EdgeInsets.all(ui.inset(8)),
           decoration: BoxDecoration(
-            color: AppColors.surface.withOpacity(0.85),
+            color: isDark ? cs.surfaceVariant.withOpacity(0.8) : AppColors.surface.withOpacity(0.85),
             shape: BoxShape.circle,
           ),
           child: SizedBox(width: ui.icon(20), height: ui.icon(20), child: icon),
@@ -739,7 +724,7 @@ class _RegistrationScreenState extends State<RegistrationScreen>
             label,
             overflow: TextOverflow.ellipsis,
             style: TextStyle(
-              color: AppColors.textPrimary,
+              color: isDark ? cs.onSurface : AppColors.textPrimary,
               fontWeight: FontWeight.w600,
               fontSize: ui.font(14),
             ),
@@ -749,7 +734,7 @@ class _RegistrationScreenState extends State<RegistrationScreen>
     );
   }
 
-  Widget _buildStrengthMeter(UIScale ui) {
+  Widget _buildStrengthMeter(UIScale ui, bool isDark, ColorScheme cs) {
     return Row(
       children: [
         Expanded(
@@ -758,8 +743,8 @@ class _RegistrationScreenState extends State<RegistrationScreen>
             child: LinearProgressIndicator(
               minHeight: 6,
               value: _strength == 0 ? null : _strength,
-              color: _meterColor(context),
-              backgroundColor: AppColors.mintBgLight,
+              color: _meterColor(context, isDark, cs),
+              backgroundColor: isDark ? cs.outline.withOpacity(0.3) : AppColors.mintBgLight,
             ),
           ),
         ),
@@ -767,7 +752,7 @@ class _RegistrationScreenState extends State<RegistrationScreen>
         Text(
           _strengthLabel,
           style: TextStyle(
-            color: AppColors.textSecondary,
+            color: isDark ? cs.onSurfaceVariant : AppColors.textSecondary,
             fontWeight: FontWeight.w700,
             fontSize: ui.font(12.5),
           ),
@@ -776,26 +761,25 @@ class _RegistrationScreenState extends State<RegistrationScreen>
     );
   }
 
-  Color _meterColor(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    if (_strength >= .80) return cs.primary;
-    if (_strength >= .55) return AppColors.secondary;
-    if (_strength >= .35) return AppColors.outline;
+  Color _meterColor(BuildContext context, bool isDark, ColorScheme cs) {
+    if (_strength >= .80) return isDark ? cs.primary : AppColors.primary;
+    if (_strength >= .55) return isDark ? cs.secondary : AppColors.secondary;
+    if (_strength >= .35) return isDark ? cs.outline : AppColors.outline;
     return cs.error;
   }
 
-  Widget _primaryGradientButton(UIScale ui) {
+  Widget _primaryGradientButton(UIScale ui, bool isDark, ColorScheme cs) {
     return Container(
       width: double.infinity,
       height: ui.buttonHeight,
       decoration: BoxDecoration(
-        gradient: const LinearGradient(
-          colors: [AppColors.primary, AppColors.secondary],
+        gradient: LinearGradient(
+          colors: isDark ? [cs.primary, cs.secondary] : [AppColors.primary, AppColors.secondary],
         ),
         borderRadius: BorderRadius.circular(ui.radius(30)),
         boxShadow: [
           BoxShadow(
-            color: AppColors.primary.withOpacity(ui.reduceFx ? 0.18 : 0.30),
+            color: (isDark ? cs.primary : AppColors.primary).withOpacity(ui.reduceFx ? 0.18 : 0.30),
             blurRadius: ui.reduceFx ? 12 : 20,
             offset: const Offset(0, 8),
           ),
@@ -816,12 +800,12 @@ class _RegistrationScreenState extends State<RegistrationScreen>
           ),
         ),
         child: _busy
-            ? const SizedBox(
+            ? SizedBox(
           height: 20,
           width: 20,
           child: CircularProgressIndicator(
             strokeWidth: 2,
-            valueColor: AlwaysStoppedAnimation<Color>(AppColors.surface),
+            valueColor: AlwaysStoppedAnimation<Color>(isDark ? cs.onPrimary : AppColors.surface),
           ),
         )
             : Text(
@@ -829,112 +813,14 @@ class _RegistrationScreenState extends State<RegistrationScreen>
           style: TextStyle(
             fontSize: ui.font(15.5),
             fontWeight: FontWeight.w700,
-            color: AppColors.surface,
+            color: isDark ? cs.onPrimary : AppColors.surface,
           ),
         ),
       ),
     );
   }
 
-  Widget _divider(UIScale ui) {
-    return Row(
-      children: [
-        Expanded(
-          child: Container(
-            height: 1,
-            decoration: BoxDecoration(
-              gradient: LinearGradient(
-                colors: [
-                  Colors.transparent,
-                  AppColors.mintBgLight.withOpacity(0.5),
-                ],
-              ),
-            ),
-          ),
-        ),
-        Padding(
-          padding: EdgeInsets.symmetric(horizontal: ui.inset(14)),
-          child: Text(
-            'OR',
-            style: TextStyle(
-              color: AppColors.textSecondary,
-              fontWeight: FontWeight.w500,
-              fontSize: ui.font(12),
-            ),
-          ),
-        ),
-        Expanded(
-          child: Container(
-            height: 1,
-            decoration: BoxDecoration(
-              gradient: LinearGradient(
-                colors: [
-                  AppColors.mintBgLight.withOpacity(0.5),
-                  Colors.transparent,
-                ],
-              ),
-            ),
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _googleButton(UIScale ui) {
-    return Container(
-      width: double.infinity,
-      height: ui.buttonHeight,
-      decoration: BoxDecoration(
-        color: AppColors.surface,
-        borderRadius: BorderRadius.circular(ui.radius(30)),
-        border: Border.all(color: AppColors.mintBgLight, width: 1),
-        boxShadow: [
-          BoxShadow(
-            color: AppColors.deep.withOpacity(0.05),
-            blurRadius: ui.reduceFx ? 6 : 10,
-            offset: const Offset(0, 4),
-          ),
-        ],
-      ),
-      child: OutlinedButton.icon(
-        onPressed: _busy
-            ? null
-            : () {
-          HapticFeedback.lightImpact();
-          _googleSignup();
-        },
-        style: OutlinedButton.styleFrom(
-          side: BorderSide.none,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(ui.radius(30)),
-          ),
-        ),
-        icon: Image.asset(
-          'image/google.png',
-          width: ui.icon(22),
-          height: ui.icon(22),
-          errorBuilder: (_, __, ___) => Icon(
-            Icons.g_mobiledata_rounded,
-            size: ui.icon(26),
-            color: AppColors.primary,
-          ),
-        ),
-        label: FittedBox(
-          fit: BoxFit.scaleDown,
-          child: Text(
-            'Sign up with Google',
-            style: TextStyle(
-              fontSize: ui.font(13.5),
-              fontWeight: FontWeight.w600,
-              color: AppColors.textPrimary,
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _loginLink(UIScale ui) {
+  Widget _loginLink(UIScale ui, bool isDark, ColorScheme cs) {
     return Wrap(
       alignment: WrapAlignment.center,
       crossAxisAlignment: WrapCrossAlignment.center,
@@ -943,14 +829,14 @@ class _RegistrationScreenState extends State<RegistrationScreen>
         Text(
           'Already have an account?',
           style: TextStyle(
-            color: AppColors.textSecondary,
+            color: isDark ? cs.onSurfaceVariant : AppColors.textSecondary,
             fontSize: ui.font(13),
           ),
         ),
         TextButton(
           onPressed: () =>
               Navigator.pushReplacementNamed(context, AppRoutes.login),
-          style: TextButton.styleFrom(foregroundColor: AppColors.primary),
+          style: TextButton.styleFrom(foregroundColor: isDark ? cs.primary : AppColors.primary),
           child: Text(
             'Log in',
             style: TextStyle(

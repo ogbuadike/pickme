@@ -304,6 +304,9 @@ class _HomePageState extends State<HomePage>
   DateTime _lastNearbyTickAt = DateTime.fromMillisecondsSinceEpoch(0);
   final Map<String, DateTime> _driverLastSeen = <String, DateTime>{};
 
+  // FIXED: Declared the missing variable here!
+  final Map<String, double> _driverComputedHeading = <String, double>{};
+
   Timer? _fitBoundsDebounce;
 
   TripPhase _tripPhase = TripPhase.browsing;
@@ -313,6 +316,34 @@ class _HomePageState extends State<HomePage>
   Timer? _tripTickTimer;
 
   late final RideMarketService _rideMarketService;
+
+  // --- MAP STYLE FOR OLED DARK MODE ---
+  String? _getMapStyle(bool isDark) {
+    if (!isDark) return null;
+    return '''[
+      {"elementType":"geometry","stylers":[{"color":"#212121"}]},
+      {"elementType":"labels.icon","stylers":[{"visibility":"off"}]},
+      {"elementType":"labels.text.fill","stylers":[{"color":"#757575"}]},
+      {"elementType":"labels.text.stroke","stylers":[{"color":"#212121"}]},
+      {"featureType":"administrative","elementType":"geometry","stylers":[{"color":"#757575"}]},
+      {"featureType":"administrative.country","elementType":"labels.text.fill","stylers":[{"color":"#9e9e9e"}]},
+      {"featureType":"administrative.land_parcel","stylers":[{"visibility":"off"}]},
+      {"featureType":"administrative.locality","elementType":"labels.text.fill","stylers":[{"color":"#bdbdbd"}]},
+      {"featureType":"poi","elementType":"labels.text.fill","stylers":[{"color":"#757575"}]},
+      {"featureType":"poi.park","elementType":"geometry","stylers":[{"color":"#181818"}]},
+      {"featureType":"poi.park","elementType":"labels.text.fill","stylers":[{"color":"#616161"}]},
+      {"featureType":"poi.park","elementType":"labels.text.stroke","stylers":[{"color":"#1b1b1b"}]},
+      {"featureType":"road","elementType":"geometry.fill","stylers":[{"color":"#2c2c2c"}]},
+      {"featureType":"road","elementType":"labels.text.fill","stylers":[{"color":"#8a8a8a"}]},
+      {"featureType":"road.arterial","elementType":"geometry","stylers":[{"color":"#373737"}]},
+      {"featureType":"road.highway","elementType":"geometry","stylers":[{"color":"#3c3c3c"}]},
+      {"featureType":"road.highway.controlled_access","elementType":"geometry","stylers":[{"color":"#4e4e4e"}]},
+      {"featureType":"road.local","elementType":"labels.text.fill","stylers":[{"color":"#616161"}]},
+      {"featureType":"transit","elementType":"labels.text.fill","stylers":[{"color":"#757575"}]},
+      {"featureType":"water","elementType":"geometry","stylers":[{"color":"#000000"}]},
+      {"featureType":"water","elementType":"labels.text.fill","stylers":[{"color":"#3d3d3d"}]}
+    ]''';
+  }
 
   Future<void> _bookingStartTrip() async {
     final b = _booking;
@@ -977,7 +1008,7 @@ class _HomePageState extends State<HomePage>
         pos != null) {
       _moveCameraRealtimeV2(
         target: _forwardBiasTarget(user: pos, bearingDeg: smooth),
-        bearing: smooth,
+        bearing: _rotateWithHeading ? smooth : 0,
         zoom: (sp >= kVehicleSpeedThreshold)
             ? 17.5
             : (sp >= kPedestrianSpeedThreshold ? 17.0 : 16.5),
@@ -1070,7 +1101,6 @@ class _HomePageState extends State<HomePage>
   // ENHANCED RESPONSIVE LAYOUT METHODS - SECTION 1: Smart Bounds Calculation
   // ============================================================================
 
-  /// Computes smart bounds with intelligent altitude buffer
   LatLngBounds _computeSmartBounds(List<LatLng> points) {
     if (points.isEmpty) return LatLngBounds(
       southwest: const LatLng(0, 0),
@@ -1089,12 +1119,10 @@ class _HomePageState extends State<HomePage>
       maxLng = math.max(maxLng, p.longitude);
     }
 
-    // Add smart buffer based on span magnitude
     final latSpan = maxLat - minLat;
     final lngSpan = maxLng - minLng;
     final maxSpan = math.max(latSpan, lngSpan);
 
-    // Altitude buffer: prevents over-zoom (10% of span, minimum 0.0018°)
     final altitudeBuffer = math.max(maxSpan * 0.10, 0.0018);
 
     minLat = math.max(minLat - altitudeBuffer, -90.0);
@@ -1102,7 +1130,6 @@ class _HomePageState extends State<HomePage>
     minLng = math.max(minLng - altitudeBuffer, -180.0);
     maxLng = math.min(maxLng + altitudeBuffer, 180.0);
 
-    // Ensure minimum dimensions for single-point routes
     if ((maxLat - minLat).abs() < 0.0001) {
       minLat -= 0.0008;
       maxLat += 0.0008;
@@ -1118,26 +1145,19 @@ class _HomePageState extends State<HomePage>
     );
   }
 
-  /// Calculates optimal bounds padding based on screen geometry
   double _computeOptimalBoundsPadding(Size screenSize) {
     final aspect = screenSize.width / screenSize.height;
     final minDim = math.min(screenSize.width, screenSize.height);
 
-    // Ultra-wide (landscape tablet): aggressive padding
     if (aspect > 1.6) {
       return (minDim * 0.18).clamp(60.0, 180.0);
     }
-
-    // Standard landscape
     if (aspect > 1.3) {
       return (minDim * 0.22).clamp(70.0, 200.0);
     }
-
-    // Portrait (standard)
     return (minDim * 0.16).clamp(80.0, 220.0);
   }
 
-  /// Computes optimal zoom level from bounds
   double _computeZoomFromBounds(LatLngBounds bounds) {
     final latSpan = bounds.northeast.latitude - bounds.southwest.latitude;
     final lngSpan = bounds.northeast.longitude - bounds.southwest.longitude;
@@ -1155,7 +1175,6 @@ class _HomePageState extends State<HomePage>
   // ENHANCED RESPONSIVE LAYOUT METHODS - SECTION 2: Responsive Padding
   // ============================================================================
 
-  /// Enhanced map padding calculation with orientation awareness
   void _applyMapPadding() {
     if (!mounted) return;
 
@@ -1186,7 +1205,6 @@ class _HomePageState extends State<HomePage>
     });
   }
 
-  /// Enhanced effective bounds padding with context awareness
   double _effectiveBoundsPaddingV2(double basePad) {
     final mq = _safeMediaQuery();
     final minSide = math.min(mq.size.width, mq.size.height);
@@ -1205,7 +1223,6 @@ class _HomePageState extends State<HomePage>
   // ENHANCED RESPONSIVE LAYOUT METHODS - SECTION 3: Camera Animation
   // ============================================================================
 
-  /// Robust camera animation with multi-tier retry strategy
   Future<void> _animateBoundsSafeV2(
       LatLngBounds bounds, {
         double basePadding = 70,
@@ -1215,10 +1232,8 @@ class _HomePageState extends State<HomePage>
     _camMode = _CamMode.overview;
     _rotateWithHeading = false;
 
-    //final mq = MediaQuery.of(context);
     final pad = _effectiveBoundsPaddingV2(basePadding);
 
-    // Multi-tier retry strategy with exponential backoff
     const maxAttempts = 3;
     const delayMs = [0, 80, 160];
     const cameraTilts = [0.0, 0.0, 30.0];
@@ -1233,10 +1248,9 @@ class _HomePageState extends State<HomePage>
           CameraUpdate.newLatLngBounds(bounds, pad),
         );
 
-        return; // Success
+        return;
       } catch (_) {
         if (attempt == maxAttempts - 1) {
-          // Final fallback: center on bounds with computed zoom
           try {
             final center = LatLng(
               (bounds.northeast.latitude + bounds.southwest.latitude) / 2,
@@ -1253,16 +1267,13 @@ class _HomePageState extends State<HomePage>
                 ),
               ),
             );
-          } catch (_) {
-            // Silent fail - UI remains functional
-          }
+          } catch (_) {}
           return;
         }
       }
     }
   }
 
-  /// Responsive polyline auto-fit (main entry point)
   Future<void> _fitCurrentRouteToViewportV2({
     bool waitForLayout = true,
   }) async {
@@ -1279,7 +1290,6 @@ class _HomePageState extends State<HomePage>
 
     if (pts.length < 2) return;
 
-    // Optional: wait for layout to stabilize
     if (waitForLayout) {
       _scheduleMapPaddingUpdate();
       await Future.delayed(const Duration(milliseconds: 32));
@@ -1289,7 +1299,6 @@ class _HomePageState extends State<HomePage>
     await _animateBoundsSafeV2(bounds, basePadding: 70);
   }
 
-  /// Landscape-aware camera movement with adaptive timing
   Future<void> _moveCameraRealtimeV2({
     required LatLng target,
     required double bearing,
@@ -1330,7 +1339,6 @@ class _HomePageState extends State<HomePage>
   // ENHANCED RESPONSIVE LAYOUT METHODS - SECTION 4: Schedule Updates
   // ============================================================================
 
-  /// Enhanced schedule with auto-refit on layout changes
   void _scheduleMapPaddingUpdate() {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
@@ -1349,7 +1357,6 @@ class _HomePageState extends State<HomePage>
         _sheetHeight = newHeight;
         _applyMapPadding();
 
-        // Auto-fit route if visible
         if (_routePts.isNotEmpty && !_expanded && _map != null) {
           _fitBoundsDebounce?.cancel();
           _fitBoundsDebounce = Timer(
@@ -1503,7 +1510,6 @@ class _HomePageState extends State<HomePage>
         distanceFilter: distanceFilter,
         intervalDuration: Duration(milliseconds: gp.intervalMs),
         forceLocationManager: false,
-        // Removed foregroundNotificationConfig to stop the "Tracking location..." notification
       );
     } else if (tp == TargetPlatform.iOS) {
       return AppleSettings(
@@ -1521,8 +1527,58 @@ class _HomePageState extends State<HomePage>
   bool _isGoodFix(Position p, double maxAccM) {
     if (!p.latitude.isFinite || !p.longitude.isFinite) return false;
     if (p.latitude == 0 && p.longitude == 0) return false;
-    if (p.accuracy <= 0 || p.accuracy > 50000) return false;
+    if (p.accuracy <= 0) return false; // Relaxed max accuracy rule
     return p.accuracy <= maxAccM;
+  }
+
+  // --- FIXED: MASSIVELY RELAXED LOCATION REQUIREMENTS SO IT ALWAYS GETS A GPS FIX ---
+  Future<Position?> _acquirePositionRobust() async {
+    const maxAcceptableAcc = 2500.0; // Relaxed heavily to allow network/indoor fixes
+    const tries = 2; // Reduced tries so it doesn't hang
+
+    try {
+      final last = await Geolocator.getLastKnownPosition();
+      if (last != null &&
+          last.timestamp != null &&
+          DateTime.now().difference(last.timestamp!).inMinutes < 10 && // Allow older cache initially
+          _isGoodFix(last, 3500)) {
+        _logLocationDiagnostic('Using fresh last-known');
+        return last;
+      }
+    } catch (_) {}
+
+    for (var attempt = 1; attempt <= tries; attempt++) {
+      try {
+        final p = await Geolocator.getCurrentPosition(
+          desiredAccuracy: LocationAccuracy.high, // Dropped from bestForNavigation
+          timeLimit: const Duration(seconds: 8),
+        );
+        if (_isGoodFix(p, maxAcceptableAcc)) return p;
+      } catch (_) {}
+
+      final sample = await _firstStreamFix(
+        deadline: const Duration(seconds: 4),
+        moving: true,
+        maxAccM: maxAcceptableAcc * 2,
+      );
+      if (sample != null) return sample;
+    }
+
+    // Ultimate fallback: Just get whatever location the phone has
+    try {
+      final p = await Geolocator.getCurrentPosition(
+        desiredAccuracy: LocationAccuracy.medium,
+        timeLimit: const Duration(seconds: 5),
+      );
+      return p;
+    } catch (_) {}
+
+    try {
+      final last = await Geolocator.getLastKnownPosition();
+      if (last != null) return last;
+    } catch (_) {}
+
+    return null;
   }
 
   Future<Position?> _firstStreamFix({
@@ -1612,7 +1668,6 @@ class _HomePageState extends State<HomePage>
         isServiceIssue: false,
       );
 
-      // Re-check after returning from modal/settings
       perm = await Geolocator.checkPermission();
       if (perm == LocationPermission.denied || perm == LocationPermission.deniedForever) {
         _toast('Location Required', 'Please grant location access in Settings.');
@@ -1629,7 +1684,9 @@ class _HomePageState extends State<HomePage>
     if (!mounted) return;
 
     final uiScale = UIScale.of(context);
-    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+    final cs = theme.colorScheme;
 
     await showModalBottomSheet<void>(
       context: context,
@@ -1641,10 +1698,10 @@ class _HomePageState extends State<HomePage>
           child: Container(
             margin: EdgeInsets.all(uiScale.inset(16)),
             decoration: BoxDecoration(
-              color: isDark ? AppColors.darkColor.withOpacity(0.85) : Colors.white.withOpacity(0.90),
+              color: isDark ? cs.surface.withOpacity(0.85) : Colors.white.withOpacity(0.90),
               borderRadius: BorderRadius.circular(uiScale.radius(28)),
               border: Border.all(
-                color: isDark ? Colors.white.withOpacity(0.1) : AppColors.primary.withOpacity(0.2),
+                color: isDark ? cs.outline.withOpacity(0.5) : AppColors.primary.withOpacity(0.2),
                 width: 1.5,
               ),
               boxShadow: [
@@ -1658,50 +1715,48 @@ class _HomePageState extends State<HomePage>
             child: ClipRRect(
               borderRadius: BorderRadius.circular(uiScale.radius(28)),
               child: BackdropFilter(
-                filter: ui.ImageFilter.blur(sigmaX: 20, sigmaY: 20), // <--- FIXED: Added ui. prefix back here
+                filter: ui.ImageFilter.blur(sigmaX: 20, sigmaY: 20),
                 child: Padding(
                   padding: EdgeInsets.all(uiScale.inset(24)),
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      // ── Drag Handle ──
                       Container(
                         width: uiScale.inset(48),
                         height: uiScale.inset(5),
                         decoration: BoxDecoration(
-                          color: isDark ? Colors.white.withOpacity(0.2) : Colors.black.withOpacity(0.1),
+                          color: isDark ? cs.onSurfaceVariant.withOpacity(0.5) : Colors.black.withOpacity(0.1),
                           borderRadius: BorderRadius.circular(uiScale.radius(10)),
                         ),
                       ),
                       SizedBox(height: uiScale.gap(32)),
 
-                      // ── Premium Illustrated Icon ──
                       Stack(
                         alignment: Alignment.center,
                         children: [
-                          // Outer glow ring
                           Container(
                             width: uiScale.inset(90),
                             height: uiScale.inset(90),
                             decoration: BoxDecoration(
                               shape: BoxShape.circle,
-                              color: AppColors.primary.withOpacity(0.12),
+                              color: (isDark ? cs.primary : AppColors.primary).withOpacity(0.12),
                             ),
                           ),
-                          // Inner vibrant circle
                           Container(
                             width: uiScale.inset(65),
                             height: uiScale.inset(65),
                             decoration: BoxDecoration(
                               shape: BoxShape.circle,
-                              gradient: const LinearGradient(
-                                colors: [AppColors.primary, AppColors.secondary],
+                              gradient: LinearGradient(
+                                colors: isDark
+                                    ? [cs.primary, cs.secondary]
+                                    : [AppColors.primary, AppColors.secondary],
                                 begin: Alignment.topLeft,
                                 end: Alignment.bottomRight,
                               ),
                               boxShadow: [
                                 BoxShadow(
-                                  color: AppColors.primary.withOpacity(0.4),
+                                  color: (isDark ? cs.primary : AppColors.primary).withOpacity(0.4),
                                   blurRadius: 18,
                                   offset: const Offset(0, 8),
                                 ),
@@ -1709,7 +1764,7 @@ class _HomePageState extends State<HomePage>
                             ),
                             child: Icon(
                               isServiceIssue ? Icons.gps_off_rounded : Icons.my_location_rounded,
-                              color: Colors.white,
+                              color: isDark ? cs.onPrimary : Colors.white,
                               size: uiScale.icon(32),
                             ),
                           ),
@@ -1717,14 +1772,13 @@ class _HomePageState extends State<HomePage>
                       ),
                       SizedBox(height: uiScale.gap(24)),
 
-                      // ── Main Text ──
                       Text(
                         title,
                         textAlign: TextAlign.center,
                         style: TextStyle(
                           fontSize: uiScale.font(24),
                           fontWeight: FontWeight.w900,
-                          color: isDark ? Colors.white : AppColors.textPrimary,
+                          color: isDark ? cs.onSurface : AppColors.textPrimary,
                           letterSpacing: -0.5,
                         ),
                       ),
@@ -1735,35 +1789,33 @@ class _HomePageState extends State<HomePage>
                         style: TextStyle(
                           fontSize: uiScale.font(14),
                           fontWeight: FontWeight.w600,
-                          color: AppColors.textSecondary,
+                          color: isDark ? cs.onSurfaceVariant : AppColors.textSecondary,
                           height: 1.4,
                         ),
                       ),
 
                       SizedBox(height: uiScale.gap(28)),
 
-                      // ── Smart Info Bullets ──
                       Container(
                         padding: EdgeInsets.all(uiScale.inset(16)),
                         decoration: BoxDecoration(
-                          color: isDark ? Colors.white.withOpacity(0.04) : AppColors.mintBgLight.withOpacity(0.4),
+                          color: isDark ? cs.surfaceVariant.withOpacity(0.3) : AppColors.mintBgLight.withOpacity(0.4),
                           borderRadius: BorderRadius.circular(uiScale.radius(16)),
-                          border: Border.all(color: AppColors.primary.withOpacity(0.05)),
+                          border: Border.all(color: isDark ? cs.outline : AppColors.primary.withOpacity(0.05)),
                         ),
                         child: Column(
                           children: [
-                            _buildInfoBullet(uiScale, isDark, Icons.flash_on_rounded, 'Find nearby drivers instantly'),
+                            _buildInfoBullet(uiScale, isDark, cs, Icons.flash_on_rounded, 'Find nearby drivers instantly'),
                             SizedBox(height: uiScale.gap(12)),
-                            _buildInfoBullet(uiScale, isDark, Icons.timer_rounded, 'Get highly accurate ETAs'),
+                            _buildInfoBullet(uiScale, isDark, cs, Icons.timer_rounded, 'Get highly accurate ETAs'),
                             SizedBox(height: uiScale.gap(12)),
-                            _buildInfoBullet(uiScale, isDark, Icons.shield_rounded, 'Share live trips for safety'),
+                            _buildInfoBullet(uiScale, isDark, cs, Icons.shield_rounded, 'Share live trips for safety'),
                           ],
                         ),
                       ),
 
                       SizedBox(height: uiScale.gap(36)),
 
-                      // ── Action Buttons ──
                       Row(
                         children: [
                           Expanded(
@@ -1778,7 +1830,7 @@ class _HomePageState extends State<HomePage>
                                 style: TextStyle(
                                   fontSize: uiScale.font(15),
                                   fontWeight: FontWeight.w800,
-                                  color: AppColors.textSecondary,
+                                  color: isDark ? cs.onSurfaceVariant : AppColors.textSecondary,
                                 ),
                               ),
                             ),
@@ -1796,8 +1848,8 @@ class _HomePageState extends State<HomePage>
                                 }
                               },
                               style: ElevatedButton.styleFrom(
-                                backgroundColor: AppColors.primary,
-                                foregroundColor: Colors.white,
+                                backgroundColor: isDark ? cs.primary : AppColors.primary,
+                                foregroundColor: isDark ? cs.onPrimary : Colors.white,
                                 elevation: 0,
                                 padding: EdgeInsets.symmetric(vertical: uiScale.inset(16)),
                                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(uiScale.radius(16))),
@@ -1825,11 +1877,10 @@ class _HomePageState extends State<HomePage>
     );
   }
 
-  // Helper Widget for the Smart Info Bullets
-  Widget _buildInfoBullet(UIScale uiScale, bool isDark, IconData icon, String text) {
+  Widget _buildInfoBullet(UIScale uiScale, bool isDark, ColorScheme cs, IconData icon, String text) {
     return Row(
       children: [
-        Icon(icon, size: uiScale.icon(18), color: AppColors.primary),
+        Icon(icon, size: uiScale.icon(18), color: isDark ? cs.primary : AppColors.primary),
         SizedBox(width: uiScale.gap(12)),
         Expanded(
           child: Text(
@@ -1837,78 +1888,12 @@ class _HomePageState extends State<HomePage>
             style: TextStyle(
               fontSize: uiScale.font(13),
               fontWeight: FontWeight.w700,
-              color: isDark ? Colors.white.withOpacity(0.9) : AppColors.textPrimary.withOpacity(0.8),
+              color: isDark ? cs.onSurface : AppColors.textPrimary.withOpacity(0.8),
             ),
           ),
         ),
       ],
     );
-  }
-
-  Future<Position?> _acquirePositionRobust() async {
-    const maxAcceptableAcc = 200.0;
-    const tries = 3;
-
-    try {
-      final last = await Geolocator.getLastKnownPosition();
-      if (last != null &&
-          last.timestamp != null &&
-          DateTime.now().difference(last.timestamp!).inMinutes < 2 &&
-          _isGoodFix(last, 400)) {
-        _logLocationDiagnostic(
-            'Using fresh last-known to seed UI: acc=${last.accuracy}');
-        return last;
-      }
-    } catch (_) {}
-
-    for (var attempt = 1; attempt <= tries; attempt++) {
-      try {
-        _logLocationDiagnostic(
-            'Acquisition attempt $attempt/$tries (bestForNavigation)');
-        final p = await Geolocator.getCurrentPosition(
-          desiredAccuracy: LocationAccuracy.bestForNavigation,
-          timeLimit: const Duration(seconds: 10),
-        );
-        if (_isGoodFix(p, maxAcceptableAcc)) return p;
-        _logLocationDiagnostic(
-            'Fix too coarse (acc=${p.accuracy.toStringAsFixed(1)}m) — trying stream…');
-      } on TimeoutException {
-        _logLocationDiagnostic('GPS timeout on attempt $attempt/$tries');
-      } on LocationServiceDisabledException {
-        _logLocationDiagnostic('Services disabled during acquisition');
-        return null;
-      } on PermissionDeniedException {
-        _logLocationDiagnostic('Permission denied during acquisition');
-        return null;
-      } catch (e) {
-        _logLocationDiagnostic('Acquisition error attempt $attempt: $e');
-      }
-
-      final sample = await _firstStreamFix(
-        deadline: Duration(milliseconds: 1200 + (attempt * 600)),
-        moving: true,
-        maxAccM: maxAcceptableAcc * (attempt == tries ? 2 : 1),
-      );
-      if (sample != null) return sample;
-    }
-
-    try {
-      _logLocationDiagnostic('Attempting high accuracy fallback (8s)');
-      final p = await Geolocator.getCurrentPosition(
-        desiredAccuracy: LocationAccuracy.high,
-        timeLimit: const Duration(seconds: 8),
-      );
-      if (_isGoodFix(p, 400)) return p;
-    } catch (e) {
-      _logLocationDiagnostic('High accuracy fallback failed: $e');
-    }
-
-    try {
-      final last = await Geolocator.getLastKnownPosition();
-      if (last != null) return last;
-    } catch (_) {}
-
-    return null;
   }
 
   Future<void> _startGpsStream(Position seed) async {
@@ -2173,13 +2158,15 @@ class _HomePageState extends State<HomePage>
 
     if (!mounted) return;
     setState(() {
+      final isDark = Theme.of(context).brightness == Brightness.dark;
+      final cs = Theme.of(context).colorScheme;
       _circles.removeWhere((x) => x.circleId == _accuracyCircleId);
       _circles.add(Circle(
         circleId: _accuracyCircleId,
         center: c,
         radius: r,
-        fillColor: AppColors.primary.withOpacity(0.10),
-        strokeColor: AppColors.primary.withOpacity(0.32),
+        fillColor: (isDark ? cs.primary : AppColors.primary).withOpacity(0.10),
+        strokeColor: (isDark ? cs.primary : AppColors.primary).withOpacity(0.32),
         strokeWidth: 2,
       ));
     });
@@ -2222,13 +2209,15 @@ class _HomePageState extends State<HomePage>
 
     final radius = _visualSearchRadiusMeters();
     setState(() {
+      final isDark = Theme.of(context).brightness == Brightness.dark;
+      final cs = Theme.of(context).colorScheme;
       _circles.removeWhere((x) => x.circleId == _searchCircleId);
       _circles.add(Circle(
         circleId: _searchCircleId,
         center: center,
         radius: radius,
-        fillColor: const Color(0xFF00A651).withOpacity(0.12),
-        strokeColor: const Color(0xFF00A651).withOpacity(0.30),
+        fillColor: (isDark ? cs.primary : const Color(0xFF00A651)).withOpacity(0.12),
+        strokeColor: (isDark ? cs.primary : const Color(0xFF00A651)).withOpacity(0.30),
         strokeWidth: 2,
       ));
     });
@@ -2446,10 +2435,13 @@ class _HomePageState extends State<HomePage>
       List<LatLng> decPts,
       List<_SpeedInterval> intervals,
       ) {
+    if (!mounted) return;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+
     _lines.add(Polyline(
       polylineId: const PolylineId('route_halo'),
       points: decPts,
-      color: Colors.white.withOpacity(0.92),
+      color: isDark ? Colors.white.withOpacity(0.85) : Colors.white.withOpacity(0.92),
       width: 11,
       startCap: Cap.roundCap,
       endCap: Cap.roundCap,
@@ -3044,6 +3036,16 @@ class _HomePageState extends State<HomePage>
     for (final d in list) {
       _driverLastSeen[d.id] = now;
       final existing = _drivers[d.id];
+
+      if (existing != null) {
+        final dist = _haversine(existing.ll, d.ll);
+        if (dist > 2.0) {
+          _driverComputedHeading[d.id] = _bearingBetween(existing.ll, d.ll);
+        }
+      } else {
+        _driverComputedHeading[d.id] = d.heading > 0 ? d.heading : 0.0;
+      }
+
       if (existing == null) {
         _drivers[d.id] = d;
         changed = true;
@@ -3059,6 +3061,7 @@ class _HomePageState extends State<HomePage>
     });
     for (final id in staleIds) {
       _driverLastSeen.remove(id);
+      _driverComputedHeading.remove(id);
       if (_drivers.remove(id) != null) changed = true;
     }
 
@@ -3143,13 +3146,14 @@ class _HomePageState extends State<HomePage>
         BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueAzure);
     final next = <Marker>{};
     for (final d in _drivers.values) {
+      final computedRot = _driverComputedHeading[d.id] ?? d.heading;
       next.add(Marker(
         markerId: MarkerId('driver_${d.id}'),
         position: d.ll,
         icon: icon,
         flat: true,
-        rotation: d.heading,
-        anchor: const Offset(0.5, 0.6),
+        rotation: computedRot,
+        anchor: const Offset(0.5, 0.5),
         zIndex: 5,
       ));
     }
@@ -3281,18 +3285,20 @@ class _HomePageState extends State<HomePage>
       RideNearbyDriver driver,
       RideOffer offer,
       ) async {
-    // 1. Fetch User Balance
     final double userBalance = _user != null
         ? double.tryParse(_user!['bal']?.toString() ?? _user!['user_bal']?.toString() ?? '0.0') ?? 0.0
         : 0.0;
 
     final double ridePrice = double.tryParse(offer.price.toString()) ?? 0.0;
 
-    // 2. Show Payment Selection Modal
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+    final cs = theme.colorScheme;
+
     final String? selectedPaymentMethod = await showModalBottomSheet<String>(
       context: context,
       isScrollControlled: true,
-      backgroundColor: Theme.of(context).scaffoldBackgroundColor,
+      backgroundColor: isDark ? cs.surface : theme.cardColor,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
       ),
@@ -3304,19 +3310,18 @@ class _HomePageState extends State<HomePage>
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Text(
+                Text(
                   'Select Payment Method',
-                  style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+                  style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: isDark ? cs.onSurface : AppColors.textPrimary),
                 ),
                 const SizedBox(height: 8),
-                Text('Total Fare: ${offer.currency} ${ridePrice.toStringAsFixed(2)}'),
+                Text('Total Fare: ${offer.currency} ${ridePrice.toStringAsFixed(2)}', style: TextStyle(color: isDark ? cs.onSurfaceVariant : AppColors.textSecondary)),
                 const SizedBox(height: 20),
 
-                // Wallet Option
                 ListTile(
-                  leading: const Icon(Icons.account_balance_wallet, color: Colors.blue),
-                  title: const Text('Wallet (Automatic)'),
-                  subtitle: Text('Balance: ${offer.currency} ${userBalance.toStringAsFixed(2)}'),
+                  leading: Icon(Icons.account_balance_wallet, color: isDark ? cs.primary : Colors.blue),
+                  title: Text('Wallet (Automatic)', style: TextStyle(color: isDark ? cs.onSurface : AppColors.textPrimary, fontWeight: FontWeight.w600)),
+                  subtitle: Text('Balance: ${offer.currency} ${userBalance.toStringAsFixed(2)}', style: TextStyle(color: isDark ? cs.onSurfaceVariant : AppColors.textSecondary)),
                   onTap: () {
                     if (userBalance < ridePrice) {
                       showToastNotification(
@@ -3330,13 +3335,12 @@ class _HomePageState extends State<HomePage>
                     }
                   },
                 ),
-                const Divider(),
+                Divider(color: isDark ? cs.outline.withOpacity(0.5) : AppColors.mintBgLight.withOpacity(0.5)),
 
-                // Cash Option
                 ListTile(
                   leading: const Icon(Icons.money, color: Colors.green),
-                  title: const Text('Cash (Manual)'),
-                  subtitle: const Text('Pay the driver directly'),
+                  title: Text('Cash (Manual)', style: TextStyle(color: isDark ? cs.onSurface : AppColors.textPrimary, fontWeight: FontWeight.w600)),
+                  subtitle: Text('Pay the driver directly', style: TextStyle(color: isDark ? cs.onSurfaceVariant : AppColors.textSecondary)),
                   onTap: () {
                     Navigator.pop(ctx, 'cash');
                   },
@@ -3348,7 +3352,6 @@ class _HomePageState extends State<HomePage>
       },
     );
 
-    // If user dismissed the modal without selecting
     if (selectedPaymentMethod == null) return;
 
     _stopRideMarket(restartNearbyPolling: false);
@@ -3371,7 +3374,6 @@ class _HomePageState extends State<HomePage>
     final LatLng pickup = _pickupAnchorLL() ?? _pts.first.latLng!;
     final LatLng destination = _destLL() ?? _pts.last.latLng!;
 
-    // 3. Pass the selected payment method to the booking controller
     final String? rideId = await _startBooking(
       riderId: riderId,
       driverId: driver.id,
@@ -3577,7 +3579,7 @@ class _HomePageState extends State<HomePage>
             BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueViolet),
         flat: true,
         rotation: heading,
-        anchor: const Offset(0.5, 0.6),
+        anchor: const Offset(0.5, 0.5),
         zIndex: 50,
       ));
     });
@@ -3603,12 +3605,13 @@ class _HomePageState extends State<HomePage>
 
     if (!mounted) return;
     setState(() {
+      final isDark = Theme.of(context).brightness == Brightness.dark;
       _driverLines
         ..clear()
         ..add(Polyline(
           polylineId: const PolylineId('driver_halo'),
           points: v2.points,
-          color: Colors.white.withOpacity(0.92),
+          color: isDark ? Colors.white.withOpacity(0.85) : Colors.white.withOpacity(0.92),
           width: 10,
           startCap: Cap.roundCap,
           endCap: Cap.roundCap,
@@ -3654,12 +3657,13 @@ class _HomePageState extends State<HomePage>
 
     if (!mounted) return;
     setState(() {
+      final isDark = Theme.of(context).brightness == Brightness.dark;
       _driverLines
         ..clear()
         ..add(Polyline(
           polylineId: const PolylineId('trip_halo'),
           points: v2.points,
-          color: Colors.white.withOpacity(0.92),
+          color: isDark ? Colors.white.withOpacity(0.85) : Colors.white.withOpacity(0.92),
           width: 10,
           startCap: Cap.roundCap,
           endCap: Cap.roundCap,
@@ -3700,9 +3704,12 @@ class _HomePageState extends State<HomePage>
       final driverLL = _engagedDriverLLFromPools();
       if (driverLL == null) return;
 
-      final head = (_engagedDriverId != null && _drivers.containsKey(_engagedDriverId))
+      final head = (_engagedDriverId != null && _driverComputedHeading.containsKey(_engagedDriverId))
+          ? _driverComputedHeading[_engagedDriverId]!
+          : ((_engagedDriverId != null && _drivers.containsKey(_engagedDriverId))
           ? _drivers[_engagedDriverId]!.heading
-          : 0.0;
+          : 0.0);
+
       _engagedDriverLL = driverLL;
       _setEngagedDriverMarker(driverLL, head);
 
@@ -4132,6 +4139,10 @@ class _HomePageState extends State<HomePage>
   Widget build(BuildContext context) {
     final mq = MediaQuery.of(context);
     final ui = UIScale.of(context);
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+    final cs = theme.colorScheme;
+
     _cacheUiMetrics(ui, mq);
 
     final s = _scaleFromUi(ui);
@@ -4200,6 +4211,9 @@ class _HomePageState extends State<HomePage>
               circles: _circles,
               onMapCreated: (c) {
                 _map = c;
+                if (isDark) {
+                  _map!.setMapStyle(_getMapStyle(isDark));
+                }
                 _scheduleMapPaddingUpdate();
                 _lastCamTarget = _initialCam.target;
 
@@ -4225,7 +4239,7 @@ class _HomePageState extends State<HomePage>
                 child: ConstrainedBox(
                   constraints: BoxConstraints(maxWidth: summaryMaxWidth),
                   child: Material(
-                    color: Colors.orange.shade700,
+                    color: isDark ? cs.errorContainer : Colors.orange.shade700,
                     borderRadius: BorderRadius.circular(ui.radius(10)),
                     elevation: 6,
                     child: Padding(
@@ -4239,14 +4253,14 @@ class _HomePageState extends State<HomePage>
                           Icon(
                             Icons.wifi_off,
                             size: ui.icon(16),
-                            color: Colors.white,
+                            color: isDark ? cs.onErrorContainer : Colors.white,
                           ),
                           SizedBox(width: ui.gap(8)),
                           Expanded(
                             child: Text(
                               'Connection issue. Retrying...',
                               style: TextStyle(
-                                color: Colors.white,
+                                color: isDark ? cs.onErrorContainer : Colors.white,
                                 fontSize: ui.font(12),
                                 fontWeight: FontWeight.w700,
                               ),
@@ -4271,11 +4285,9 @@ class _HomePageState extends State<HomePage>
                   gradient: LinearGradient(
                     begin: Alignment.topCenter,
                     end: Alignment.bottomCenter,
-                    colors: [
-                      Colors.black.withOpacity(.60),
-                      Colors.black.withOpacity(.25),
-                      Colors.transparent,
-                    ],
+                    colors: isDark
+                        ? [Colors.black.withOpacity(.85), Colors.black.withOpacity(.40), Colors.transparent]
+                        : [Colors.white.withOpacity(.85), Colors.white.withOpacity(.40), Colors.transparent],
                     stops: const [0.0, 0.65, 1.0],
                   ),
                 ),
@@ -4309,15 +4321,15 @@ class _HomePageState extends State<HomePage>
                       vertical: ui.inset(ui.compact ? 7 : 9),
                     ),
                     decoration: BoxDecoration(
-                      color: Theme.of(context).cardColor.withOpacity(0.97),
+                      color: isDark ? cs.surfaceVariant.withOpacity(0.95) : theme.cardColor.withOpacity(0.97),
                       borderRadius: BorderRadius.circular(ui.radius(16)),
                       border: Border.all(
-                        color: AppColors.mintBgLight.withOpacity(.38),
+                        color: isDark ? cs.outline.withOpacity(0.5) : AppColors.mintBgLight.withOpacity(.38),
                         width: 1.2,
                       ),
                       boxShadow: [
                         BoxShadow(
-                          color: Colors.black.withOpacity(.15),
+                          color: Colors.black.withOpacity(isDark ? 0.5 : .15),
                           blurRadius: ui.reduceFx ? 8 : 12,
                           offset: const Offset(0, 6),
                         ),
@@ -4332,13 +4344,14 @@ class _HomePageState extends State<HomePage>
                         Row(
                           mainAxisSize: MainAxisSize.min,
                           children: [
-                            Icon(Icons.schedule_rounded, size: ui.icon(16)),
+                            Icon(Icons.schedule_rounded, size: ui.icon(16), color: isDark ? cs.onSurface : AppColors.textPrimary),
                             SizedBox(width: ui.gap(6)),
                             Text(
                               _durationText!,
                               style: TextStyle(
                                 fontWeight: FontWeight.w800,
                                 fontSize: ui.font(12.5),
+                                color: isDark ? cs.onSurface : AppColors.textPrimary,
                               ),
                             ),
                           ],
@@ -4346,18 +4359,19 @@ class _HomePageState extends State<HomePage>
                         Container(
                           height: ui.gap(16),
                           width: 1,
-                          color: AppColors.mintBgLight.withOpacity(.5),
+                          color: isDark ? cs.outline : AppColors.mintBgLight.withOpacity(.5),
                         ),
                         Row(
                           mainAxisSize: MainAxisSize.min,
                           children: [
-                            Icon(Icons.straighten_rounded, size: ui.icon(16)),
+                            Icon(Icons.straighten_rounded, size: ui.icon(16), color: isDark ? cs.onSurface : AppColors.textPrimary),
                             SizedBox(width: ui.gap(6)),
                             Text(
                               _distanceText!,
                               style: TextStyle(
                                 fontWeight: FontWeight.w800,
                                 fontSize: ui.font(12.5),
+                                color: isDark ? cs.onSurface : AppColors.textPrimary,
                               ),
                             ),
                           ],
@@ -4366,18 +4380,19 @@ class _HomePageState extends State<HomePage>
                           Container(
                             height: ui.gap(16),
                             width: 1,
-                            color: AppColors.mintBgLight.withOpacity(.5),
+                            color: isDark ? cs.outline : AppColors.mintBgLight.withOpacity(.5),
                           ),
                           Row(
                             mainAxisSize: MainAxisSize.min,
                             children: [
-                              Icon(Icons.flag_rounded, size: ui.icon(16)),
+                              Icon(Icons.flag_rounded, size: ui.icon(16), color: isDark ? cs.onSurface : AppColors.textPrimary),
                               SizedBox(width: ui.gap(6)),
                               Text(
                                 'Arrive ${DateFormat('h:mm a').format(_arrivalTime!)}',
                                 style: TextStyle(
                                   fontWeight: FontWeight.w800,
                                   fontSize: ui.font(12.5),
+                                  color: isDark ? cs.onSurface : AppColors.textPrimary,
                                 ),
                               ),
                             ],

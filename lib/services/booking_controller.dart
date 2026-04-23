@@ -1,3 +1,9 @@
+// lib/services/booking_controller.dart
+//
+// ENTERPRISE-GRADE BOOKING SERVICE
+// Handles all background communication, state management, and real-time polling
+// for the ride booking flow. This is a purely headless logic file (No UI).
+
 import 'dart:async';
 import 'dart:convert';
 
@@ -57,6 +63,7 @@ class BookingUpdate {
 
   const BookingUpdate(this.status, this.data, {this.error});
 
+  /// Intelligently extracts the most relevant human-readable message from the server response
   String get displayMessage {
     if (error != null && error!.message.trim().isNotEmpty) {
       return error!.message.trim();
@@ -110,8 +117,7 @@ class BookingController {
 
   static const Duration _pollEvery = Duration(seconds: 2);
 
-  final StreamController<BookingUpdate> _stream =
-  StreamController<BookingUpdate>.broadcast();
+  final StreamController<BookingUpdate> _stream = StreamController<BookingUpdate>.broadcast();
 
   String? _rideId;
   String? _riderId;
@@ -128,14 +134,14 @@ class BookingController {
   BookingError? lastError;
   Map<String, dynamic> _currentSnapshot = <String, dynamic>{};
 
-  BookingController(this._api, {DriverLocationUpdater? pinger})
-      : _pinger = pinger;
+  BookingController(this._api, {DriverLocationUpdater? pinger}) : _pinger = pinger;
 
   String? get rideId => _rideId;
   String? get riderId => _riderId;
   String? get driverId => _driverId;
-  Map<String, dynamic> get currentSnapshot =>
-      Map<String, dynamic>.from(_currentSnapshot);
+  Map<String, dynamic> get currentSnapshot => Map<String, dynamic>.from(_currentSnapshot);
+
+  // Expose stream via multiple getters for backward compatibility across the app
   Stream<BookingUpdate> get updates => _stream.stream;
   Stream<BookingUpdate> get stream => _stream.stream;
   Stream<BookingUpdate> get events => _stream.stream;
@@ -165,6 +171,7 @@ class BookingController {
     debugPrint('[Booking][$tag] $stamp $safe');
   }
 
+  // --- Safe Parsing Utilities ---
   String _s(Object? v, [String fallback = '']) {
     if (v == null) return fallback;
     final String x = v.toString().trim();
@@ -310,8 +317,7 @@ class BookingController {
     if (_looksLikeHtml(res.body)) {
       throw _ApiException(
         kind: BookingErrorKind.parseError,
-        message:
-        'Server returned an HTML page from $endpoint instead of JSON. The endpoint path may be wrong.',
+        message: 'Server returned an HTML page from $endpoint instead of JSON. The endpoint path may be wrong.',
         httpStatus: res.statusCode,
       );
     }
@@ -436,9 +442,7 @@ class BookingController {
     }
 
     if (includeCoordinates && _stops.isNotEmpty) {
-      payload['stops'] = _stops
-          .map((LatLng e) => '${e.latitude},${e.longitude}')
-          .join('|');
+      payload['stops'] = _stops.map((LatLng e) => '${e.latitude},${e.longitude}').join('|');
     }
 
     return payload;
@@ -500,8 +504,7 @@ class BookingController {
           body['heading'] ??
           driver['heading'] ??
           driver['bearing'],
-    ) ??
-        0.0;
+    ) ?? 0.0;
 
     if (driverLat != null) {
       out['driver_lat'] = driverLat;
@@ -644,6 +647,8 @@ class BookingController {
     );
   }
 
+  // --- Core Booking Functions ---
+
   Future<bool> createBooking({
     required RideOffer offer,
     required LatLng pickup,
@@ -662,6 +667,7 @@ class BookingController {
     _destinationText = _s(destinationText);
     _riderId = _s(userId);
     _driverId = _s(driverId);
+
     _currentSnapshot = <String, dynamic>{
       'rider_id': _riderId,
       'user_id': _riderId,
@@ -789,6 +795,7 @@ class BookingController {
     return ok ? _rideId : null;
   }
 
+  // Alias methods
   Future<String?> startBooking({
     required String riderId,
     required String driverId,
@@ -799,18 +806,17 @@ class BookingController {
     String? destinationText,
     List<LatLng> stops = const <LatLng>[],
     String payMethod = 'cash',
-  }) =>
-      bookRide(
-        riderId: riderId,
-        driverId: driverId,
-        offer: offer,
-        pickup: pickup,
-        destination: destination,
-        pickupText: pickupText,
-        destinationText: destinationText,
-        stops: stops,
-        payMethod: payMethod,
-      );
+  }) => bookRide(
+    riderId: riderId,
+    driverId: driverId,
+    offer: offer,
+    pickup: pickup,
+    destination: destination,
+    pickupText: pickupText,
+    destinationText: destinationText,
+    stops: stops,
+    payMethod: payMethod,
+  );
 
   Future<String?> createRide({
     required String riderId,
@@ -822,18 +828,17 @@ class BookingController {
     String? destinationText,
     List<LatLng> stops = const <LatLng>[],
     String payMethod = 'cash',
-  }) =>
-      bookRide(
-        riderId: riderId,
-        driverId: driverId,
-        offer: offer,
-        pickup: pickup,
-        destination: destination,
-        pickupText: pickupText,
-        destinationText: destinationText,
-        stops: stops,
-        payMethod: payMethod,
-      );
+  }) => bookRide(
+    riderId: riderId,
+    driverId: driverId,
+    offer: offer,
+    pickup: pickup,
+    destination: destination,
+    pickupText: pickupText,
+    destinationText: destinationText,
+    stops: stops,
+    payMethod: payMethod,
+  );
 
   Future<bool> startTrip() async {
     final String id = _s(_rideId);
@@ -876,6 +881,7 @@ class BookingController {
     }
   }
 
+  // Alias methods
   Future<bool> startRide() => startTrip();
   Future<bool> commenceTrip() => startTrip();
   Future<bool> beginTrip() => startTrip();
@@ -928,6 +934,7 @@ class BookingController {
     }
   }
 
+  // Alias methods
   Future<bool> cancelRide({String reason = ''}) => cancelBooking(reason: reason);
   Future<bool> cancelTrip({String reason = ''}) => cancelBooking(reason: reason);
   Future<bool> abortTrip({String reason = ''}) => cancelBooking(reason: reason);

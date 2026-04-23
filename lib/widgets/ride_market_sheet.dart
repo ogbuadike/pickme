@@ -1,8 +1,9 @@
 // lib/widgets/ride_market_sheet.dart
 import 'dart:math' as math;
-import 'dart:ui' show FontFeature;
+import 'dart:ui' show FontFeature, ImageFilter;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:intl/intl.dart' as intl;
 
 import '../models/geo_point.dart';
@@ -78,16 +79,9 @@ class RideNearbyDriver {
   });
 
   String get initials {
-    final parts = name
-        .trim()
-        .split(RegExp(r'\s+'))
-        .where((e) => e.isNotEmpty)
-        .toList();
+    final parts = name.trim().split(RegExp(r'\s+')).where((e) => e.isNotEmpty).toList();
     if (parts.isEmpty) return 'D';
-
-    String first(String x) =>
-        x.isEmpty ? '' : String.fromCharCode(x.runes.first);
-
+    String first(String x) => x.isEmpty ? '' : String.fromCharCode(x.runes.first);
     final a = first(parts.first).toUpperCase();
     final b = parts.length > 1 ? first(parts.last).toUpperCase() : '';
     return (a + b).trim();
@@ -99,32 +93,25 @@ class RideNearbyDriver {
       final s = x.trim();
       if (s.isNotEmpty) out.add(s);
     }
-    if (out.isEmpty && carImageUrl.trim().isNotEmpty) {
-      out.add(carImageUrl.trim());
-    }
+    if (out.isEmpty && carImageUrl.trim().isNotEmpty) out.add(carImageUrl.trim());
     return out;
   }
 }
 
 class RideMarketSheet extends StatefulWidget {
   final double bottomNavHeight;
-
   final String originText;
   final String destinationText;
   final String? distanceText;
   final String? durationText;
   final double? tripDistanceKm;
-
   final int driversNearbyCount;
   final List<dynamic>? drivers;
-
   final List<RideOffer> offers;
   final bool loading;
-
   final GeoPoint? userLocation;
   final GeoPoint? pickupLocation;
   final GeoPoint? dropLocation;
-
   final VoidCallback onRefresh;
   final VoidCallback onCancel;
   final void Function(RideNearbyDriver driver, RideOffer offer) onBook;
@@ -163,15 +150,10 @@ class _RideMarketSheetState extends State<RideMarketSheet> {
   bool _fullyFrozen = false;
   DateTime? _settleUntil;
 
-  bool get _showNoDrivers =>
-      !widget.loading &&
-          _stableDrivers.isEmpty &&
-          (widget.drivers ?? const []).isEmpty;
+  bool get _showNoDrivers => !widget.loading && _stableDrivers.isEmpty && (widget.drivers ?? const []).isEmpty;
 
   double get _tripKm {
-    if (widget.tripDistanceKm != null && widget.tripDistanceKm! > 0) {
-      return widget.tripDistanceKm!;
-    }
+    if (widget.tripDistanceKm != null && widget.tripDistanceKm! > 0) return widget.tripDistanceKm!;
     return _parseDistanceKm(widget.distanceText ?? '');
   }
 
@@ -197,16 +179,12 @@ class _RideMarketSheetState extends State<RideMarketSheet> {
   @override
   void didUpdateWidget(covariant RideMarketSheet oldWidget) {
     super.didUpdateWidget(oldWidget);
-
     final routeChanged = oldWidget.originText != widget.originText ||
         oldWidget.destinationText != widget.destinationText ||
         oldWidget.tripDistanceKm != widget.tripDistanceKm ||
         oldWidget.distanceText != widget.distanceText;
 
-    if (routeChanged) {
-      _resetStable(alsoClearSelection: true);
-    }
-
+    if (routeChanged) _resetStable(alsoClearSelection: true);
     _reconcileDrivers();
   }
 
@@ -219,29 +197,13 @@ class _RideMarketSheetState extends State<RideMarketSheet> {
 
   static List<String> _strList(dynamic v) {
     if (v == null) return const <String>[];
-    if (v is List) {
-      return v
-          .map((e) => e.toString())
-          .where((s) => s.trim().isNotEmpty)
-          .toList(growable: false);
-    }
-
+    if (v is List) return v.map((e) => e.toString()).where((s) => s.trim().isNotEmpty).toList(growable: false);
     final s = v.toString().trim();
     if (s.isEmpty) return const <String>[];
     if (s.startsWith('[') && s.endsWith(']')) {
-      final inner = s.substring(1, s.length - 1);
-      return inner
-          .split(',')
-          .map((x) => x.replaceAll('"', '').replaceAll("'", '').trim())
-          .where((x) => x.isNotEmpty)
-          .toList(growable: false);
+      return s.substring(1, s.length - 1).split(',').map((x) => x.replaceAll('"', '').replaceAll("'", '').trim()).where((x) => x.isNotEmpty).toList(growable: false);
     }
-
-    return s
-        .split(',')
-        .map((x) => x.trim())
-        .where((x) => x.isNotEmpty)
-        .toList(growable: false);
+    return s.split(',').map((x) => x.trim()).where((x) => x.isNotEmpty).toList(growable: false);
   }
 
   String _fixUrl(String url) {
@@ -252,28 +214,11 @@ class _RideMarketSheetState extends State<RideMarketSheet> {
     return u;
   }
 
-  bool _hasPrice(RideNearbyDriver d) {
-    return d.estimatedTotal > 0 || d.pricePerKm > 0 || d.baseFare > 0;
-  }
-
-  bool _hasImage(RideNearbyDriver d) {
-    return d.imagesEffective.isNotEmpty || d.carImageUrl.trim().isNotEmpty;
-  }
-
-  bool _hasContactData(RideNearbyDriver d) {
-    return d.phone.trim().isNotEmpty || d.nin.trim().isNotEmpty;
-  }
-
-  bool _hasPerformanceData(RideNearbyDriver d) {
-    return d.completedTrips > 0 || d.reviewsCount > 0 || d.totalTrips > 0;
-  }
-
-  bool _hasProfileData(RideNearbyDriver d) {
-    return d.rank.trim().isNotEmpty ||
-        d.vehicleDescription.trim().isNotEmpty ||
-        d.avatarUrl.trim().isNotEmpty ||
-        d.carPlate.trim().isNotEmpty;
-  }
+  bool _hasPrice(RideNearbyDriver d) => d.estimatedTotal > 0 || d.pricePerKm > 0 || d.baseFare > 0;
+  bool _hasImage(RideNearbyDriver d) => d.imagesEffective.isNotEmpty || d.carImageUrl.trim().isNotEmpty;
+  bool _hasContactData(RideNearbyDriver d) => d.phone.trim().isNotEmpty || d.nin.trim().isNotEmpty;
+  bool _hasPerformanceData(RideNearbyDriver d) => d.completedTrips > 0 || d.reviewsCount > 0 || d.totalTrips > 0;
+  bool _hasProfileData(RideNearbyDriver d) => d.rank.trim().isNotEmpty || d.vehicleDescription.trim().isNotEmpty || d.avatarUrl.trim().isNotEmpty || d.carPlate.trim().isNotEmpty;
 
   RideNearbyDriver _driverVM(dynamic raw) {
     if (raw is DriverCar) {
@@ -283,148 +228,18 @@ class _RideMarketSheetState extends State<RideMarketSheet> {
       final lng = (ll != null) ? (ll.longitude as double) : 0.0;
 
       String vehicleType = 'car';
-      try {
-        vehicleType = (d.vehicleType ?? d.vehicle_type ?? 'car').toString();
-      } catch (_) {}
+      try { vehicleType = (d.vehicleType ?? d.vehicle_type ?? 'car').toString(); } catch (_) {}
 
       int seats = 4;
-      try {
-        seats = (d.seats is num) ? (d.seats as num).toInt() : seats;
-      } catch (_) {}
+      try { seats = (d.seats is num) ? (d.seats as num).toInt() : seats; } catch (_) {}
       if (vehicleType.toLowerCase().contains('bike')) seats = 1;
-
-      String rank = '';
-      try {
-        rank = (d.rank ?? '').toString();
-      } catch (_) {}
-
-      String avatarUrl = '';
-      try {
-        avatarUrl = (d.avatarUrl ?? d.avatar_url ?? '').toString();
-      } catch (_) {}
-
-      String carPlate = '';
-      try {
-        carPlate = (d.carPlate ?? d.car_plate ?? d.plate ?? '').toString();
-      } catch (_) {}
-
-      String vehicleDescription = '';
-      try {
-        vehicleDescription =
-            (d.vehicleDescription ?? d.vehicle_description ?? '').toString();
-      } catch (_) {}
-
-      String phone = '';
-      try {
-        phone = (d.phone ?? d.phone_number ?? d.tel ?? d.mobile ?? '')
-            .toString();
-      } catch (_) {}
-
-      String nin = '';
-      try {
-        nin = (d.nin ?? d.national_id ?? d.nationalId ?? '').toString();
-      } catch (_) {}
-
-      final currency = (() {
-        try {
-          return (d.currency ?? 'NGN').toString();
-        } catch (_) {
-          return 'NGN';
-        }
-      })();
-
-      final pricePerKm = (() {
-        try {
-          return _num(d.pricePerKm ?? d.price_per_km, 0).toDouble();
-        } catch (_) {
-          return 0.0;
-        }
-      })();
-
-      final baseFare = (() {
-        try {
-          return _num(d.baseFare ?? d.base_fare, 0).toDouble();
-        } catch (_) {
-          return 0.0;
-        }
-      })();
-
-      final estimatedTotal = (() {
-        try {
-          return _num(
-            d.estimatedTotal ?? d.estimated_total ?? d.price_total,
-            0,
-          ).toDouble();
-        } catch (_) {
-          return 0.0;
-        }
-      })();
-
-      final tripKm = (() {
-        try {
-          return _num(d.tripKm ?? d.trip_km, 0).toDouble();
-        } catch (_) {
-          return 0.0;
-        }
-      })();
-
-      final completedTrips = (() {
-        try {
-          return _num(d.completedTrips ?? d.completed_trips, 0).toInt();
-        } catch (_) {
-          return 0;
-        }
-      })();
-
-      final cancelledTrips = (() {
-        try {
-          return _num(d.cancelledTrips ?? d.cancelled_trips, 0).toInt();
-        } catch (_) {
-          return 0;
-        }
-      })();
-
-      final incompleteTrips = (() {
-        try {
-          return _num(d.incompleteTrips ?? d.incomplete_trips, 0).toInt();
-        } catch (_) {
-          return 0;
-        }
-      })();
-
-      final reviewsCount = (() {
-        try {
-          return _num(d.reviewsCount ?? d.reviews_count, 0).toInt();
-        } catch (_) {
-          return 0;
-        }
-      })();
-
-      final totalTrips = (() {
-        try {
-          return _num(d.totalTrips ?? d.total_trips, 0).toInt();
-        } catch (_) {
-          return 0;
-        }
-      })();
-
-      List<String> images = const <String>[];
-      try {
-        final v = d.vehicleImages ?? d.vehicle_images;
-        images = _strList(v);
-      } catch (_) {}
-
-      String carImg = '';
-      try {
-        carImg = (d.carImageUrl ?? d.car_image_url ?? '').toString();
-      } catch (_) {}
 
       return RideNearbyDriver(
         id: (d.id ?? '').toString(),
         name: (d.name ?? 'Driver').toString(),
         category: (d.category ?? 'Standard').toString(),
         rating: _num(d.rating, 0).toDouble(),
-        carPlate: carPlate,
+        carPlate: (d.carPlate ?? d.car_plate ?? d.plate ?? '').toString(),
         heading: _num(d.heading, 0).toDouble(),
         lat: lat,
         lng: lng,
@@ -432,26 +247,23 @@ class _RideMarketSheetState extends State<RideMarketSheet> {
         etaMin: _num(d.etaMin ?? d.eta_min, 0).toInt(),
         vehicleType: vehicleType,
         seats: seats,
-        vehicleImages: images
-            .map(_fixUrl)
-            .where((x) => x.isNotEmpty)
-            .toList(growable: false),
-        vehicleDescription: vehicleDescription,
-        carImageUrl: _fixUrl(carImg),
-        avatarUrl: _fixUrl(avatarUrl),
-        phone: phone,
-        nin: nin,
-        rank: rank,
-        completedTrips: completedTrips,
-        cancelledTrips: cancelledTrips,
-        incompleteTrips: incompleteTrips,
-        reviewsCount: reviewsCount,
-        totalTrips: totalTrips,
-        currency: currency,
-        pricePerKm: pricePerKm,
-        baseFare: baseFare,
-        estimatedTotal: estimatedTotal,
-        tripKm: tripKm,
+        vehicleImages: _strList(d.vehicleImages ?? d.vehicle_images).map(_fixUrl).where((x) => x.isNotEmpty).toList(growable: false),
+        vehicleDescription: (d.vehicleDescription ?? d.vehicle_description ?? '').toString(),
+        carImageUrl: _fixUrl((d.carImageUrl ?? d.car_image_url ?? '').toString()),
+        avatarUrl: _fixUrl((d.avatarUrl ?? d.avatar_url ?? '').toString()),
+        phone: (d.phone ?? d.phone_number ?? d.tel ?? d.mobile ?? '').toString(),
+        nin: (d.nin ?? d.national_id ?? d.nationalId ?? '').toString(),
+        rank: (d.rank ?? '').toString(),
+        completedTrips: _num(d.completedTrips ?? d.completed_trips, 0).toInt(),
+        cancelledTrips: _num(d.cancelledTrips ?? d.cancelled_trips, 0).toInt(),
+        incompleteTrips: _num(d.incompleteTrips ?? d.incomplete_trips, 0).toInt(),
+        reviewsCount: _num(d.reviewsCount ?? d.reviews_count, 0).toInt(),
+        totalTrips: _num(d.totalTrips ?? d.total_trips, 0).toInt(),
+        currency: (d.currency ?? 'NGN').toString(),
+        pricePerKm: _num(d.pricePerKm ?? d.price_per_km, 0).toDouble(),
+        baseFare: _num(d.baseFare ?? d.base_fare, 0).toDouble(),
+        estimatedTotal: _num(d.estimatedTotal ?? d.estimated_total ?? d.price_total, 0).toDouble(),
+        tripKm: _num(d.tripKm ?? d.trip_km, 0).toDouble(),
       );
     }
 
@@ -474,17 +286,12 @@ class _RideMarketSheetState extends State<RideMarketSheet> {
         etaMin: _num(m['eta_min'], 0).toInt(),
         vehicleType: vt,
         seats: seats,
-        vehicleImages: _strList(m['vehicle_images'])
-            .map(_fixUrl)
-            .where((x) => x.isNotEmpty)
-            .toList(growable: false),
+        vehicleImages: _strList(m['vehicle_images']).map(_fixUrl).where((x) => x.isNotEmpty).toList(growable: false),
         vehicleDescription: (m['vehicle_description'] ?? '').toString(),
         carImageUrl: _fixUrl((m['car_image_url'] ?? '').toString()),
         avatarUrl: _fixUrl((m['avatar_url'] ?? '').toString()),
-        phone: (m['phone'] ?? m['phone_number'] ?? m['tel'] ?? m['mobile'] ?? '')
-            .toString(),
-        nin: (m['nin'] ?? m['national_id'] ?? m['nationalId'] ?? '')
-            .toString(),
+        phone: (m['phone'] ?? m['phone_number'] ?? m['tel'] ?? m['mobile'] ?? '').toString(),
+        nin: (m['nin'] ?? m['national_id'] ?? m['nationalId'] ?? '').toString(),
         rank: (m['rank'] ?? '').toString(),
         completedTrips: _num(m['completed_trips'], 0).toInt(),
         cancelledTrips: _num(m['cancelled_trips'], 0).toInt(),
@@ -494,24 +301,11 @@ class _RideMarketSheetState extends State<RideMarketSheet> {
         currency: (m['currency'] ?? 'NGN').toString(),
         pricePerKm: _num(m['price_per_km'], 0).toDouble(),
         baseFare: _num(m['base_fare'], 0).toDouble(),
-        estimatedTotal:
-        _num(m['estimated_total'] ?? m['price_total'], 0).toDouble(),
+        estimatedTotal: _num(m['estimated_total'] ?? m['price_total'], 0).toDouble(),
         tripKm: _num(m['trip_km'], 0).toDouble(),
       );
     }
-
-    return const RideNearbyDriver(
-      id: '',
-      name: 'Driver',
-      category: 'Standard',
-      rating: 0,
-      carPlate: '',
-      heading: 0,
-      lat: 0,
-      lng: 0,
-      distanceKm: 0,
-      etaMin: 0,
-    );
+    return const RideNearbyDriver(id: '', name: 'Driver', category: 'Standard', rating: 0, carPlate: '', heading: 0, lat: 0, lng: 0, distanceKm: 0, etaMin: 0);
   }
 
   int _rankWeight(String r) {
@@ -525,33 +319,19 @@ class _RideMarketSheetState extends State<RideMarketSheet> {
     return 0;
   }
 
-  double _safeRating(double r) {
-    if (r.isNaN || r.isInfinite) return 0;
-    return r.clamp(0, 5).toDouble();
-  }
+  double _safeRating(double r) => r.isNaN || r.isInfinite ? 0 : r.clamp(0, 5).toDouble();
 
   int _compareDrivers(RideNearbyDriver a, RideNearbyDriver b) {
-    final ar = _safeRating(a.rating);
-    final br = _safeRating(b.rating);
-    final c1 = br.compareTo(ar);
+    final c1 = _safeRating(b.rating).compareTo(_safeRating(a.rating));
     if (c1 != 0) return c1;
-
-    final aw = _rankWeight(a.rank.trim().isEmpty ? 'verified' : a.rank);
-    final bw = _rankWeight(b.rank.trim().isEmpty ? 'verified' : b.rank);
-    final c2 = bw.compareTo(aw);
+    final c2 = _rankWeight(b.rank.trim().isEmpty ? 'verified' : b.rank).compareTo(_rankWeight(a.rank.trim().isEmpty ? 'verified' : a.rank));
     if (c2 != 0) return c2;
-
     final c3 = a.etaMin.compareTo(b.etaMin);
     if (c3 != 0) return c3;
-
     final c4 = a.distanceKm.compareTo(b.distanceKm);
     if (c4 != 0) return c4;
-
-    final an = a.name.toLowerCase();
-    final bn = b.name.toLowerCase();
-    final c5 = an.compareTo(bn);
+    final c5 = a.name.toLowerCase().compareTo(b.name.toLowerCase());
     if (c5 != 0) return c5;
-
     return a.id.compareTo(b.id);
   }
 
@@ -564,14 +344,8 @@ class _RideMarketSheetState extends State<RideMarketSheet> {
   }
 
   void _reconcileDrivers() {
-    if (_selectedDriverId != null) {
-      _fullyFrozen = true;
-      return;
-    }
-
-    if (_settleUntil != null && DateTime.now().isAfter(_settleUntil!)) {
-      _fullyFrozen = true;
-    }
+    if (_selectedDriverId != null) { _fullyFrozen = true; return; }
+    if (_settleUntil != null && DateTime.now().isAfter(_settleUntil!)) _fullyFrozen = true;
     if (_fullyFrozen) return;
 
     final incomingRaw = widget.drivers ?? const <dynamic>[];
@@ -580,15 +354,12 @@ class _RideMarketSheetState extends State<RideMarketSheet> {
     final incoming = <RideNearbyDriver>[];
     for (final x in incomingRaw) {
       final d = _driverVM(x);
-      if (d.id.isEmpty) continue;
-      incoming.add(d);
+      if (d.id.isNotEmpty) incoming.add(d);
     }
     if (incoming.isEmpty) return;
 
     final byId = <String, RideNearbyDriver>{};
-    for (final d in incoming) {
-      byId[d.id] = d;
-    }
+    for (final d in incoming) byId[d.id] = d;
 
     if (_stableIds.isEmpty) {
       incoming.sort(_compareDrivers);
@@ -599,10 +370,7 @@ class _RideMarketSheetState extends State<RideMarketSheet> {
       return;
     }
 
-    final oldById = <String, RideNearbyDriver>{
-      for (final d in _stableDrivers) d.id: d,
-    };
-
+    final oldById = <String, RideNearbyDriver>{for (final d in _stableDrivers) d.id: d};
     bool changed = false;
     final updated = <RideNearbyDriver>[];
 
@@ -610,50 +378,18 @@ class _RideMarketSheetState extends State<RideMarketSheet> {
       final old = oldById[id];
       final fresh = byId[id];
 
-      if (old == null && fresh != null) {
-        updated.add(fresh);
-        changed = true;
-        continue;
-      }
-
+      if (old == null && fresh != null) { updated.add(fresh); changed = true; continue; }
       if (old != null && fresh != null) {
-        final needPrice = !_hasPrice(old) && _hasPrice(fresh);
-        final needImage = !_hasImage(old) && _hasImage(fresh);
-        final needRating =
-        (_safeRating(old.rating) <= 0 && _safeRating(fresh.rating) > 0);
-        final needContact = !_hasContactData(old) && _hasContactData(fresh);
-        final needPerformance =
-            !_hasPerformanceData(old) && _hasPerformanceData(fresh);
-        final needProfile = !_hasProfileData(old) && _hasProfileData(fresh);
-
-        if (needPrice ||
-            needImage ||
-            needRating ||
-            needContact ||
-            needPerformance ||
-            needProfile) {
-          updated.add(fresh);
-          changed = true;
-        } else {
-          updated.add(old);
-        }
+        if ((!_hasPrice(old) && _hasPrice(fresh)) || (!_hasImage(old) && _hasImage(fresh)) || (_safeRating(old.rating) <= 0 && _safeRating(fresh.rating) > 0) || (!_hasContactData(old) && _hasContactData(fresh)) || (!_hasPerformanceData(old) && _hasPerformanceData(fresh)) || (!_hasProfileData(old) && _hasProfileData(fresh))) {
+          updated.add(fresh); changed = true;
+        } else { updated.add(old); }
         continue;
       }
-
       if (old != null) updated.add(old);
     }
 
-    final allGood = updated.isNotEmpty &&
-        updated.every((d) => _hasPrice(d) || _tripKm <= 0) &&
-        updated.every(_hasImage) &&
-        updated.every(_hasContactData) &&
-        updated.every(_hasPerformanceData);
-
-    if (allGood) _fullyFrozen = true;
-
-    if (changed) {
-      setState(() => _stableDrivers = updated);
-    }
+    if (updated.isNotEmpty && updated.every((d) => _hasPrice(d) || _tripKm <= 0) && updated.every(_hasImage) && updated.every(_hasContactData) && updated.every(_hasPerformanceData)) _fullyFrozen = true;
+    if (changed) setState(() => _stableDrivers = updated);
   }
 
   String _curSym(String c) {
@@ -667,239 +403,309 @@ class _RideMarketSheetState extends State<RideMarketSheet> {
 
   double _driverTotal(RideNearbyDriver d) {
     if (d.estimatedTotal > 0) return d.estimatedTotal;
-
     final km = (_tripKm > 0) ? _tripKm : (d.tripKm > 0 ? d.tripKm : 0);
-    if (km > 0 && d.pricePerKm > 0) {
-      return d.baseFare + d.pricePerKm * km;
-    }
+    if (km > 0 && d.pricePerKm > 0) return d.baseFare + d.pricePerKm * km;
     return 0;
   }
 
-  double _sheetMaxHeight(MediaQueryData mq, UIScale ui) {
+  double _sheetMaxHeight(MediaQueryData mq, UIScale uiScale) {
     final h = mq.size.height;
     double target;
-
-    if (ui.landscape) {
-      target = h * (ui.tablet ? 0.80 : 0.76);
-    } else if (ui.tiny) {
-      target = h * 0.60;
-    } else if (ui.compact) {
-      target = h * 0.56;
-    } else {
-      target = h * 0.52;
-    }
-
-    return target.clamp(
-      ui.landscape ? 220.0 : 250.0,
-      ui.landscape ? 520.0 : 560.0,
-    );
+    if (uiScale.landscape) { target = h * (uiScale.tablet ? 0.72 : 0.65); }
+    else if (uiScale.tiny) { target = h * 0.45; }
+    else if (uiScale.compact) { target = h * 0.48; }
+    else { target = h * 0.50; }
+    return target.clamp(uiScale.landscape ? 200.0 : 250.0, uiScale.landscape ? 460.0 : 500.0);
   }
 
-  double _bottomInset(MediaQueryData mq, UIScale ui, double maxH) {
-    final raw = widget.bottomNavHeight + mq.padding.bottom + ui.gap(5);
-    final cap = ui.landscape
-        ? math.max(14.0, maxH * 0.12)
-        : math.max(18.0, maxH * 0.16);
-    return raw.clamp(8.0, cap);
+  double _bottomInset(MediaQueryData mq, UIScale uiScale, double maxH) {
+    final raw = widget.bottomNavHeight + mq.padding.bottom + uiScale.gap(8);
+    final cap = uiScale.landscape ? math.max(14.0, maxH * 0.15) : math.max(16.0, maxH * 0.18);
+    return raw.clamp(12.0, cap);
+  }
+
+  // --- PREMIUM SCALED-DOWN CANCEL DIALOG ---
+  Future<void> _handleCancelAction(BuildContext context, UIScale uiScale, bool isDark, ColorScheme cs) async {
+    HapticFeedback.mediumImpact();
+    final bool? confirm = await showGeneralDialog<bool>(
+      context: context,
+      barrierDismissible: true,
+      barrierLabel: 'Dismiss',
+      barrierColor: Colors.black.withOpacity(isDark ? 0.75 : 0.5),
+      transitionDuration: const Duration(milliseconds: 250),
+      pageBuilder: (ctx, anim1, anim2) {
+        return ScaleTransition(
+          scale: CurvedAnimation(parent: anim1, curve: Curves.easeOutBack),
+          child: FadeTransition(
+            opacity: anim1,
+            child: AlertDialog(
+              backgroundColor: Colors.transparent,
+              elevation: 0,
+              contentPadding: EdgeInsets.zero,
+              insetPadding: EdgeInsets.symmetric(horizontal: uiScale.inset(20)),
+              content: ClipRRect(
+                borderRadius: BorderRadius.circular(uiScale.radius(20)),
+                child: BackdropFilter(
+                  filter: ImageFilter.blur(sigmaX: 16, sigmaY: 16),
+                  child: Container(
+                    padding: EdgeInsets.all(uiScale.inset(20)),
+                    decoration: BoxDecoration(
+                      color: isDark ? cs.surface.withOpacity(0.85) : Colors.white.withOpacity(0.95),
+                      borderRadius: BorderRadius.circular(uiScale.radius(20)),
+                      border: Border.all(color: cs.error.withOpacity(0.3), width: 1.2),
+                      boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.2), blurRadius: 24, offset: const Offset(0, 8))],
+                    ),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Container(
+                          width: uiScale.icon(48),
+                          height: uiScale.icon(48),
+                          decoration: BoxDecoration(shape: BoxShape.circle, color: cs.error.withOpacity(0.12)),
+                          child: Icon(Icons.warning_amber_rounded, size: uiScale.icon(24), color: cs.error),
+                        ),
+                        SizedBox(height: uiScale.gap(16)),
+                        Text(
+                          'Cancel Search?',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                            fontSize: uiScale.font(16.5),
+                            fontWeight: FontWeight.w900,
+                            color: isDark ? cs.onSurface : AppColors.textPrimary,
+                            letterSpacing: -0.3,
+                          ),
+                        ),
+                        SizedBox(height: uiScale.gap(8)),
+                        Text(
+                          'Are you sure you want to stop searching? Your trip details will be saved.',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                            fontSize: uiScale.font(11.5),
+                            fontWeight: FontWeight.w600,
+                            color: isDark ? cs.onSurfaceVariant : AppColors.textSecondary,
+                            height: 1.4,
+                          ),
+                        ),
+                        SizedBox(height: uiScale.gap(24)),
+                        Row(
+                          children: [
+                            Expanded(
+                              child: TextButton(
+                                onPressed: () => Navigator.pop(ctx, true),
+                                style: TextButton.styleFrom(
+                                  padding: EdgeInsets.symmetric(vertical: uiScale.inset(10)),
+                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(uiScale.radius(12))),
+                                ),
+                                child: Text(
+                                  'Yes, Cancel',
+                                  style: TextStyle(fontSize: uiScale.font(11.5), fontWeight: FontWeight.w800, color: cs.error),
+                                ),
+                              ),
+                            ),
+                            SizedBox(width: uiScale.gap(8)),
+                            Expanded(
+                              flex: 1,
+                              child: ElevatedButton(
+                                onPressed: () => Navigator.pop(ctx, false),
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: isDark ? cs.primary : AppColors.primary,
+                                  foregroundColor: isDark ? cs.onPrimary : Colors.white,
+                                  padding: EdgeInsets.symmetric(vertical: uiScale.inset(10)),
+                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(uiScale.radius(12))),
+                                  elevation: 0,
+                                ),
+                                child: Text('Keep Searching', style: TextStyle(fontSize: uiScale.font(11.5), fontWeight: FontWeight.w800)),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+      },
+    );
+
+    if (confirm == true) widget.onCancel();
   }
 
   @override
   Widget build(BuildContext context) {
     final mq = MediaQuery.of(context);
-    final ui = UIScale.of(context);
+    final uiScale = UIScale.of(context);
     final theme = Theme.of(context);
     final cs = theme.colorScheme;
     final isDark = theme.brightness == Brightness.dark;
 
     final drivers = _stableDrivers;
-    final maxH = _sheetMaxHeight(mq, ui);
+    final maxH = _sheetMaxHeight(mq, uiScale);
 
     return Align(
       alignment: Alignment.bottomCenter,
-      child: Material(
-        color: Colors.transparent,
-        child: Container(
-          width: double.infinity,
-          constraints: BoxConstraints(maxHeight: maxH),
-          decoration: BoxDecoration(
-            // FIXED: Ensure surface is correctly applied for OLED dark mode
-            color: isDark ? cs.surface : theme.cardColor,
-            borderRadius: BorderRadius.vertical(
-              top: Radius.circular(ui.radius(18)),
+      child: ClipRRect(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(uiScale.radius(24))),
+        child: BackdropFilter(
+          filter: ImageFilter.blur(sigmaX: 16, sigmaY: 16),
+          child: Container(
+            width: double.infinity,
+            constraints: BoxConstraints(maxHeight: maxH),
+            decoration: BoxDecoration(
+              color: isDark ? cs.surface.withOpacity(0.92) : Colors.white.withOpacity(0.97),
+              borderRadius: BorderRadius.vertical(top: Radius.circular(uiScale.radius(24))),
+              border: Border(top: BorderSide(color: isDark ? cs.outline.withOpacity(0.5) : AppColors.mintBgLight.withOpacity(0.3), width: 1.0)),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withOpacity(isDark ? 0.40 : 0.10),
+                  blurRadius: uiScale.reduceFx ? 12 : 22,
+                  offset: const Offset(0, -8),
+                ),
+              ],
             ),
-            boxShadow: [
-              BoxShadow(
-                color: isDark ? Colors.black.withOpacity(0.5) : Colors.black.withOpacity(0.16),
-                blurRadius: ui.reduceFx ? 8 : 16,
-                offset: const Offset(0, -8),
-              ),
-            ],
-            border: isDark ? Border(top: BorderSide(color: cs.outline, width: 1.0)) : null,
-          ),
-          child: LayoutBuilder(
-            builder: (context, constraints) {
-              final dense = constraints.maxHeight < 330;
-              final ultraDense = constraints.maxHeight < 285;
+            child: LayoutBuilder(
+              builder: (context, constraints) {
+                final dense = constraints.maxHeight < 330;
+                final ultraDense = constraints.maxHeight < 285;
 
-              return Column(
-                children: [
-                  SizedBox(height: ui.gap(6)),
-                  _handle(cs, ui, isDark),
-                  SizedBox(height: ui.gap(4)),
-                  _topBar(context, ui, dense: dense, isDark: isDark, cs: cs),
-                  Expanded(
-                    child: _content(
-                      context,
-                      drivers,
-                      ui,
-                      dense: dense,
-                      ultraDense: ultraDense,
-                      isDark: isDark,
-                      cs: cs,
+                return Column(
+                  children: [
+                    SizedBox(height: uiScale.gap(6)),
+                    Container(
+                      width: uiScale.landscape ? 44 : 50,
+                      height: 4.0,
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(999),
+                        color: isDark ? cs.onSurfaceVariant.withOpacity(0.5) : AppColors.textSecondary.withOpacity(0.22),
+                      ),
                     ),
-                  ),
-                  _bottomBar(
-                    context,
-                    mq,
-                    drivers,
-                    ui,
-                    dense: dense,
-                    maxHeight: maxH,
-                    isDark: isDark,
-                    cs: cs,
-                  ),
-                ],
-              );
-            },
+                    SizedBox(height: uiScale.gap(4)),
+                    _topBar(context, uiScale, dense: dense, isDark: isDark, cs: cs),
+                    Expanded(
+                      child: _content(context, drivers, uiScale, dense: dense, ultraDense: ultraDense, isDark: isDark, cs: cs),
+                    ),
+                    _bottomBar(context, mq, drivers, uiScale, dense: dense, maxHeight: maxH, isDark: isDark, cs: cs),
+                  ],
+                );
+              },
+            ),
           ),
         ),
       ),
     );
   }
 
-  Widget _handle(ColorScheme cs, UIScale ui, bool isDark) {
-    return Container(
-      width: ui.landscape ? 38 : 46,
-      height: 4,
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(999),
-        color: isDark ? cs.onSurfaceVariant.withOpacity(0.5) : cs.onSurface.withOpacity(0.16),
-      ),
-    );
-  }
-
-  Widget _topBar(BuildContext context, UIScale ui, {required bool dense, required bool isDark, required ColorScheme cs}) {
-    final iconSize = ui.icon(dense ? 15 : 17);
+  Widget _topBar(BuildContext context, UIScale uiScale, {required bool dense, required bool isDark, required ColorScheme cs}) {
+    final iconSize = uiScale.icon(dense ? 14 : 16);
 
     return Padding(
-      padding: EdgeInsets.symmetric(horizontal: ui.inset(4)),
+      padding: EdgeInsets.symmetric(horizontal: uiScale.inset(10)),
       child: Row(
         children: [
-          IconButton(
-            onPressed: widget.onCancel,
-            visualDensity: VisualDensity.compact,
-            padding: EdgeInsets.all(ui.inset(4)),
-            constraints: BoxConstraints.tightFor(
-              width: ui.gap(30),
-              height: ui.gap(30),
-            ),
-            icon: Icon(Icons.close_rounded, size: iconSize, color: cs.onSurface),
-            tooltip: 'Close',
-          ),
+          _glassButton(icon: Icons.close_rounded, iconSize: iconSize, isDark: isDark, cs: cs, uiScale: uiScale, onTap: () => _handleCancelAction(context, uiScale, isDark, cs)),
           Expanded(
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
                 Text(
-                  'Select driver',
+                  'Select Driver',
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(
                     fontWeight: FontWeight.w900,
-                    color: cs.onSurface,
-                    fontSize: ui.font(dense ? 11.0 : 12.0),
+                    color: isDark ? cs.onSurface : AppColors.textPrimary,
+                    fontSize: uiScale.font(dense ? 12.5 : 13.5),
                     height: 1.0,
-                    letterSpacing: -0.18,
+                    letterSpacing: -0.25,
                   ),
                 ),
-                SizedBox(height: ui.gap(1)),
-                Text(
-                  widget.loading ? 'Searching…' : 'Live',
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    fontWeight: FontWeight.w800,
-                    // FIXED: Removed opacity to stop fenty text, using solid grey for dark mode
-                    color: isDark ? cs.onSurfaceVariant : cs.onSurface.withOpacity(0.55),
-                    fontSize: ui.font(dense ? 8.7 : 9.5),
-                    height: 1.0,
-                  ),
+                SizedBox(height: uiScale.gap(3)),
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (widget.loading) ...[
+                      SizedBox(
+                        width: uiScale.icon(8), height: uiScale.icon(8),
+                        child: CircularProgressIndicator(strokeWidth: 2, valueColor: AlwaysStoppedAnimation<Color>(isDark ? cs.primary : AppColors.primary)),
+                      ),
+                      SizedBox(width: uiScale.gap(4)),
+                    ] else ...[
+                      Container(
+                        width: uiScale.icon(6), height: uiScale.icon(6),
+                        decoration: const BoxDecoration(shape: BoxShape.circle, color: Color(0xFF00E676)),
+                      ),
+                      SizedBox(width: uiScale.gap(4)),
+                    ],
+                    Text(
+                      widget.loading ? 'Searching...' : 'Live Market',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontWeight: FontWeight.w700,
+                        color: isDark ? cs.onSurfaceVariant : AppColors.textSecondary,
+                        fontSize: uiScale.font(dense ? 9.5 : 10.3),
+                        height: 1.0,
+                      ),
+                    ),
+                  ],
                 ),
               ],
             ),
           ),
-          IconButton(
-            onPressed: () {
-              setState(() => _resetStable(alsoClearSelection: true));
-              widget.onRefresh();
-            },
-            visualDensity: VisualDensity.compact,
-            padding: EdgeInsets.all(ui.inset(4)),
-            constraints: BoxConstraints.tightFor(
-              width: ui.gap(30),
-              height: ui.gap(30),
-            ),
-            icon: Icon(Icons.refresh_rounded, size: iconSize, color: cs.onSurface),
-            tooltip: 'Refresh',
-          ),
+          _glassButton(icon: Icons.refresh_rounded, iconSize: iconSize, isDark: isDark, cs: cs, uiScale: uiScale, onTap: () {
+            HapticFeedback.lightImpact();
+            setState(() => _resetStable(alsoClearSelection: true));
+            widget.onRefresh();
+          }),
         ],
       ),
     );
   }
 
-  Widget _content(
-      BuildContext context,
-      List<RideNearbyDriver> drivers,
-      UIScale ui, {
-        required bool dense,
-        required bool ultraDense,
-        required bool isDark,
-        required ColorScheme cs,
-      }) {
+  Widget _glassButton({required IconData icon, required double iconSize, required bool isDark, required ColorScheme cs, required UIScale uiScale, required VoidCallback onTap}) {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(999),
+        child: Container(
+          padding: EdgeInsets.all(uiScale.inset(6)),
+          decoration: BoxDecoration(
+            color: isDark ? cs.surfaceVariant.withOpacity(0.5) : AppColors.mintBgLight.withOpacity(0.5),
+            shape: BoxShape.circle,
+            border: Border.all(color: isDark ? cs.outline.withOpacity(0.4) : Colors.black.withOpacity(0.05)),
+          ),
+          child: Icon(icon, size: iconSize, color: isDark ? cs.onSurface : AppColors.textPrimary),
+        ),
+      ),
+    );
+  }
+
+  Widget _content(BuildContext context, List<RideNearbyDriver> drivers, UIScale uiScale, {required bool dense, required bool ultraDense, required bool isDark, required ColorScheme cs}) {
     return RepaintBoundary(
       child: ListView(
         physics: const BouncingScrollPhysics(),
-        padding: EdgeInsets.fromLTRB(
-          ui.inset(8),
-          0,
-          ui.inset(8),
-          ui.gap(6),
-        ),
+        padding: EdgeInsets.fromLTRB(uiScale.inset(10), uiScale.gap(8), uiScale.inset(10), uiScale.gap(6)),
         children: [
-          _routeMini(context, ui, dense: dense, isDark: isDark, cs: cs),
-          SizedBox(height: ui.gap(6)),
+          _routeMini(context, uiScale, dense: dense, isDark: isDark, cs: cs),
+          SizedBox(height: uiScale.gap(8)),
           if (_showNoDrivers)
-            _emptyState(context, ui, isDark: isDark, cs: cs)
+            _emptyState(context, uiScale, isDark: isDark, cs: cs)
           else ...[
-            if (widget.loading && drivers.isEmpty) _loadingRow(context, ui, isDark: isDark, cs: cs),
+            if (widget.loading && drivers.isEmpty) _loadingRow(context, uiScale, isDark: isDark, cs: cs),
             ...List.generate(drivers.length, (i) {
               final d = drivers[i];
               final selected = (_selectedDriverId == d.id);
-
               return Padding(
-                padding: EdgeInsets.only(bottom: ui.gap(6)),
+                padding: EdgeInsets.only(bottom: uiScale.gap(6)),
                 child: KeyedSubtree(
                   key: ValueKey(d.id),
                   child: _driverCard(
-                    context,
-                    d,
-                    ui,
-                    dense: dense,
-                    ultraDense: ultraDense,
-                    selected: selected,
-                    isDark: isDark,
-                    cs: cs,
-                    onTap: () => setState(() => _selectedDriverId = d.id),
+                    context, d, uiScale,
+                    dense: dense, ultraDense: ultraDense, selected: selected, isDark: isDark, cs: cs,
+                    onTap: () { HapticFeedback.selectionClick(); setState(() => _selectedDriverId = d.id); },
                   ),
                 ),
               );
@@ -910,35 +716,19 @@ class _RideMarketSheetState extends State<RideMarketSheet> {
     );
   }
 
-  Widget _routeMini(BuildContext context, UIScale ui, {required bool dense, required bool isDark, required ColorScheme cs}) {
-    final origin =
-    widget.originText.trim().isEmpty ? 'Pickup' : widget.originText.trim();
-    final dest = widget.destinationText.trim().isEmpty
-        ? 'Destination'
-        : widget.destinationText.trim();
+  Widget _routeMini(BuildContext context, UIScale uiScale, {required bool dense, required bool isDark, required ColorScheme cs}) {
+    final origin = widget.originText.trim().isEmpty ? 'Pickup' : widget.originText.trim();
+    final dest = widget.destinationText.trim().isEmpty ? 'Destination' : widget.destinationText.trim();
     final count = math.max(widget.driversNearbyCount, _stableDrivers.length);
 
     return Container(
-      padding: EdgeInsets.fromLTRB(
-        ui.inset(dense ? 8 : 10),
-        ui.inset(dense ? 8 : 9),
-        ui.inset(dense ? 8 : 10),
-        ui.inset(dense ? 8 : 9),
-      ),
+      padding: EdgeInsets.all(uiScale.inset(dense ? 8 : 10)),
       decoration: BoxDecoration(
-        color: isDark ? cs.surfaceVariant.withOpacity(0.5) : cs.surface,
-        borderRadius: BorderRadius.circular(ui.radius(13)),
-        border: Border.all(color: isDark ? cs.outline : cs.onSurface.withOpacity(0.08)),
+        color: isDark ? cs.surfaceVariant.withOpacity(0.3) : Colors.black.withOpacity(0.02),
+        borderRadius: BorderRadius.circular(uiScale.radius(12)),
+        border: Border.all(color: isDark ? cs.outline.withOpacity(0.4) : AppColors.mintBgLight.withOpacity(0.5), width: 1.0),
       ),
-      child: _FromToMini(
-        origin: origin,
-        dest: dest,
-        count: count,
-        cs: cs,
-        ui: ui,
-        dense: dense,
-        isDark: isDark,
-      ),
+      child: _FromToMini(origin: origin, dest: dest, count: count, cs: cs, uiScale: uiScale, dense: dense, isDark: isDark),
     );
   }
 
@@ -967,261 +757,118 @@ class _RideMarketSheetState extends State<RideMarketSheet> {
   }
 
   Widget _driverCard(
-      BuildContext context,
-      RideNearbyDriver d,
-      UIScale ui, {
-        required bool dense,
-        required bool ultraDense,
-        required bool selected,
-        required bool isDark,
-        required ColorScheme cs,
-        required VoidCallback onTap,
+      BuildContext context, RideNearbyDriver d, UIScale uiScale, {
+        required bool dense, required bool ultraDense, required bool selected,
+        required bool isDark, required ColorScheme cs, required VoidCallback onTap,
       }) {
-
     final rankText = d.rank.trim().isEmpty ? 'Verified' : d.rank.trim();
     final rc = _rankColor(rankText, isDark, cs);
-
     final vt = d.vehicleType.trim().isEmpty ? 'car' : d.vehicleType.trim();
-    final seats =
-    vt.toLowerCase().contains('bike') ? 1 : (d.seats <= 0 ? 4 : d.seats);
-
+    final seats = vt.toLowerCase().contains('bike') ? 1 : (d.seats <= 0 ? 4 : d.seats);
     final etaText = d.etaMin <= 0 ? '1m' : '${d.etaMin}m';
     final distText = _fmtDistShort(d.distanceKm);
 
     final total = _driverTotal(d);
     final sym = _curSym(d.currency);
     final totalText = total > 0 ? '$sym${_moneyFmt.format(total.round())}' : '—';
+    final img = (d.imagesEffective.isNotEmpty) ? _fixUrl(d.imagesEffective.first) : '';
 
-    final img =
-    (d.imagesEffective.isNotEmpty) ? _fixUrl(d.imagesEffective.first) : '';
-
-    final avatarSize = ultraDense ? 28.0 : (dense ? 30.0 : 32.0);
-    final thumbSize = ultraDense ? 26.0 : (dense ? 28.0 : 30.0);
+    final avatarSize = ultraDense ? 28.0 : (dense ? 30.0 : 34.0);
+    final thumbSize = ultraDense ? 26.0 : (dense ? 28.0 : 32.0);
 
     return AnimatedContainer(
-      duration: const Duration(milliseconds: 120),
-      curve: Curves.easeOut,
+      duration: const Duration(milliseconds: 200),
+      curve: Curves.easeOutCubic,
       decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(ui.radius(14)),
+        borderRadius: BorderRadius.circular(uiScale.radius(14)),
         boxShadow: selected
-            ? [
-          BoxShadow(
-            color: (isDark ? cs.primary : AppColors.primary).withOpacity(0.10),
-            blurRadius: ui.reduceFx ? 6 : 12,
-            offset: const Offset(0, 5),
-          ),
-        ]
+            ? [BoxShadow(color: (isDark ? cs.primary : AppColors.primary).withOpacity(0.15), blurRadius: 12, offset: const Offset(0, 4))]
             : null,
       ),
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(ui.radius(14)),
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 140),
-          curve: Curves.easeOut,
-          padding: EdgeInsets.fromLTRB(
-            ui.inset(7),
-            ui.inset(6),
-            ui.inset(7),
-            ui.inset(6),
-          ),
-          decoration: BoxDecoration(
-            color: selected
-                ? (isDark ? cs.primary.withOpacity(0.12) : AppColors.primary.withOpacity(0.08))
-                : (isDark ? cs.surfaceVariant.withOpacity(0.5) : cs.surface),
-            borderRadius: BorderRadius.circular(ui.radius(14)),
-            border: Border.all(
-              color: selected
-                  ? (isDark ? cs.primary.withOpacity(0.5) : AppColors.primary.withOpacity(0.46))
-                  : (isDark ? cs.outline : cs.onSurface.withOpacity(0.08)),
-              width: selected ? 1.35 : 1.0,
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(uiScale.radius(14)),
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 200),
+            curve: Curves.easeOutCubic,
+            padding: EdgeInsets.all(uiScale.inset(dense ? 8 : 10)),
+            decoration: BoxDecoration(
+              color: selected ? (isDark ? cs.primary.withOpacity(0.12) : AppColors.primary.withOpacity(0.06)) : (isDark ? cs.surfaceVariant.withOpacity(0.3) : Colors.white),
+              borderRadius: BorderRadius.circular(uiScale.radius(14)),
+              border: Border.all(color: selected ? (isDark ? cs.primary : AppColors.primary) : (isDark ? cs.outline.withOpacity(0.3) : AppColors.mintBgLight.withOpacity(0.6)), width: selected ? 1.5 : 1.0),
             ),
-          ),
-          child: LayoutBuilder(
-            builder: (context, c) {
-              final veryNarrow = c.maxWidth < 340;
-
-              return Row(
-                crossAxisAlignment: CrossAxisAlignment.center,
-                children: [
-                  _avatarWithRank(
-                    context,
-                    ui,
-                    d.avatarUrl,
-                    d.initials,
-                    rankText,
-                    rc,
-                    size: avatarSize,
-                    selected: selected,
-                    isDark: isDark,
-                    cs: cs,
-                  ),
-                  SizedBox(width: ui.gap(6)),
-                  Expanded(
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Row(
-                          children: [
-                            Expanded(
-                              child: Text(
-                                d.name,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: TextStyle(
-                                  fontWeight: FontWeight.w900,
-                                  color: cs.onSurface,
-                                  fontSize: ui.font(
-                                    ultraDense ? 10.0 : (dense ? 10.4 : 10.8),
-                                  ),
-                                  height: 1.0,
-                                  letterSpacing: -0.16,
-                                ),
-                              ),
-                            ),
-                            SizedBox(width: ui.gap(4)),
-                            _ratingPill(context, ui, d.rating, isDark: isDark, cs: cs),
-                          ],
-                        ),
-                        SizedBox(height: ui.gap(4)),
-                        SizedBox(
-                          height: ultraDense ? 18 : 20,
-                          child: ListView(
-                            scrollDirection: Axis.horizontal,
-                            physics: const BouncingScrollPhysics(),
-                            padding: EdgeInsets.zero,
-                            children: [
-                              _chipNx(
-                                context,
-                                ui: ui,
-                                icon: _vehicleIconNx(vt),
-                                text: vt.toLowerCase().contains('bike')
-                                    ? 'Bike'
-                                    : 'Car',
-                                tone: isDark ? cs.primary : AppColors.primary,
-                                strong: true,
-                                isDark: isDark,
-                                cs: cs,
-                              ),
-                              SizedBox(width: ui.gap(4)),
-                              _chipNx(
-                                context,
-                                ui: ui,
-                                icon: Icons.airline_seat_recline_normal_rounded,
-                                text: '$seats',
-                                tone: const Color(0xFF1A73E8),
-                                isDark: isDark,
-                                cs: cs,
-                              ),
-                              SizedBox(width: ui.gap(4)),
-                              _chipNx(
-                                context,
-                                ui: ui,
-                                icon: Icons.av_timer_rounded,
-                                text: etaText,
-                                tone: const Color(0xFFB8860B),
-                                isDark: isDark,
-                                cs: cs,
-                              ),
-                              SizedBox(width: ui.gap(4)),
-                              _chipNx(
-                                context,
-                                ui: ui,
-                                icon: Icons.route_rounded,
-                                text: distText,
-                                tone: isDark ? cs.primary : const Color(0xFF1E8E3E),
-                                isDark: isDark,
-                                cs: cs,
-                              ),
-                              if (d.carPlate.trim().isNotEmpty) ...[
-                                SizedBox(width: ui.gap(4)),
-                                _chipNx(
-                                  context,
-                                  ui: ui,
-                                  icon: Icons.qr_code_rounded,
-                                  text: d.carPlate.trim(),
-                                  tone: const Color(0xFF6A5ACD),
-                                  mono: true,
-                                  isDark: isDark,
-                                  cs: cs,
-                                ),
-                              ],
-                              if (!veryNarrow && d.category.trim().isNotEmpty) ...[
-                                SizedBox(width: ui.gap(4)),
-                                _chipNx(
-                                  context,
-                                  ui: ui,
-                                  icon: Icons.bolt_rounded,
-                                  text: _shortCat(d.category),
-                                  tone: isDark ? cs.primary : AppColors.primary,
-                                  isDark: isDark,
-                                  cs: cs,
-                                ),
-                              ],
-                            ],
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  SizedBox(width: ui.gap(6)),
-                  Column(
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                _avatarWithRank(context, uiScale, d.avatarUrl, d.initials, rankText, rc, size: avatarSize, selected: selected, isDark: isDark, cs: cs),
+                SizedBox(width: uiScale.gap(8)),
+                Expanded(
+                  child: Column(
                     mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.end,
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Row(
-                        mainAxisSize: MainAxisSize.min,
                         children: [
-                          _thumb(
-                            context,
-                            ui,
-                            img,
-                            vt,
-                            size: thumbSize,
-                            isDark: isDark,
-                            cs: cs,
-                          ),
-                          if (selected) ...[
-                            SizedBox(width: ui.gap(3)),
-                            Icon(
-                              Icons.check_circle_rounded,
-                              size: ui.icon(13),
-                              color: isDark ? cs.primary : AppColors.primary,
+                          Expanded(
+                            child: Text(
+                              d.name,
+                              maxLines: 1, overflow: TextOverflow.ellipsis,
+                              style: TextStyle(fontWeight: FontWeight.w900, color: isDark ? cs.onSurface : AppColors.textPrimary, fontSize: uiScale.font(ultraDense ? 11.5 : (dense ? 12.0 : 13.0)), height: 1.0, letterSpacing: -0.2),
                             ),
-                          ],
+                          ),
+                          SizedBox(width: uiScale.gap(4)),
+                          _ratingPill(context, uiScale, d.rating, isDark: isDark, cs: cs),
                         ],
                       ),
-                      SizedBox(height: ui.gap(3)),
-                      Text(
-                        totalText,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          fontWeight: FontWeight.w900,
-                          color: cs.onSurface,
-                          fontSize: ui.font(
-                            ultraDense ? 10.0 : (dense ? 10.5 : 11.0),
-                          ),
-                          height: 1.0,
-                          letterSpacing: -0.16,
-                          fontFeatures: const [FontFeature.tabularFigures()],
+                      SizedBox(height: uiScale.gap(6)),
+                      SizedBox(
+                        height: ultraDense ? 18 : 20,
+                        child: ListView(
+                          scrollDirection: Axis.horizontal,
+                          physics: const BouncingScrollPhysics(),
+                          padding: EdgeInsets.zero,
+                          children: [
+                            _chipNx(context, uiScale: uiScale, icon: _vehicleIconNx(vt), text: vt.toLowerCase().contains('bike') ? 'Bike' : 'Car', tone: isDark ? cs.primary : AppColors.primary, strong: true, isDark: isDark, cs: cs),
+                            SizedBox(width: uiScale.gap(4)),
+                            _chipNx(context, uiScale: uiScale, icon: Icons.airline_seat_recline_normal_rounded, text: '$seats', tone: const Color(0xFF1A73E8), isDark: isDark, cs: cs),
+                            SizedBox(width: uiScale.gap(4)),
+                            _chipNx(context, uiScale: uiScale, icon: Icons.av_timer_rounded, text: etaText, tone: const Color(0xFFB8860B), isDark: isDark, cs: cs),
+                            SizedBox(width: uiScale.gap(4)),
+                            _chipNx(context, uiScale: uiScale, icon: Icons.route_rounded, text: distText, tone: isDark ? cs.primary : const Color(0xFF1E8E3E), isDark: isDark, cs: cs),
+                          ],
                         ),
                       ),
                     ],
                   ),
-                ],
-              );
-            },
+                ),
+                SizedBox(width: uiScale.gap(6)),
+                Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        _thumb(context, uiScale, img, vt, size: thumbSize, isDark: isDark, cs: cs),
+                        if (selected) ...[SizedBox(width: uiScale.gap(4)), Icon(Icons.check_circle_rounded, size: uiScale.icon(14), color: isDark ? cs.primary : AppColors.primary)],
+                      ],
+                    ),
+                    SizedBox(height: uiScale.gap(4)),
+                    Text(
+                      totalText,
+                      maxLines: 1,
+                      style: TextStyle(fontWeight: FontWeight.w900, color: isDark ? cs.onSurface : AppColors.textPrimary, fontSize: uiScale.font(ultraDense ? 11.5 : (dense ? 12.0 : 13.5)), height: 1.0, fontFeatures: const [FontFeature.tabularFigures()]),
+                    ),
+                  ],
+                ),
+              ],
+            ),
           ),
         ),
       ),
     );
-  }
-
-  String _shortCat(String s) {
-    final x = s.trim();
-    if (x.length <= 8) return x;
-    return '${x.substring(0, 8)}…';
   }
 
   String _fmtDistShort(double km) {
@@ -1230,145 +877,59 @@ class _RideMarketSheetState extends State<RideMarketSheet> {
     return '${km.toStringAsFixed(1)}km';
   }
 
-  Widget _ratingPill(BuildContext context, UIScale ui, double rating, {required bool isDark, required ColorScheme cs}) {
+  Widget _ratingPill(BuildContext context, UIScale uiScale, double rating, {required bool isDark, required ColorScheme cs}) {
     final r = rating.clamp(0, 5).toDouble();
-
     return Container(
-      padding: EdgeInsets.symmetric(
-        horizontal: ui.inset(5),
-        vertical: ui.inset(3),
-      ),
+      padding: EdgeInsets.symmetric(horizontal: uiScale.inset(5), vertical: uiScale.inset(3)),
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(999),
-        color: const Color(0xFFFFD54F).withOpacity(0.14),
-        border: Border.all(color: isDark ? const Color(0xFFFFD54F).withOpacity(0.5) : cs.onSurface.withOpacity(0.08)),
+        color: const Color(0xFFFFD54F).withOpacity(isDark ? 0.15 : 0.15),
+        border: Border.all(color: const Color(0xFFFFD54F).withOpacity(0.4)),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(
-            Icons.star_rounded,
-            size: ui.icon(9.5),
-            color: const Color(0xFFFFD54F),
-          ),
-          SizedBox(width: ui.gap(2)),
-          Text(
-            r.toStringAsFixed(1),
-            style: TextStyle(
-              fontWeight: FontWeight.w900,
-              color: isDark ? Colors.white : cs.onSurface.withOpacity(0.82),
-              fontSize: ui.font(8.6),
-              height: 1.0,
-              fontFeatures: const [FontFeature.tabularFigures()],
-            ),
-          ),
+          Icon(Icons.star_rounded, size: uiScale.icon(9.5), color: const Color(0xFFFFC107)),
+          SizedBox(width: uiScale.gap(2)),
+          Text(r.toStringAsFixed(1), style: TextStyle(fontWeight: FontWeight.w900, color: isDark ? Colors.white : AppColors.textPrimary.withOpacity(0.9), fontSize: uiScale.font(9.0), height: 1.0, fontFeatures: const [FontFeature.tabularFigures()])),
         ],
       ),
     );
   }
 
-  Widget _avatarWithRank(
-      BuildContext context,
-      UIScale ui,
-      String url,
-      String initials,
-      String rank,
-      Color rc, {
-        required double size,
-        required bool selected,
-        required bool isDark,
-        required ColorScheme cs,
-      }) {
-
-    final borderColor = selected
-        ? (isDark ? cs.primary.withOpacity(0.60) : AppColors.primary.withOpacity(0.40))
-        : (isDark ? cs.outline : cs.onSurface.withOpacity(0.10));
-    final bg = isDark ? cs.surfaceVariant : cs.onSurface.withOpacity(0.06);
+  Widget _avatarWithRank(BuildContext context, UIScale uiScale, String url, String initials, String rank, Color rc, {required double size, required bool selected, required bool isDark, required ColorScheme cs}) {
+    final borderColor = selected ? (isDark ? cs.primary : AppColors.primary) : (isDark ? cs.outline.withOpacity(0.4) : Colors.black12);
+    final bg = isDark ? cs.surfaceVariant : AppColors.mintBgLight.withOpacity(0.5);
     final u = _fixUrl(url);
 
     Widget avatarFallback() {
       return Container(
-        width: size,
-        height: size,
-        decoration: BoxDecoration(
-          shape: BoxShape.circle,
-          color: bg,
-          border: Border.all(color: borderColor, width: 1.0),
-        ),
-        child: Center(
-          child: Text(
-            initials,
-            style: TextStyle(
-              fontWeight: FontWeight.w900,
-              color: isDark ? cs.onSurface : cs.onSurface.withOpacity(0.78),
-              fontSize: ui.font(9.2),
-            ),
-          ),
-        ),
+        width: size, height: size,
+        decoration: BoxDecoration(shape: BoxShape.circle, color: bg, border: Border.all(color: borderColor, width: selected ? 1.5 : 1.0)),
+        child: Center(child: Text(initials, style: TextStyle(fontWeight: FontWeight.w900, color: isDark ? cs.onSurface : AppColors.textPrimary, fontSize: uiScale.font(10.5)))),
       );
     }
 
-    final avatar = (u.isEmpty)
-        ? avatarFallback()
-        : ClipOval(
+    final avatar = (u.isEmpty) ? avatarFallback() : ClipOval(
       child: Container(
-        width: size,
-        height: size,
-        decoration: BoxDecoration(
-          color: bg,
-          border: Border.all(color: borderColor, width: 1.0),
-        ),
-        child: Image.network(
-          u,
-          fit: BoxFit.cover,
-          cacheWidth:
-          (size * MediaQuery.of(context).devicePixelRatio).round(),
-          filterQuality: FilterQuality.low,
-          errorBuilder: (_, __, ___) => avatarFallback(),
-          loadingBuilder: (c, w, p) {
-            if (p == null) return w;
-            return Container(
-              color: bg,
-              child: Center(
-                child: SizedBox(
-                  width: ui.gap(10),
-                  height: ui.gap(10),
-                  child: CircularProgressIndicator(
-                    strokeWidth: 1.8,
-                    valueColor: AlwaysStoppedAnimation<Color>(
-                      isDark ? cs.primary : AppColors.primary,
-                    ),
-                  ),
-                ),
-              ),
-            );
-          },
-        ),
+        width: size, height: size,
+        decoration: BoxDecoration(color: bg, border: Border.all(color: borderColor, width: selected ? 1.5 : 1.0)),
+        child: Image.network(u, fit: BoxFit.cover, errorBuilder: (_, __, ___) => avatarFallback()),
       ),
     );
 
     return SizedBox(
-      width: size + 2,
-      height: size + 2,
+      width: size + 2, height: size + 2,
       child: Stack(
         clipBehavior: Clip.none,
         children: [
           Positioned.fill(child: avatar),
           Positioned(
-            right: -1,
-            top: -1,
+            right: -2, top: -2,
             child: Container(
-              padding: EdgeInsets.all(ui.inset(2)),
-              decoration: BoxDecoration(
-                color: isDark ? cs.surface : Theme.of(context).cardColor,
-                borderRadius: BorderRadius.circular(999),
-                border: Border.all(color: isDark ? cs.outline : cs.onSurface.withOpacity(0.10)),
-              ),
-              child: Icon(
-                _rankIcon(rank),
-                size: ui.icon(9),
-                color: rc,
-              ),
+              padding: EdgeInsets.all(uiScale.inset(2)),
+              decoration: BoxDecoration(color: isDark ? cs.surface : Colors.white, shape: BoxShape.circle, border: Border.all(color: isDark ? cs.outline : Colors.black12), boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.1), blurRadius: 2, offset: const Offset(0, 1))]),
+              child: Icon(_rankIcon(rank), size: uiScale.icon(8), color: rc),
             ),
           ),
         ],
@@ -1376,178 +937,59 @@ class _RideMarketSheetState extends State<RideMarketSheet> {
     );
   }
 
-  Widget _thumb(
-      BuildContext context,
-      UIScale ui,
-      String url,
-      String vehicleType, {
-        required double size,
-        required bool isDark,
-        required ColorScheme cs,
-      }) {
-
+  Widget _thumb(BuildContext context, UIScale uiScale, String url, String vehicleType, {required double size, required bool isDark, required ColorScheme cs}) {
     Widget fallback() {
       return Container(
-        width: size,
-        height: size,
-        decoration: BoxDecoration(
-          color: isDark ? cs.surfaceVariant : cs.onSurface.withOpacity(0.06),
-          borderRadius: BorderRadius.circular(ui.radius(10)),
-          border: Border.all(color: isDark ? cs.outline : cs.onSurface.withOpacity(0.10)),
-        ),
-        child: Center(
-          child: Icon(
-            _vehicleIcon(vehicleType),
-            color: isDark ? cs.onSurfaceVariant : cs.onSurface.withOpacity(0.55),
-            size: ui.icon(14),
-          ),
-        ),
+        width: size, height: size,
+        decoration: BoxDecoration(color: isDark ? cs.surfaceVariant : AppColors.mintBgLight.withOpacity(0.5), borderRadius: BorderRadius.circular(uiScale.radius(8)), border: Border.all(color: isDark ? cs.outline.withOpacity(0.4) : Colors.black12)),
+        child: Center(child: Icon(_vehicleIcon(vehicleType), color: isDark ? cs.onSurfaceVariant : AppColors.textSecondary.withOpacity(0.6), size: uiScale.icon(12))),
       );
     }
-
     final u = _fixUrl(url);
     if (u.isEmpty) return fallback();
-
-    final dpr = MediaQuery.of(context).devicePixelRatio;
-    final cacheW = (size * dpr).round();
-
     return ClipRRect(
-      borderRadius: BorderRadius.circular(ui.radius(10)),
-      child: SizedBox(
-        width: size,
-        height: size,
-        child: Image.network(
-          u,
-          fit: BoxFit.cover,
-          cacheWidth: cacheW,
-          filterQuality: FilterQuality.low,
-          errorBuilder: (_, __, ___) => fallback(),
-          loadingBuilder: (c, w, p) {
-            if (p == null) return w;
-            return Container(
-              color: isDark ? cs.surfaceVariant : cs.onSurface.withOpacity(0.06),
-              child: Center(
-                child: SizedBox(
-                  width: ui.gap(10),
-                  height: ui.gap(10),
-                  child: CircularProgressIndicator(
-                    strokeWidth: 1.8,
-                    valueColor: AlwaysStoppedAnimation<Color>(
-                      isDark ? cs.primary : AppColors.primary,
-                    ),
-                  ),
-                ),
-              ),
-            );
-          },
-        ),
-      ),
+      borderRadius: BorderRadius.circular(uiScale.radius(8)),
+      child: SizedBox(width: size, height: size, child: Image.network(u, fit: BoxFit.cover, errorBuilder: (_, __, ___) => fallback())),
     );
   }
 
-  Widget _loadingRow(BuildContext context, UIScale ui, {required bool isDark, required ColorScheme cs}) {
+  Widget _loadingRow(BuildContext context, UIScale uiScale, {required bool isDark, required ColorScheme cs}) {
     return Container(
-      margin: EdgeInsets.only(bottom: ui.gap(6)),
-      padding: EdgeInsets.fromLTRB(
-        ui.inset(10),
-        ui.inset(8),
-        ui.inset(10),
-        ui.inset(8),
-      ),
-      decoration: BoxDecoration(
-        color: isDark ? cs.surfaceVariant.withOpacity(0.5) : cs.surface,
-        borderRadius: BorderRadius.circular(ui.radius(13)),
-        border: Border.all(color: isDark ? cs.outline : cs.onSurface.withOpacity(0.08)),
-      ),
+      margin: EdgeInsets.only(bottom: uiScale.gap(8)),
+      padding: EdgeInsets.all(uiScale.inset(10)),
+      decoration: BoxDecoration(color: isDark ? cs.surfaceVariant.withOpacity(0.3) : Colors.black.withOpacity(0.02), borderRadius: BorderRadius.circular(uiScale.radius(12)), border: Border.all(color: isDark ? cs.outline.withOpacity(0.3) : Colors.black.withOpacity(0.05))),
       child: Row(
         children: [
-          SizedBox(
-            width: ui.gap(13),
-            height: ui.gap(13),
-            child: CircularProgressIndicator(
-              strokeWidth: 2.0,
-              valueColor: AlwaysStoppedAnimation<Color>(isDark ? cs.primary : AppColors.primary),
-            ),
-          ),
-          SizedBox(width: ui.gap(8)),
-          Expanded(
-            child: Text(
-              'Searching…',
-              style: TextStyle(
-                fontWeight: FontWeight.w900,
-                color: isDark ? cs.onSurface : cs.onSurface.withOpacity(0.78),
-                fontSize: ui.font(10.2),
-              ),
-            ),
-          ),
+          SizedBox(width: uiScale.icon(14), height: uiScale.icon(14), child: CircularProgressIndicator(strokeWidth: 2.0, valueColor: AlwaysStoppedAnimation<Color>(isDark ? cs.primary : AppColors.primary))),
+          SizedBox(width: uiScale.gap(10)),
+          Expanded(child: Text('Finding drivers...', style: TextStyle(fontWeight: FontWeight.w800, color: isDark ? cs.onSurface : AppColors.textPrimary, fontSize: uiScale.font(10.5)))),
         ],
       ),
     );
   }
 
-  Widget _emptyState(BuildContext context, UIScale ui, {required bool isDark, required ColorScheme cs}) {
+  Widget _emptyState(BuildContext context, UIScale uiScale, {required bool isDark, required ColorScheme cs}) {
     return Container(
-      padding: EdgeInsets.fromLTRB(
-        ui.inset(12),
-        ui.inset(12),
-        ui.inset(12),
-        ui.inset(12),
-      ),
-      decoration: BoxDecoration(
-        color: isDark ? cs.surfaceVariant.withOpacity(0.5) : cs.surface,
-        borderRadius: BorderRadius.circular(ui.radius(14)),
-        border: Border.all(color: isDark ? cs.outline : cs.onSurface.withOpacity(0.08)),
-      ),
+      padding: EdgeInsets.all(uiScale.inset(16)),
+      decoration: BoxDecoration(color: isDark ? cs.surfaceVariant.withOpacity(0.3) : Colors.black.withOpacity(0.02), borderRadius: BorderRadius.circular(uiScale.radius(12)), border: Border.all(color: isDark ? cs.outline.withOpacity(0.3) : Colors.black.withOpacity(0.05))),
       child: Column(
         children: [
-          Icon(
-            Icons.directions_car_filled_rounded,
-            color: isDark ? cs.onSurfaceVariant : cs.onSurface.withOpacity(0.55),
-            size: ui.icon(24),
+          Container(
+            padding: EdgeInsets.all(uiScale.inset(10)),
+            decoration: BoxDecoration(shape: BoxShape.circle, color: isDark ? cs.surface : Colors.white, boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.05), blurRadius: 10, offset: const Offset(0, 4))]),
+            child: Icon(Icons.directions_car_filled_rounded, color: isDark ? cs.onSurfaceVariant : AppColors.textSecondary, size: uiScale.icon(22)),
           ),
-          SizedBox(height: ui.gap(6)),
-          Text(
-            'No drivers nearby',
-            style: TextStyle(
-              fontWeight: FontWeight.w900,
-              color: cs.onSurface,
-              fontSize: ui.font(10.8),
-            ),
-          ),
-          SizedBox(height: ui.gap(4)),
-          Text(
-            'Try refresh in a moment.',
-            style: TextStyle(
-              fontWeight: FontWeight.w700,
-              color: isDark ? cs.onSurfaceVariant : cs.onSurface.withOpacity(0.60),
-              fontSize: ui.font(9.0),
-            ),
-          ),
-          SizedBox(height: ui.gap(8)),
+          SizedBox(height: uiScale.gap(10)),
+          Text('No drivers available', style: TextStyle(fontWeight: FontWeight.w900, color: isDark ? cs.onSurface : AppColors.textPrimary, fontSize: uiScale.font(12.5), letterSpacing: -0.3)),
+          SizedBox(height: uiScale.gap(4)),
+          Text('Please try refreshing in a moment.', textAlign: TextAlign.center, style: TextStyle(fontWeight: FontWeight.w600, color: isDark ? cs.onSurfaceVariant : AppColors.textSecondary, fontSize: uiScale.font(10.5))),
+          SizedBox(height: uiScale.gap(16)),
           SizedBox(
-            width: double.infinity,
-            height: ui.gap(36),
+            width: double.infinity, height: 40,
             child: ElevatedButton(
-              onPressed: () {
-                setState(() => _resetStable(alsoClearSelection: true));
-                widget.onRefresh();
-              },
-              style: ElevatedButton.styleFrom(
-                backgroundColor: isDark ? cs.primary : AppColors.primary,
-                foregroundColor: isDark ? cs.onPrimary : Colors.white,
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(ui.radius(12)),
-                ),
-                elevation: 0,
-                padding: EdgeInsets.zero,
-              ),
-              child: Text(
-                'Refresh',
-                style: TextStyle(
-                  fontWeight: FontWeight.w900,
-                  fontSize: ui.font(10.2),
-                ),
-              ),
+              onPressed: () { HapticFeedback.selectionClick(); setState(() => _resetStable(alsoClearSelection: true)); widget.onRefresh(); },
+              style: ElevatedButton.styleFrom(backgroundColor: isDark ? cs.primary : AppColors.primary, foregroundColor: isDark ? cs.onPrimary : Colors.white, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(uiScale.radius(10))), elevation: 0),
+              child: Text('Refresh', style: TextStyle(fontWeight: FontWeight.w900, fontSize: uiScale.font(11.5))),
             ),
           ),
         ],
@@ -1555,118 +997,77 @@ class _RideMarketSheetState extends State<RideMarketSheet> {
     );
   }
 
-  Widget _bottomBar(
-      BuildContext context,
-      MediaQueryData mq,
-      List<RideNearbyDriver> drivers,
-      UIScale ui, {
-        required bool dense,
-        required double maxHeight,
-        required bool isDark,
-        required ColorScheme cs,
-      }) {
-    final selected = (_selectedDriverId != null)
-        ? drivers
-        .where((x) => x.id == _selectedDriverId)
-        .toList(growable: false)
-        : const <RideNearbyDriver>[];
-
+  Widget _bottomBar(BuildContext context, MediaQueryData mq, List<RideNearbyDriver> drivers, UIScale uiScale, {required bool dense, required double maxHeight, required bool isDark, required ColorScheme cs}) {
+    final selected = (_selectedDriverId != null) ? drivers.where((x) => x.id == _selectedDriverId).toList(growable: false) : const <RideNearbyDriver>[];
     final driverSelected = selected.isNotEmpty;
-    final bottomInset = _bottomInset(mq, ui, maxHeight);
+    final bottomInset = _bottomInset(mq, uiScale, maxHeight);
+
+    final buttonHeight = math.max(40.0, uiScale.landscape ? uiScale.gap(44) : uiScale.gap(50));
 
     return SafeArea(
       top: false,
       child: Container(
-        padding: EdgeInsets.fromLTRB(
-          ui.inset(8),
-          ui.inset(6),
-          ui.inset(8),
-          bottomInset,
-        ),
+        padding: EdgeInsets.fromLTRB(uiScale.inset(10), uiScale.inset(8), uiScale.inset(10), bottomInset),
         decoration: BoxDecoration(
-          color: isDark ? cs.surface : Theme.of(context).cardColor,
-          border: Border(
-            top: BorderSide(color: isDark ? cs.outline : cs.onSurface.withOpacity(0.08)),
-          ),
+          color: isDark ? cs.surface.withOpacity(0.8) : Colors.white.withOpacity(0.9),
+          border: Border(top: BorderSide(color: isDark ? cs.outline.withOpacity(0.4) : Colors.black.withOpacity(0.04))),
         ),
         child: SizedBox(
           width: double.infinity,
-          height: ui.gap(dense ? 36 : 40),
+          height: buttonHeight,
           child: ElevatedButton(
-            onPressed: driverSelected
-                ? () async {
+            onPressed: driverSelected ? () async {
+              HapticFeedback.selectionClick();
               final d = selected.first;
-
               setState(() => _fullyFrozen = true);
 
               final driverMap = _driverToMap(d);
               final offerMap = _offerMapFromDriver(d);
 
-              final payload =
-              await showModalBottomSheet<Map<String, dynamic>>(
+              final payload = await showModalBottomSheet<Map<String, dynamic>>(
                 context: context,
                 isScrollControlled: true,
                 backgroundColor: Colors.transparent,
                 builder: (_) {
                   return DriverDetailsSheet(
-                    driver: driverMap,
-                    offer: offerMap,
-                    originText: widget.originText,
-                    destinationText: widget.destinationText,
-                    distanceText: widget.distanceText,
-                    durationText: widget.durationText,
-                    tripDistanceKm: _tripKm,
-                    userLocation: widget.userLocation,
-                    pickupLocation: widget.pickupLocation,
-                    dropLocation: widget.dropLocation,
+                    driver: driverMap, offer: offerMap,
+                    originText: widget.originText, destinationText: widget.destinationText,
+                    distanceText: widget.distanceText, durationText: widget.durationText,
+                    tripDistanceKm: _tripKm, userLocation: widget.userLocation,
+                    pickupLocation: widget.pickupLocation, dropLocation: widget.dropLocation,
                   );
                 },
               );
 
-              if (payload == null) return;
+              // RESTORED: If the user cancels or dismisses the Details Sheet, do not book.
+              if (payload == null) {
+                setState(() => _fullyFrozen = false);
+                return;
+              }
 
               final offer = RideOffer(
-                id: 'driver-${d.id}',
-                provider: 'PickMe',
-                category: d.category.isNotEmpty
-                    ? d.category
-                    : (d.vehicleType.toLowerCase().contains('bike')
-                    ? 'Bike'
-                    : 'Car'),
-                etaToPickupMin: d.etaMin,
-                price: _driverTotal(d).round(),
-                surge: false,
-                driverName: d.name,
-                rating: d.rating,
-                carPlate: d.carPlate,
-                seats: d.seats,
-                currency: d.currency,
-                pricePerKm: d.pricePerKm,
-                baseFare: d.baseFare,
-                estimatedTotal: _driverTotal(d),
-                vehicleType: d.vehicleType,
+                id: 'driver-${d.id}', provider: 'PickMe',
+                category: d.category.isNotEmpty ? d.category : (d.vehicleType.toLowerCase().contains('bike') ? 'Bike' : 'Car'),
+                etaToPickupMin: d.etaMin, price: _driverTotal(d).round(),
+                surge: false, driverName: d.name, rating: d.rating,
+                carPlate: d.carPlate, seats: d.seats, currency: d.currency,
+                pricePerKm: d.pricePerKm, baseFare: d.baseFare,
+                estimatedTotal: _driverTotal(d), vehicleType: d.vehicleType,
               );
 
               widget.onBook(d, offer);
-            }
-                : null,
+            } : null,
             style: ElevatedButton.styleFrom(
               backgroundColor: isDark ? cs.primary : AppColors.primary,
               foregroundColor: isDark ? cs.onPrimary : Colors.white,
-              disabledBackgroundColor: isDark ? cs.surfaceVariant : cs.onSurface.withOpacity(0.10),
-              disabledForegroundColor: isDark ? cs.onSurfaceVariant.withOpacity(0.5) : cs.onSurface.withOpacity(0.40),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(ui.radius(14)),
-              ),
-              elevation: 0,
-              padding: EdgeInsets.zero,
+              disabledBackgroundColor: isDark ? cs.surfaceVariant : AppColors.mintBgLight,
+              disabledForegroundColor: isDark ? cs.onSurfaceVariant.withOpacity(0.5) : AppColors.textSecondary.withOpacity(0.5),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(uiScale.radius(16))),
+              elevation: driverSelected ? 4 : 0,
             ),
             child: Text(
-              'Select driver',
-              style: TextStyle(
-                fontWeight: FontWeight.w900,
-                fontSize: ui.font(dense ? 10.2 : 10.8),
-              ),
+              driverSelected ? 'Continue with ${selected.first.name.split(" ").first}' : 'Select a driver to continue',
+              style: TextStyle(fontWeight: FontWeight.w900, fontSize: uiScale.font(13.5), letterSpacing: -0.15),
             ),
           ),
         ),
@@ -1676,54 +1077,25 @@ class _RideMarketSheetState extends State<RideMarketSheet> {
 
   Map<String, dynamic> _driverToMap(RideNearbyDriver d) {
     return <String, dynamic>{
-      'id': d.id,
-      'name': d.name,
-      'category': d.category,
-      'rating': d.rating,
-      'car_plate': d.carPlate,
-      'lat': d.lat,
-      'lng': d.lng,
-      'heading': d.heading,
-      'distance_km': d.distanceKm,
-      'eta_min': d.etaMin,
-      'vehicle_type': d.vehicleType,
-      'seats': d.seats,
-      'vehicle_images': d.vehicleImages,
-      'vehicle_description': d.vehicleDescription,
-      'car_image_url': d.carImageUrl,
-      'avatar_url': d.avatarUrl,
-      'phone': d.phone,
-      'nin': d.nin,
-      'rank': d.rank,
-      'completed_trips': d.completedTrips,
-      'cancelled_trips': d.cancelledTrips,
-      'incomplete_trips': d.incompleteTrips,
-      'reviews_count': d.reviewsCount,
-      'total_trips': d.totalTrips,
-      'currency': d.currency,
-      'price_per_km': d.pricePerKm,
-      'base_fare': d.baseFare,
-      'estimated_total': _driverTotal(d),
-      'trip_km': _tripKm,
+      'id': d.id, 'name': d.name, 'category': d.category, 'rating': d.rating, 'car_plate': d.carPlate,
+      'lat': d.lat, 'lng': d.lng, 'heading': d.heading, 'distance_km': d.distanceKm, 'eta_min': d.etaMin,
+      'vehicle_type': d.vehicleType, 'seats': d.seats, 'vehicle_images': d.vehicleImages,
+      'vehicle_description': d.vehicleDescription, 'car_image_url': d.carImageUrl, 'avatar_url': d.avatarUrl,
+      'phone': d.phone, 'nin': d.nin, 'rank': d.rank, 'completed_trips': d.completedTrips,
+      'cancelled_trips': d.cancelledTrips, 'incomplete_trips': d.incompleteTrips, 'reviews_count': d.reviewsCount,
+      'total_trips': d.totalTrips, 'currency': d.currency, 'price_per_km': d.pricePerKm,
+      'base_fare': d.baseFare, 'estimated_total': _driverTotal(d), 'trip_km': _tripKm,
     };
   }
 
   Map<String, dynamic> _offerMapFromDriver(RideNearbyDriver d) {
     final total = _driverTotal(d);
     return <String, dynamic>{
-      'id': 'driver-${d.id}',
-      'provider': 'PickMe',
-      'category':
-      d.vehicleType.toLowerCase().contains('bike') ? 'Bike' : 'Car',
-      'vehicle_type': d.vehicleType,
-      'seats': d.seats,
-      'eta_min': d.etaMin,
-      'currency': d.currency,
-      'price_per_km': d.pricePerKm,
-      'base_fare': d.baseFare,
-      'estimated_total': total,
-      'trip_km': _tripKm,
-      'price_total': total,
+      'id': 'driver-${d.id}', 'provider': 'PickMe',
+      'category': d.vehicleType.toLowerCase().contains('bike') ? 'Bike' : 'Car',
+      'vehicle_type': d.vehicleType, 'seats': d.seats, 'eta_min': d.etaMin,
+      'currency': d.currency, 'price_per_km': d.pricePerKm, 'base_fare': d.baseFare,
+      'estimated_total': total, 'trip_km': _tripKm, 'price_total': total,
     };
   }
 }
@@ -1733,79 +1105,40 @@ class _FromToMini extends StatelessWidget {
   final String dest;
   final int count;
   final ColorScheme cs;
-  final UIScale ui;
+  final UIScale uiScale;
   final bool dense;
   final bool isDark;
 
-  const _FromToMini({
-    required this.origin,
-    required this.dest,
-    required this.count,
-    required this.cs,
-    required this.ui,
-    required this.dense,
-    required this.isDark,
-  });
+  const _FromToMini({required this.origin, required this.dest, required this.count, required this.cs, required this.uiScale, required this.dense, required this.isDark});
 
   @override
   Widget build(BuildContext context) {
     final h = dense ? 38.0 : 42.0;
     final treeW = dense ? 14.0 : 16.0;
     final gap = dense ? 6.0 : 8.0;
-    final countW = ui.landscape ? 82.0 : 92.0;
 
     return SizedBox(
       height: h,
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          _RouteTreeAligned(
-            cs: cs,
-            ui: ui,
-            height: h,
-            width: treeW,
-            dense: dense,
-            isDark: isDark,
-          ),
+          _RouteTreeAligned(cs: cs, uiScale: uiScale, height: h, width: treeW, dense: dense, isDark: isDark),
           SizedBox(width: gap),
           Expanded(
             child: Stack(
               clipBehavior: Clip.none,
               children: [
-                Padding(
-                  padding: EdgeInsets.only(right: countW),
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      _LabeledLine(
-                        label: 'FROM',
-                        value: origin,
-                        cs: cs,
-                        ui: ui,
-                        strong: true,
-                        isDark: isDark,
-                      ),
-                      _LabeledLine(
-                        label: 'TO',
-                        value: dest,
-                        cs: cs,
-                        ui: ui,
-                        strong: false,
-                        isDark: isDark,
-                      ),
-                    ],
-                  ),
+                Column(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    _LabeledLine(label: 'FROM', value: origin, cs: cs, uiScale: uiScale, strong: true, isDark: isDark),
+                    _LabeledLine(label: 'TO', value: dest, cs: cs, uiScale: uiScale, strong: false, isDark: isDark),
+                  ],
                 ),
                 Positioned(
-                  right: 0,
-                  top: 0,
-                  child: _NearbyPillMini(
-                    count: count,
-                    cs: cs,
-                    ui: ui,
-                    isDark: isDark,
-                  ),
+                  right: 0, top: 0, bottom: 0,
+                  child: Center(child: _NearbyPillMini(count: count, cs: cs, uiScale: uiScale, isDark: isDark)),
                 ),
               ],
             ),
@@ -1818,20 +1151,13 @@ class _FromToMini extends StatelessWidget {
 
 class _RouteTreeAligned extends StatelessWidget {
   final ColorScheme cs;
-  final UIScale ui;
+  final UIScale uiScale;
   final double height;
   final double width;
   final bool dense;
   final bool isDark;
 
-  const _RouteTreeAligned({
-    required this.cs,
-    required this.ui,
-    required this.height,
-    required this.width,
-    required this.dense,
-    required this.isDark,
-  });
+  const _RouteTreeAligned({required this.cs, required this.uiScale, required this.height, required this.width, required this.dense, required this.isDark});
 
   @override
   Widget build(BuildContext context) {
@@ -1839,33 +1165,13 @@ class _RouteTreeAligned extends StatelessWidget {
     const end = Color(0xFF1E8E3E);
 
     return SizedBox(
-      width: width,
-      height: height,
+      width: width, height: height,
       child: Column(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          _ProNode(
-            color: start,
-            glyph: Icons.my_location_rounded,
-            size: dense ? 9.0 : 10.0,
-            iconSize: dense ? 6.0 : 7.0,
-          ),
-          Expanded(
-            child: Padding(
-              padding: const EdgeInsets.symmetric(vertical: 2),
-              child: CustomPaint(
-                painter: _DottedStemPainter(
-                  color: isDark ? cs.onSurfaceVariant : cs.onSurface.withOpacity(0.22),
-                ),
-              ),
-            ),
-          ),
-          _ProNode(
-            color: end,
-            glyph: Icons.place_rounded,
-            size: dense ? 9.0 : 10.0,
-            iconSize: dense ? 6.0 : 7.0,
-          ),
+          _ProNode(color: start, glyph: Icons.my_location_rounded, size: dense ? 9.0 : 10.0, iconSize: dense ? 6.0 : 7.0),
+          Expanded(child: Padding(padding: const EdgeInsets.symmetric(vertical: 2), child: CustomPaint(painter: _DottedStemPainter(color: isDark ? cs.outline : Colors.black26)))),
+          _ProNode(color: end, glyph: Icons.place_rounded, size: dense ? 9.0 : 10.0, iconSize: dense ? 6.0 : 7.0),
         ],
       ),
     );
@@ -1878,46 +1184,19 @@ class _ProNode extends StatelessWidget {
   final double size;
   final double iconSize;
 
-  const _ProNode({
-    required this.color,
-    required this.glyph,
-    required this.size,
-    required this.iconSize,
-  });
+  const _ProNode({required this.color, required this.glyph, required this.size, required this.iconSize});
 
   @override
   Widget build(BuildContext context) {
     final inner = size - 2;
-
     return Container(
-      width: size,
-      height: size,
-      decoration: BoxDecoration(
-        shape: BoxShape.circle,
-        color: color.withOpacity(0.16),
-      ),
+      width: size, height: size,
+      decoration: BoxDecoration(shape: BoxShape.circle, color: color.withOpacity(0.2)),
       child: Center(
         child: Container(
-          width: inner,
-          height: inner,
-          decoration: BoxDecoration(
-            shape: BoxShape.circle,
-            gradient: RadialGradient(
-              center: const Alignment(-0.25, -0.25),
-              radius: 0.9,
-              colors: [
-                color.withOpacity(0.98),
-                color.withOpacity(0.60),
-              ],
-            ),
-          ),
-          child: Center(
-            child: Icon(
-              glyph,
-              size: iconSize,
-              color: Colors.white.withOpacity(0.95),
-            ),
-          ),
+          width: inner, height: inner,
+          decoration: BoxDecoration(shape: BoxShape.circle, color: color),
+          child: Center(child: Icon(glyph, size: iconSize, color: Colors.white)),
         ),
       ),
     );
@@ -1926,51 +1205,31 @@ class _ProNode extends StatelessWidget {
 
 class _DottedStemPainter extends CustomPainter {
   final Color color;
-
   const _DottedStemPainter({required this.color});
-
   @override
   void paint(Canvas canvas, Size size) {
     final p = Paint()..color = color;
-    const dashH = 2.0;
-    const gap = 2.0;
-
-    final x = size.width / 2;
-    double y = 0;
-
+    const dashH = 2.0; const gap = 2.0;
+    final x = size.width / 2; double y = 0;
     while (y < size.height) {
       final h = (y + dashH <= size.height) ? dashH : (size.height - y);
-      final rect = RRect.fromRectAndRadius(
-        Rect.fromCenter(center: Offset(x, y + h / 2), width: 1.6, height: h),
-        const Radius.circular(99),
-      );
-      canvas.drawRRect(rect, p);
+      canvas.drawRRect(RRect.fromRectAndRadius(Rect.fromCenter(center: Offset(x, y + h / 2), width: 1.5, height: h), const Radius.circular(99)), p);
       y += dashH + gap;
     }
   }
-
   @override
-  bool shouldRepaint(covariant _DottedStemPainter oldDelegate) {
-    return oldDelegate.color != color;
-  }
+  bool shouldRepaint(covariant _DottedStemPainter old) => old.color != color;
 }
 
 class _LabeledLine extends StatelessWidget {
   final String label;
   final String value;
   final ColorScheme cs;
-  final UIScale ui;
+  final UIScale uiScale;
   final bool strong;
   final bool isDark;
 
-  const _LabeledLine({
-    required this.label,
-    required this.value,
-    required this.cs,
-    required this.ui,
-    required this.strong,
-    required this.isDark,
-  });
+  const _LabeledLine({required this.label, required this.value, required this.cs, required this.uiScale, required this.strong, required this.isDark});
 
   @override
   Widget build(BuildContext context) {
@@ -1978,34 +1237,12 @@ class _LabeledLine extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.center,
       children: [
         SizedBox(
-          width: 27,
-          child: Text(
-            label,
-            maxLines: 1,
-            overflow: TextOverflow.clip,
-            style: TextStyle(
-              fontSize: ui.font(7.8),
-              height: 1.0,
-              fontWeight: FontWeight.w900,
-              letterSpacing: 0.30,
-              color: isDark ? cs.onSurfaceVariant : cs.onSurface.withOpacity(0.42),
-            ),
-          ),
+          width: 32,
+          child: Text(label, style: TextStyle(fontSize: uiScale.font(7.8), height: 1.0, fontWeight: FontWeight.w900, letterSpacing: 0.3, color: isDark ? cs.onSurfaceVariant : AppColors.textSecondary)),
         ),
-        const SizedBox(width: 4),
+        SizedBox(width: uiScale.gap(4)),
         Expanded(
-          child: Text(
-            value,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: TextStyle(
-              fontSize: ui.font(strong ? 9.8 : 9.2),
-              height: 1.0,
-              letterSpacing: -0.12,
-              fontWeight: strong ? FontWeight.w900 : FontWeight.w800,
-              color: isDark ? cs.onSurface : cs.onSurface.withOpacity(strong ? 0.92 : 0.66),
-            ),
-          ),
+          child: Text(value, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: uiScale.font(strong ? 11.5 : 10.5), height: 1.0, letterSpacing: -0.15, fontWeight: strong ? FontWeight.w900 : FontWeight.w700, color: isDark ? cs.onSurface : AppColors.textPrimary)),
         ),
       ],
     );
@@ -2015,54 +1252,27 @@ class _LabeledLine extends StatelessWidget {
 class _NearbyPillMini extends StatelessWidget {
   final int count;
   final ColorScheme cs;
-  final UIScale ui;
+  final UIScale uiScale;
   final bool isDark;
 
-  const _NearbyPillMini({
-    required this.count,
-    required this.cs,
-    required this.ui,
-    required this.isDark,
-  });
+  const _NearbyPillMini({required this.count, required this.cs, required this.uiScale, required this.isDark});
 
   @override
   Widget build(BuildContext context) {
-    return DecoratedBox(
+    return Container(
+      padding: EdgeInsets.symmetric(horizontal: uiScale.inset(6), vertical: uiScale.inset(4)),
       decoration: BoxDecoration(
-        color: isDark ? cs.surfaceVariant : cs.surface.withOpacity(0.88),
+        color: (isDark ? cs.primary : AppColors.primary).withOpacity(0.12),
         borderRadius: BorderRadius.circular(999),
-        border: Border.all(
-          color: isDark ? cs.outline : AppColors.primary.withOpacity(0.22),
-          width: 1,
-        ),
+        border: Border.all(color: (isDark ? cs.primary : AppColors.primary).withOpacity(0.3), width: 1.0),
       ),
-      child: Padding(
-        padding: EdgeInsets.symmetric(
-          horizontal: ui.inset(6),
-          vertical: ui.inset(3),
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(
-              Icons.near_me_rounded,
-              size: ui.icon(9),
-              color: isDark ? cs.primary : AppColors.primary,
-            ),
-            SizedBox(width: ui.gap(3)),
-            Text(
-              '$count',
-              style: TextStyle(
-                fontSize: ui.font(8.4),
-                height: 1.0,
-                fontWeight: FontWeight.w900,
-                letterSpacing: -0.08,
-                color: isDark ? cs.onSurface : cs.onSurface.withOpacity(0.88),
-                fontFeatures: const [FontFeature.tabularFigures()],
-              ),
-            ),
-          ],
-        ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.radar_rounded, size: uiScale.icon(9), color: isDark ? cs.primary : AppColors.primary),
+          SizedBox(width: uiScale.gap(3)),
+          Text('$count Nearby', style: TextStyle(fontSize: uiScale.font(8.5), height: 1.0, fontWeight: FontWeight.w900, color: isDark ? cs.primary : AppColors.primary)),
+        ],
       ),
     );
   }
@@ -2070,21 +1280,15 @@ class _NearbyPillMini extends StatelessWidget {
 
 IconData _vehicleIconNx(String vt) {
   final v = vt.toLowerCase();
-  if (v.contains('bike') || v.contains('moto')) {
-    return Icons.two_wheeler_rounded;
-  }
-  if (v.contains('bus') || v.contains('van')) {
-    return Icons.airport_shuttle_rounded;
-  }
-  if (v.contains('lux') || v.contains('vip')) {
-    return Icons.workspace_premium_rounded;
-  }
+  if (v.contains('bike') || v.contains('moto')) return Icons.two_wheeler_rounded;
+  if (v.contains('bus') || v.contains('van')) return Icons.airport_shuttle_rounded;
+  if (v.contains('lux') || v.contains('vip')) return Icons.workspace_premium_rounded;
   return Icons.directions_car_filled_rounded;
 }
 
 Widget _chipNx(
     BuildContext context, {
-      required UIScale ui,
+      required UIScale uiScale,
       required IconData icon,
       required String text,
       required Color tone,
@@ -2093,42 +1297,30 @@ Widget _chipNx(
       required bool isDark,
       required ColorScheme cs,
     }) {
-
-  return DecoratedBox(
+  return Container(
+    padding: EdgeInsets.symmetric(horizontal: uiScale.inset(6), vertical: uiScale.inset(2.5)),
     decoration: BoxDecoration(
-      color: tone.withOpacity(isDark ? 0.20 : 0.10),
+      color: tone.withOpacity(isDark ? 0.15 : 0.06),
       borderRadius: BorderRadius.circular(999),
-      border: Border.all(color: tone.withOpacity(isDark ? 0.35 : 0.20), width: 1),
+      border: Border.all(color: tone.withOpacity(isDark ? 0.4 : 0.15), width: 1),
     ),
-    child: Padding(
-      padding: EdgeInsets.symmetric(
-        horizontal: ui.inset(5),
-        vertical: ui.inset(2.5),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(
-            icon,
-            size: ui.icon(8.8),
-            color: tone.withOpacity(0.95),
+    child: Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(icon, size: uiScale.icon(9.0), color: tone),
+        SizedBox(width: uiScale.gap(3)),
+        Text(
+          text,
+          maxLines: 1,
+          style: TextStyle(
+            fontWeight: FontWeight.w900,
+            color: isDark ? cs.onSurface : AppColors.textPrimary,
+            fontSize: uiScale.font(8.8),
+            height: 1.0,
+            fontFeatures: mono ? const [FontFeature.tabularFigures()] : null,
           ),
-          SizedBox(width: ui.gap(3)),
-          Text(
-            text,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: TextStyle(
-              fontWeight: strong ? FontWeight.w900 : FontWeight.w800,
-              color: isDark ? cs.onSurface : cs.onSurface.withOpacity(0.86),
-              fontSize: ui.font(7.8),
-              height: 1.0,
-              letterSpacing: -0.05,
-              fontFeatures: mono ? const [FontFeature.tabularFigures()] : null,
-            ),
-          ),
-        ],
-      ),
+        ),
+      ],
     ),
   );
 }

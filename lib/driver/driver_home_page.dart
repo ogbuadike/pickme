@@ -7,6 +7,7 @@ import 'dart:ui' as ui;
 import 'package:flutter/foundation.dart' show TargetPlatform, defaultTargetPlatform, kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_compass/flutter_compass.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:http/http.dart' as http;
@@ -22,11 +23,8 @@ import '../widgets/app_menu_drawer.dart';
 import '../widgets/bottom_navigation_bar.dart';
 import '../widgets/fund_account_sheet.dart';
 import '../widgets/header_bar.dart';
-import '../widgets/inner_background.dart';
 import '../screens/trip_navigation_page.dart';
 import '../screens/authentication/transactionAuthSheet.dart';
-
-// --- ENTERPRISE DELEGATES ---
 import '../screens/state/map_graphics_engine.dart';
 import '../screens/state/location_permission_modal.dart';
 import 'state/driver_models.dart';
@@ -60,12 +58,16 @@ class _DriverHomePageState extends State<DriverHomePage> with WidgetsBindingObse
 
   Map<String, dynamic>? _user;
   bool _busyProfile = false;
-  bool _booting = true;
   bool _busyOnlineToggle = false;
   bool _busyRideAction = false;
   bool _dashboardConnected = true;
   bool _panelExpanded = false;
   int _currentIndex = 0;
+
+  // HIGH PERFORMANCE STATE
+  bool _booting = true;
+  bool _mapVisible = false; // Controls GPU destruction
+  DateTime _lastMarkerRebuild = DateTime.now();
 
   DriverProfile? _driver;
   RideJob? _activeRide;
@@ -74,6 +76,7 @@ class _DriverHomePageState extends State<DriverHomePage> with WidgetsBindingObse
   GoogleMapController? _map;
   Position? _currentPosition;
   StreamSubscription<Position>? _locationSub;
+  StreamSubscription<CompassEvent>? _compassSub;
   Timer? _dashboardTimer;
   Timer? _heartbeatTimer;
 
@@ -90,6 +93,11 @@ class _DriverHomePageState extends State<DriverHomePage> with WidgetsBindingObse
   BitmapDescriptor? _pickupIcon;
   BitmapDescriptor? _dropIcon;
 
+  double _emaHeading = 0.0;
+  static const double _smoothingFactor = 0.25;
+  List<LatLng> _overviewRoutePoints = [];
+  String? _lastRouteId;
+
   @override
   void initState() {
     super.initState();
@@ -98,12 +106,47 @@ class _DriverHomePageState extends State<DriverHomePage> with WidgetsBindingObse
     _bootstrap();
   }
 
+  Future<void> _bootstrap() async {
+    if (mounted) setState(() => _booting = true);
+
+    try {
+      _prefs = await SharedPreferences.getInstance();
+      await _preloadIcons();
+
+      await Future.wait<void>([
+        _fetchUser(),
+        _fetchDashboard(initial: true),
+      ]);
+
+      _startHardwareCompass();
+      _startDashboardPolling(forceNow: false);
+
+      if (_driver?.isOnline == true) {
+        await _startLocationEngine();
+      }
+
+      await Future.delayed(const Duration(milliseconds: 300));
+    } catch (e) {
+      if (!mounted) return;
+      _statusMessage = e.toString().replaceFirst('Exception: ', '');
+      showToastNotification(context: context, title: 'Dashboard unavailable', message: _statusMessage ?? 'Please try again.', isSuccess: false);
+    } finally {
+      if (mounted) {
+        setState(() {
+          _booting = false;
+          _mapVisible = true;
+        });
+      }
+    }
+  }
+
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _dashboardTimer?.cancel();
     _heartbeatTimer?.cancel();
     _locationSub?.cancel();
+    _compassSub?.cancel();
     try { _map?.dispose(); } catch (_) {}
     super.dispose();
   }
@@ -126,30 +169,26 @@ class _DriverHomePageState extends State<DriverHomePage> with WidgetsBindingObse
     }
   }
 
-  Future<void> _bootstrap() async {
-    if (mounted) setState(() => _booting = true);
+  void _startHardwareCompass() {
+    _compassSub?.cancel();
+    _compassSub = FlutterCompass.events?.listen((CompassEvent event) {
+      if (event.heading == null || !mounted || !_mapVisible) return;
 
-    try {
-      _prefs = await SharedPreferences.getInstance();
+      double targetHeading = event.heading! % 360.0;
+      if (targetHeading < 0) targetHeading += 360.0;
 
-      await _preloadIcons();
-      await Future.wait<void>([
-        _fetchUser(),
-        _fetchDashboard(initial: true),
-      ]);
+      double diff = targetHeading - _emaHeading;
+      while (diff < -180.0) diff += 360.0;
+      while (diff > 180.0) diff -= 360.0;
+      _emaHeading += diff * _smoothingFactor;
 
-      _startDashboardPolling(forceNow: false);
-
-      if (_driver?.isOnline == true) {
-        await _startLocationEngine();
+      // Throttle setState to max 10 FPS to prevent UI choking
+      final now = DateTime.now();
+      if (now.difference(_lastMarkerRebuild).inMilliseconds > 100) {
+        _lastMarkerRebuild = now;
+        setState(() {});
       }
-    } catch (e) {
-      if (!mounted) return;
-      _statusMessage = e.toString().replaceFirst('Exception: ', '');
-      showToastNotification(context: context, title: 'Dashboard unavailable', message: _statusMessage ?? 'Please try again.', isSuccess: false);
-    } finally {
-      if (mounted) setState(() => _booting = false);
-    }
+    });
   }
 
   Future<void> _preloadIcons() async {
@@ -159,8 +198,8 @@ class _DriverHomePageState extends State<DriverHomePage> with WidgetsBindingObse
 
     final results = await Future.wait<BitmapDescriptor>([
       MapGraphicsEngine.createPremiumAvatarPin(avatarImage: null, isDark: isDark, cs: cs),
-      MapGraphicsEngine.createRingDotMarker(const Color(0xFF1E8E3E)), // Pickup (Green)
-      MapGraphicsEngine.createRingDotMarker(const Color(0xFFE53935)), // Drop (Red)
+      MapGraphicsEngine.createRingDotMarker(const Color(0xFF1E8E3E)),
+      MapGraphicsEngine.createRingDotMarker(const Color(0xFFE53935)),
     ]);
 
     _userPinIcon = results[0];
@@ -186,25 +225,6 @@ class _DriverHomePageState extends State<DriverHomePage> with WidgetsBindingObse
           setState(() {
             _user = raw.map((k, v) => MapEntry<String, dynamic>(k.toString(), v));
           });
-
-          // Re-generate pin if avatar exists
-          final avatarUrl = raw['user_logo']?.toString() ?? '';
-          if (avatarUrl.isNotEmpty) {
-            try {
-              final resp = await http.get(Uri.parse(avatarUrl)).timeout(const Duration(seconds: 5));
-              if (resp.statusCode == 200) {
-                final codec = await ui.instantiateImageCodec(resp.bodyBytes);
-                final frame = await codec.getNextFrame();
-                final theme = Theme.of(context);
-                _userPinIcon = await MapGraphicsEngine.createPremiumAvatarPin(
-                  avatarImage: frame.image,
-                  isDark: theme.brightness == Brightness.dark,
-                  cs: theme.colorScheme,
-                );
-                if (mounted) setState(() {});
-              }
-            } catch (_) {}
-          }
         }
       }
     } catch (_) {
@@ -245,7 +265,68 @@ class _DriverHomePageState extends State<DriverHomePage> with WidgetsBindingObse
     });
 
     await _primeCurrentLocation(initial: initial);
-    _fitMapToContext();
+    _fetchOverviewRoute();
+    if (_mapVisible) _fitMapToContext();
+  }
+
+  Future<void> _fetchOverviewRoute() async {
+    if (_activeRide == null || _currentPosition == null) {
+      if (_overviewRoutePoints.isNotEmpty) setState(() => _overviewRoutePoints.clear());
+      return;
+    }
+
+    final status = _activeRide!.status.toLowerCase();
+    final LatLng origin = LatLng(_currentPosition!.latitude, _currentPosition!.longitude);
+    final LatLng dest = (status == 'in_progress' || status == 'arrived_destination')
+        ? LatLng(_activeRide!.destLat, _activeRide!.destLng)
+        : LatLng(_activeRide!.pickupLat, _activeRide!.pickupLng);
+
+    final String routeId = '${_activeRide!.id}_${origin.latitude.toStringAsFixed(3)}_${dest.latitude.toStringAsFixed(3)}';
+    if (_lastRouteId == routeId) return;
+
+    try {
+      final Uri url = Uri.parse('https://routes.googleapis.com/directions/v2:computeRoutes');
+      final Map<String, dynamic> body = {
+        'origin': {'location': {'latLng': {'latitude': origin.latitude, 'longitude': origin.longitude}}},
+        'destination': {'location': {'latLng': {'latitude': dest.latitude, 'longitude': dest.longitude}}},
+        'travelMode': 'DRIVE',
+        'routingPreference': 'TRAFFIC_AWARE_OPTIMAL',
+        'polylineQuality': 'OVERVIEW',
+      };
+      final Map<String, String> headers = {
+        'Content-Type': 'application/json',
+        'X-Goog-Api-Key': ApiConstants.kGoogleApiKey,
+        'X-Goog-FieldMask': 'routes.polyline.encodedPolyline',
+      };
+
+      final http.Response res = await http.post(url, headers: headers, body: jsonEncode(body)).timeout(const Duration(seconds: 5));
+      if (res.statusCode == 200) {
+        final decoded = jsonDecode(res.body) as Map<String, dynamic>;
+        final List<Map<String, dynamic>> routes = (decoded['routes'] as List?)?.whereType<Map>().map((e) => e.cast<String, dynamic>()).toList() ?? [];
+        if (routes.isNotEmpty) {
+          final String encoded = routes.first['polyline']?['encodedPolyline']?.toString() ?? '';
+          if (encoded.isNotEmpty) {
+            _lastRouteId = routeId;
+            if (mounted) setState(() => _overviewRoutePoints = _decodePolyline(encoded));
+          }
+        }
+      }
+    } catch (_) {}
+  }
+
+  List<LatLng> _decodePolyline(String enc) {
+    final List<LatLng> out = [];
+    int idx = 0, lat = 0, lng = 0;
+    while (idx < enc.length) {
+      int b, shift = 0, result = 0;
+      do { b = enc.codeUnitAt(idx++) - 63; result |= (b & 0x1f) << shift; shift += 5; } while (b >= 0x20);
+      lat += (result & 1) != 0 ? ~(result >> 1) : (result >> 1);
+      shift = 0; result = 0;
+      do { b = enc.codeUnitAt(idx++) - 63; result |= (b & 0x1f) << shift; shift += 5; } while (b >= 0x20);
+      lng += (result & 1) != 0 ? ~(result >> 1) : (result >> 1);
+      out.add(LatLng(lat / 1e5, lng / 1e5));
+    }
+    return out;
   }
 
   void _startDashboardPolling({required bool forceNow}) {
@@ -255,17 +336,12 @@ class _DriverHomePageState extends State<DriverHomePage> with WidgetsBindingObse
   }
 
   Future<void> _safeDashboardRefresh() async {
-    try {
-      await _fetchDashboard();
-    } catch (_) {
-      if (mounted) setState(() => _dashboardConnected = false);
-    }
+    try { await _fetchDashboard(); } catch (_) { if (mounted) setState(() => _dashboardConnected = false); }
   }
 
   Future<void> _primeCurrentLocation({bool initial = false}) async {
     try {
-      final hasPermission = await _ensureLocationPermission();
-      if (!hasPermission) return;
+      if (!await _ensureLocationPermission()) return;
       final fix = await Geolocator.getCurrentPosition(desiredAccuracy: LocationAccuracy.bestForNavigation);
       _currentPosition = fix;
       if (initial) _initialCamera = CameraPosition(target: LatLng(fix.latitude, fix.longitude), zoom: 15.8);
@@ -304,7 +380,7 @@ class _DriverHomePageState extends State<DriverHomePage> with WidgetsBindingObse
     try {
       if (!await _ensureLocationPermission()) return;
       _currentPosition = await Geolocator.getCurrentPosition(desiredAccuracy: LocationAccuracy.bestForNavigation);
-      if (mounted) setState(() {});
+      if (mounted && _mapVisible) setState(() {});
     } catch (_) {
       if (!silent && mounted) showToastNotification(context: context, title: 'Fix unavailable', message: 'Unable to refresh live location.', isSuccess: false);
     }
@@ -316,7 +392,11 @@ class _DriverHomePageState extends State<DriverHomePage> with WidgetsBindingObse
     await _locationSub?.cancel();
 
     _locationSub = Geolocator.getPositionStream(locationSettings: _platformLocationSettings()).listen(
-          (pos) { _currentPosition = pos; if (mounted) setState(() {}); _fitMapToContext(); },
+          (pos) {
+        _currentPosition = pos;
+        if (mounted && _mapVisible) setState(() {});
+        _fetchOverviewRoute();
+      },
       onError: (_) { if (mounted) showToastNotification(context: context, title: 'Stream interrupted', message: 'Live location stream will retry.', isSuccess: false); },
     );
 
@@ -344,7 +424,7 @@ class _DriverHomePageState extends State<DriverHomePage> with WidgetsBindingObse
         data: {
           'action': 'heartbeat', 'user': _prefs.getString('user_id')?.trim() ?? '',
           'lat': pos.latitude.toStringAsFixed(7), 'lng': pos.longitude.toStringAsFixed(7),
-          'heading': (pos.heading.isFinite ? pos.heading : 0).toStringAsFixed(2),
+          'heading': _emaHeading.toStringAsFixed(2),
           'phase': _phaseForHeartbeat(_activeRide?.status),
         },
       );
@@ -395,14 +475,9 @@ class _DriverHomePageState extends State<DriverHomePage> with WidgetsBindingObse
   Future<void> _acceptRide(RideJob ride) async {
     if (_busyRideAction) return;
 
-    // --- REQUIRE PIN AUTHORIZATION BEFORE ACCEPTING ---
     final bool authorized = await TransactionPinBottomSheet.show(context, _api);
-    if (!authorized) {
-      // User cancelled the PIN sheet or failed authentication
-      return;
-    }
+    if (!authorized) return;
 
-    // Proceed with acceptance
     setState(() => _busyRideAction = true);
 
     try {
@@ -488,7 +563,7 @@ class _DriverHomePageState extends State<DriverHomePage> with WidgetsBindingObse
         'driver_id': driver.id.toString(),
         'driver_lat': (live is Map ? live['lat'] : null) ?? _currentPosition?.latitude ?? ride.pickupLat,
         'driver_lng': (live is Map ? live['lng'] : null) ?? _currentPosition?.longitude ?? ride.pickupLng,
-        'driver_heading': (live is Map ? live['heading'] : null) ?? _currentPosition?.heading ?? 0.0,
+        'driver_heading': _emaHeading,
         'pickup_lat': activeRide['pickup_lat'] ?? ride.pickupLat,
         'pickup_lng': activeRide['pickup_lng'] ?? ride.pickupLng,
         'pickup_text': activeRide['pickup_text'] ?? ride.pickupText,
@@ -507,6 +582,9 @@ class _DriverHomePageState extends State<DriverHomePage> with WidgetsBindingObse
     final ride = _activeRide;
     final driver = _driver;
     if (ride == null || driver == null) return;
+
+    // ENTERPRISE FIX: Destroy background map to free 100% of RAM/GPU
+    setState(() => _mapVisible = false);
 
     await Navigator.of(context).push(
       MaterialPageRoute(
@@ -533,10 +611,10 @@ class _DriverHomePageState extends State<DriverHomePage> with WidgetsBindingObse
             onCompleteTrip: () async => _performRideAction('complete_trip'),
             onCancelTrip: () async => _performRideAction('cancel'),
             role: TripNavigationRole.driver,
-            tickEvery: const Duration(seconds: 2),
-            routeMinGap: const Duration(seconds: 2),
+            tickEvery: const Duration(seconds: 1),
+            routeMinGap: const Duration(seconds: 20),
             arrivalMeters: 35.0,
-            routeMoveThresholdMeters: 8.0,
+            routeMoveThresholdMeters: 25.0,
             autoFollowCamera: true,
             showArrivedPickupButton: const {'accepted', 'driver_assigned', 'driver_arriving', 'enroute_pickup'}.contains(ride.status.trim().toLowerCase()),
             showStartTripButton: ride.status.trim().toLowerCase() == 'arrived_pickup',
@@ -553,7 +631,11 @@ class _DriverHomePageState extends State<DriverHomePage> with WidgetsBindingObse
       ),
     );
 
-    if (mounted) await _fetchDashboard();
+    // Rebuild map when returned
+    if (mounted) {
+      setState(() => _mapVisible = true);
+      await _fetchDashboard();
+    }
   }
 
   Future<void> _performRideAction(String action, {bool showFeedback = true}) async {
@@ -578,7 +660,7 @@ class _DriverHomePageState extends State<DriverHomePage> with WidgetsBindingObse
           'ride_id': ride.id.toString(), 'ride_action': action,
           if (pos != null) 'lat': pos.latitude.toStringAsFixed(7),
           if (pos != null) 'lng': pos.longitude.toStringAsFixed(7),
-          if (pos != null) 'heading': (pos.heading.isFinite ? pos.heading : 0).toStringAsFixed(2),
+          if (pos != null) 'heading': _emaHeading.toStringAsFixed(2),
           if (pos != null) 'accuracy': pos.accuracy.toStringAsFixed(2),
         },
       );
@@ -633,7 +715,8 @@ class _DriverHomePageState extends State<DriverHomePage> with WidgetsBindingObse
         markerId: const MarkerId('driver_self'),
         position: LatLng(_currentPosition!.latitude, _currentPosition!.longitude),
         icon: _userPinIcon!,
-        rotation: _currentPosition!.heading.isFinite ? _currentPosition!.heading : 0,
+        rotation: _emaHeading,
+        anchor: const Offset(0.5, 0.5),
         flat: true,
         zIndex: 999,
       ));
@@ -649,17 +732,21 @@ class _DriverHomePageState extends State<DriverHomePage> with WidgetsBindingObse
 
   Set<Polyline> _buildPolylines() {
     if (_currentPosition == null || _activeRide == null) return const <Polyline>{};
-    final current = LatLng(_currentPosition!.latitude, _currentPosition!.longitude);
-    final pickup = LatLng(_activeRide!.pickupLat, _activeRide!.pickupLng);
-    final dest = LatLng(_activeRide!.destLat, _activeRide!.destLng);
-    final status = _activeRide!.status.toLowerCase();
 
-    final points = (status == 'in_progress' || status == 'arrived_destination') ? [current, dest] : [current, pickup];
+    final List<LatLng> points = _overviewRoutePoints.isNotEmpty
+        ? _overviewRoutePoints
+        : [
+      LatLng(_currentPosition!.latitude, _currentPosition!.longitude),
+      (_activeRide!.status.toLowerCase() == 'in_progress' || _activeRide!.status.toLowerCase() == 'arrived_destination')
+          ? LatLng(_activeRide!.destLat, _activeRide!.destLng)
+          : LatLng(_activeRide!.pickupLat, _activeRide!.pickupLng)
+    ];
+
     final isDark = Theme.of(context).brightness == Brightness.dark;
 
     return <Polyline>{
       Polyline(polylineId: const PolylineId('active_trip_halo'), width: 10, points: points, color: isDark ? Colors.white.withOpacity(0.85) : Colors.white.withOpacity(0.92), startCap: Cap.roundCap, endCap: Cap.roundCap, jointType: JointType.round),
-      Polyline(polylineId: const PolylineId('active_trip_line'), width: 6, points: points, color: AppColors.primary, startCap: Cap.roundCap, endCap: Cap.roundCap, jointType: JointType.round),
+      Polyline(polylineId: const PolylineId('active_trip_line'), width: 5, points: points, color: AppColors.primary, startCap: Cap.roundCap, endCap: Cap.roundCap, jointType: JointType.round),
     };
   }
 
@@ -695,9 +782,11 @@ class _DriverHomePageState extends State<DriverHomePage> with WidgetsBindingObse
       extendBodyBehindAppBar: true,
       body: Stack(
         children: [
-          const BackgroundWidget(style: HoloStyle.vapor, animate: true, intensity: 0.7),
+          // STAGGERED MAP LAYER & RAM PRESERVATION
           Positioned.fill(
-            child: GoogleMap(
+            child: (!_mapVisible || _booting)
+                ? Container(color: theme.scaffoldBackgroundColor)
+                : GoogleMap(
               initialCameraPosition: _initialCamera,
               myLocationEnabled: false,
               myLocationButtonEnabled: false,
@@ -717,41 +806,46 @@ class _DriverHomePageState extends State<DriverHomePage> with WidgetsBindingObse
               },
             ),
           ),
-          Positioned(
-            top: 0, left: 0, right: 0,
-            child: IgnorePointer(
-              child: Container(
-                height: headerHeight + 18,
-                decoration: BoxDecoration(gradient: LinearGradient(begin: Alignment.topCenter, end: Alignment.bottomCenter, colors: [Colors.black.withOpacity(.64), Colors.transparent])),
-              ),
-            ),
-          ),
-          Positioned(
-            top: safeTop, left: 0, right: 0,
-            child: HeaderBar(user: _user, busyProfile: _busyProfile, onMenu: () => _scaffoldKey.currentState?.openDrawer(), onWallet: _openWallet, onNotifications: () => Navigator.pushNamed(context, AppRoutes.notifications)),
-          ),
-          if (!_dashboardConnected)
-            Positioned(
-              top: headerHeight + 8, left: uiScale.inset(14), right: uiScale.inset(14),
-              child: Material(
-                color: Colors.orange.shade700, borderRadius: BorderRadius.circular(uiScale.radius(12)),
-                child: Padding(
-                  padding: EdgeInsets.all(uiScale.inset(10)),
-                  child: Row(children: [Icon(Icons.wifi_off_rounded, size: uiScale.icon(18), color: Colors.white), SizedBox(width: uiScale.gap(8)), Expanded(child: Text('Connection issue. Dashboard will retry automatically.', style: TextStyle(color: Colors.white, fontSize: uiScale.font(12), fontWeight: FontWeight.w700)))]),
-                ),
-              ),
-            ),
+
           if (!_booting)
-            Positioned(
-              right: uiScale.inset(14), bottom: 12,
-              child: FloatingActionButton.small(
-                heroTag: 'driver_locate_fab',
-                backgroundColor: cs.surface.withOpacity(0.96),
-                onPressed: () {
-                  if (_map != null && _currentPosition != null) _map!.animateCamera(CameraUpdate.newLatLngZoom(LatLng(_currentPosition!.latitude, _currentPosition!.longitude), 16.4));
-                },
-                child: const Icon(Icons.my_location_rounded),
-              ),
+            Stack(
+              children: [
+                Positioned(
+                  top: 0, left: 0, right: 0,
+                  child: IgnorePointer(
+                    child: Container(
+                      height: headerHeight + 18,
+                      decoration: BoxDecoration(gradient: LinearGradient(begin: Alignment.topCenter, end: Alignment.bottomCenter, colors: [Colors.black.withOpacity(.64), Colors.transparent])),
+                    ),
+                  ),
+                ),
+                Positioned(
+                  top: safeTop, left: 0, right: 0,
+                  child: HeaderBar(user: _user, busyProfile: _busyProfile, onMenu: () => _scaffoldKey.currentState?.openDrawer(), onWallet: _openWallet, onNotifications: () => Navigator.pushNamed(context, AppRoutes.notifications)),
+                ),
+                if (!_dashboardConnected)
+                  Positioned(
+                    top: headerHeight + 8, left: uiScale.inset(14), right: uiScale.inset(14),
+                    child: Material(
+                      color: Colors.orange.shade700, borderRadius: BorderRadius.circular(uiScale.radius(12)),
+                      child: Padding(
+                        padding: EdgeInsets.all(uiScale.inset(10)),
+                        child: Row(children: [Icon(Icons.wifi_off_rounded, size: uiScale.icon(18), color: Colors.white), SizedBox(width: uiScale.gap(8)), Expanded(child: Text('Connection issue. Dashboard will retry automatically.', style: TextStyle(color: Colors.white, fontSize: uiScale.font(12), fontWeight: FontWeight.w700)))]),
+                      ),
+                    ),
+                  ),
+                Positioned(
+                  right: uiScale.inset(14), bottom: 12,
+                  child: FloatingActionButton.small(
+                    heroTag: 'driver_locate_fab',
+                    backgroundColor: cs.surface.withOpacity(0.96),
+                    onPressed: () {
+                      if (_map != null && _currentPosition != null) _map!.animateCamera(CameraUpdate.newLatLngZoom(LatLng(_currentPosition!.latitude, _currentPosition!.longitude), 16.4));
+                    },
+                    child: const Icon(Icons.my_location_rounded),
+                  ),
+                ),
+              ],
             ),
         ],
       ),

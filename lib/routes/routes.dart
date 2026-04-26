@@ -21,6 +21,7 @@ import '../screens/offers_screen.dart';
 import '../screens/settings_screen.dart';
 import '../screens/help_screen.dart';
 import '../screens/become_a_driver.dart';
+import '../screens/campus_ride_page.dart';
 
 class AppRoutes {
   // Existing
@@ -34,6 +35,7 @@ class AppRoutes {
   static const String home = '/home';
   static const String history = '/history';
   static const String profile = '/profile';
+  static const String campus_ride = '/campus';
 
   static const String become_a_driver = '/become_a_driver';
 
@@ -58,6 +60,7 @@ class AppRoutes {
       set_user_pin: (context) => const SetPinScreen(),
       home: (context) => const HomePage(),
       profile: (context) => const ProfileScreen(),
+      campus_ride: (context) => const CampusRidePage(),
 
       // You already had "history" for transactions; keep it
       history: (context) => const TransactionHistoryPage(),

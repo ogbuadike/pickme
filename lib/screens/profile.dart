@@ -322,13 +322,13 @@ class _ProfileScreenState extends State<ProfileScreen> with SingleTickerProvider
 
           switch (i) {
             case 0:
-              Navigator.pushNamedAndRemoveUntil(context, AppRoutes.home, (route) => false);
+              Navigator.pushNamed(context, AppRoutes.home);
               break;
             case 1:
-              Navigator.pushReplacementNamed(context, AppRoutes.rideHistory);
+              Navigator.pushNamed(context, AppRoutes.campus_ride);
               break;
             case 2:
-              Navigator.pushNamedAndRemoveUntil(context, AppRoutes.home, (route) => false);
+            // Navigator.pushReplacementNamed(context, AppRoutes.send_me);
               break;
             case 3:
             // Navigator.pushReplacementNamed(context, AppRoutes.dispatch);

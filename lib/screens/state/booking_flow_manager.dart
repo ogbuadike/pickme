@@ -14,8 +14,6 @@ import '../trip_navigation_page.dart';
 import 'home_models.dart';
 
 class BookingFlowManager {
-  /// Handles the entire end-to-end booking flow:
-  /// Payment Selection -> API Call -> Stream Listening -> Navigation
   static Future<void> initiateBooking({
     required BuildContext context,
     required ApiClient apiClient,
@@ -30,6 +28,8 @@ class BookingFlowManager {
     required String pickupText,
     required String destinationText,
     required bool isCurrentPickup,
+    required String rideType, // <--- ADDED
+    String? instructions, // <--- ADDED
     required VoidCallback onStopRideMarket,
     required VoidCallback onStartRideMarket,
     required VoidCallback onResetTripState,
@@ -50,7 +50,6 @@ class BookingFlowManager {
     final isDark = theme.brightness == Brightness.dark;
     final cs = theme.colorScheme;
 
-    // 1. Show Payment Selection Modal
     final String? selectedPaymentMethod = await showModalBottomSheet<String>(
       context: context,
       isScrollControlled: true,
@@ -146,7 +145,6 @@ class BookingFlowManager {
 
     if (selectedPaymentMethod == null) return;
 
-    // 2. Stop Market Polling
     onStopRideMarket();
 
     final String riderId = prefs.getString('user_id') ?? user?['id']?.toString() ?? user?['user_id']?.toString() ?? 'guest';
@@ -154,7 +152,6 @@ class BookingFlowManager {
     final booking = BookingController(apiClient);
     onBookingControllerCreated(booking);
 
-    // 3. Dispatch Booking Request
     final String? rideId = await booking.startBooking(
       riderId: riderId,
       driverId: driver.id,
@@ -165,6 +162,8 @@ class BookingFlowManager {
       destinationText: destinationText,
       stops: stops,
       payMethod: selectedPaymentMethod,
+      rideType: rideType,
+      instructions: instructions,
     );
 
     if (rideId == null || rideId.trim().isEmpty) {
@@ -189,7 +188,6 @@ class BookingFlowManager {
       return;
     }
 
-    // 4. Engage Driver & Listen to Stream
     onDriverEngaged(driver.id, LatLng(driver.lat, driver.lng));
 
     Stream<dynamic>? activeStream;
@@ -211,7 +209,6 @@ class BookingFlowManager {
 
     onSubscriptionCreated(sub);
 
-    // 5. Route to Navigation Screen
     final LatLng? initialRiderLocation = isCurrentPickup ? pickup : null;
 
     await Navigator.of(context).push(
@@ -256,7 +253,6 @@ class BookingFlowManager {
       ),
     );
 
-    // 6. Reset State when returning
     onResetTripState();
   }
 }

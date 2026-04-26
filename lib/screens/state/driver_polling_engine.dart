@@ -7,11 +7,8 @@ import '../../api/api_client.dart';
 import '../../api/url.dart';
 import 'home_models.dart';
 import 'routing_engine.dart';
-// FIXED: Added the import so it knows what a DriverCar is
 import '../../services/ride_market_service.dart';
 
-/// Enterprise Polling Engine
-/// Implements Smart Polling, Time-To-Live (TTL) culling, and Server DDOS protection.
 class DriverPollingEngine {
   final ApiClient api;
   final String userId;
@@ -32,17 +29,15 @@ class DriverPollingEngine {
     required this.onDriversUpdated,
   });
 
-  /// Starts the polling loop. Uses adaptive frequency.
-  void start(LatLng currentUserLocation, {double radiusKm = 5.0}) {
+  void start(LatLng currentUserLocation, {double radiusKm = 5.0, String rideType = 'street_ride'}) {
     if (_timer != null) return;
-    _timer = Timer.periodic(const Duration(seconds: 3), (_) => _fetchNearby(currentUserLocation, radiusKm));
-    _fetchNearby(currentUserLocation, radiusKm);
+    _timer = Timer.periodic(const Duration(seconds: 3), (_) => _fetchNearby(currentUserLocation, radiusKm, rideType));
+    _fetchNearby(currentUserLocation, radiusKm, rideType);
   }
 
   void stop() {
     _timer?.cancel();
     _timer = null;
-    _isBusy = false;
   }
 
   void dispose() {
@@ -52,14 +47,12 @@ class DriverPollingEngine {
     _computedHeadings.clear();
   }
 
-  Future<void> _fetchNearby(LatLng location, double radiusKm) async {
+  Future<void> _fetchNearby(LatLng location, double radiusKm, String rideType) async {
     if (_isBusy) return;
 
-    // ANTI-OVERLOAD: Prevent spamming if the loop runs too fast
     final now = DateTime.now();
-    if (now.difference(_lastTick) < const Duration(milliseconds: 2000)) return;
+    if (now.difference(_lastTick).inMilliseconds < 1500) return;
     _lastTick = now;
-
     _isBusy = true;
 
     try {
@@ -69,37 +62,35 @@ class DriverPollingEngine {
         'radius_km': radiusKm.toStringAsFixed(1),
         'vehicle': 'car',
         'user_id': userId,
+        'ride_type': rideType,
         if (_cursor != null) 'cursor': _cursor!,
       };
 
-      final res = await api.request(
-        ApiConstants.driversNearbyEndpoint,
-        method: 'POST',
-        data: payload,
-      ).timeout(const Duration(seconds: 5)); // 5s drop dead to prevent socket hanging
+      final res = await api.request(ApiConstants.driversNearbyEndpoint, method: 'POST', data: payload).timeout(const Duration(seconds: 5));
 
       if (res.statusCode == 200) {
-        final decoded = jsonDecode(res.body);
-        final data = decoded is Map<String, dynamic> ? decoded : <String, dynamic>{};
+        final j = jsonDecode(res.body) as Map<String, dynamic>;
 
-        if (data['error'] == true || data['error']?.toString() == '1') return;
+        if (j['cursor'] != null) {
+          _cursor = j['cursor'].toString();
+        }
 
-        _cursor = data['cursor']?.toString() ?? _cursor;
+        final rawDrivers = j['drivers'];
+        final List<DriverCar> parsedDrivers = [];
 
-        final rawList = data['drivers'] ?? data['data'] ?? [];
-        final parsedDrivers = <DriverCar>[];
-
-        for (final e in (rawList is List ? rawList : rawList.values)) {
-          if (e is Map) {
-            final d = DriverCar.fromJson(e.cast<String, dynamic>());
-            if (d.id.isNotEmpty && d.ll.latitude != 0.0) parsedDrivers.add(d);
+        if (rawDrivers is List) {
+          for (final d in rawDrivers) {
+            if (d is Map) {
+              try {
+                parsedDrivers.add(DriverCar.fromJson(d.cast<String, dynamic>()));
+              } catch (_) {}
+            }
           }
         }
 
         _processDrivers(parsedDrivers);
       }
     } catch (_) {
-      // Fail silently to avoid interrupting the user experience
     } finally {
       _isBusy = false;
     }
@@ -113,7 +104,6 @@ class DriverPollingEngine {
       _driverLastSeen[d.id] = now;
       final existing = _driverCache[d.id];
 
-      // Compute physical heading if the driver has moved enough
       if (existing != null) {
         final dist = RoutingEngine.haversine(existing.ll, d.ll);
         if (dist > 2.0) {
@@ -123,23 +113,22 @@ class DriverPollingEngine {
         _computedHeadings[d.id] = d.heading > 0 ? d.heading : 0.0;
       }
 
-      // Update cache
       if (existing == null || RoutingEngine.haversine(existing.ll, d.ll) >= 1.2 || (existing.heading - d.heading).abs() >= 6.0) {
         _driverCache[d.id] = d;
         changed = true;
       }
     }
 
-    // TTL (Time-To-Live) Culling: Remove drivers that haven't responded in 12 seconds
     final staleIds = _driverLastSeen.entries
         .where((e) => now.difference(e.value).inSeconds > 12)
         .map((e) => e.key)
         .toList();
 
     for (final id in staleIds) {
+      _driverCache.remove(id);
       _driverLastSeen.remove(id);
       _computedHeadings.remove(id);
-      if (_driverCache.remove(id) != null) changed = true;
+      changed = true;
     }
 
     if (changed) {

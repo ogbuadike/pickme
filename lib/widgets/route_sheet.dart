@@ -11,6 +11,7 @@ import '../screens/state/home_models.dart';
 
 /// Premium, ultra-compact, production-safe route sheet.
 /// - Uses UIScale everywhere
+/// - Accepts dynamic titles and subtitles for full reusability across ride modes.
 /// - Never relies on a rigid top-level Column in low-height states
 /// - Micro mode for very short screens / landscape / foldables
 /// - Preserves functionality exactly
@@ -24,6 +25,10 @@ class RouteSheet extends StatefulWidget {
   final bool hasGps;
   final VoidCallback? onUseCurrentPickup;
 
+  // NEW: Dynamic Text Parameters for Reusability
+  final String sheetTitle;
+  final String? sheetSubtitle;
+
   const RouteSheet({
     super.key,
     required this.bottomNavHeight,
@@ -34,6 +39,8 @@ class RouteSheet extends StatefulWidget {
     this.ctaLabel,
     this.hasGps = false,
     this.onUseCurrentPickup,
+    this.sheetTitle = 'Where to?',
+    this.sheetSubtitle,
   });
 
   @override
@@ -100,8 +107,11 @@ class _RouteSheetState extends State<RouteSheet>
       target -= ui.gap(6);
     }
 
+    // Give a little more height if there is a subtitle narration
+    final extraPadding = widget.sheetSubtitle != null ? 15.0 : 0.0;
+
     return target.clamp(
-      ui.landscape ? 170.0 : 220.0,
+      ui.landscape ? 170.0 : 220.0 + extraPadding,
       ui.landscape ? 420.0 : 500.0,
     );
   }
@@ -229,6 +239,8 @@ class _RouteSheetState extends State<RouteSheet>
                           onSearchTap: widget.onSearchTap,
                           onRecentTap: widget.onRecentTap,
                           gpsAction: _optionalGpsAction(isDark, cs),
+                          sheetTitle: widget.sheetTitle,
+                          sheetSubtitle: widget.sheetSubtitle,
                         );
                       }
 
@@ -244,6 +256,8 @@ class _RouteSheetState extends State<RouteSheet>
                         onSearchTap: widget.onSearchTap,
                         onRecentTap: widget.onRecentTap,
                         gpsAction: _optionalGpsAction(isDark, cs),
+                        sheetTitle: widget.sheetTitle,
+                        sheetSubtitle: widget.sheetSubtitle,
                       );
                     },
                   ),
@@ -269,6 +283,8 @@ class _PortraitLayout extends StatelessWidget {
   final VoidCallback onSearchTap;
   final void Function(Suggestion) onRecentTap;
   final Widget gpsAction;
+  final String sheetTitle;
+  final String? sheetSubtitle;
 
   const _PortraitLayout({
     required this.ui,
@@ -282,6 +298,8 @@ class _PortraitLayout extends StatelessWidget {
     required this.onSearchTap,
     required this.onRecentTap,
     required this.gpsAction,
+    required this.sheetTitle,
+    this.sheetSubtitle,
   });
 
   @override
@@ -292,16 +310,33 @@ class _PortraitLayout extends StatelessWidget {
         SizedBox(height: ui.gap(compact ? 4 : 6)),
         Align(
           alignment: Alignment.centerLeft,
-          child: Text(
-            'Street ride',
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: theme.textTheme.titleSmall?.copyWith(
-              fontSize: ui.font(compact ? 12.5 : 13.5),
-              fontWeight: FontWeight.w900,
-              letterSpacing: -0.25,
-              color: isDark ? cs.onSurface : AppColors.textPrimary,
-            ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                sheetTitle,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: theme.textTheme.titleSmall?.copyWith(
+                  fontSize: ui.font(compact ? 12.5 : 13.5),
+                  fontWeight: FontWeight.w900,
+                  letterSpacing: -0.25,
+                  color: isDark ? cs.onSurface : AppColors.textPrimary,
+                ),
+              ),
+              if (sheetSubtitle != null) ...[
+                SizedBox(height: ui.gap(2)),
+                Text(
+                  sheetSubtitle!,
+                  maxLines: 2,
+                  style: TextStyle(
+                    fontSize: ui.font(10.5),
+                    fontWeight: FontWeight.w600,
+                    color: isDark ? cs.onSurfaceVariant : AppColors.textSecondary,
+                  ),
+                ),
+              ],
+            ],
           ),
         ),
         SizedBox(height: ui.gap(compact ? 8 : 10)),
@@ -342,6 +377,8 @@ class _LandscapeLayout extends StatelessWidget {
   final VoidCallback onSearchTap;
   final void Function(Suggestion) onRecentTap;
   final Widget gpsAction;
+  final String sheetTitle;
+  final String? sheetSubtitle;
 
   const _LandscapeLayout({
     required this.ui,
@@ -354,6 +391,8 @@ class _LandscapeLayout extends StatelessWidget {
     required this.onSearchTap,
     required this.onRecentTap,
     required this.gpsAction,
+    required this.sheetTitle,
+    this.sheetSubtitle,
   });
 
   @override
@@ -375,7 +414,7 @@ class _LandscapeLayout extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      'Street ride',
+                      sheetTitle,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: theme.textTheme.titleSmall?.copyWith(
@@ -385,6 +424,18 @@ class _LandscapeLayout extends StatelessWidget {
                         color: isDark ? cs.onSurface : AppColors.textPrimary,
                       ),
                     ),
+                    if (sheetSubtitle != null) ...[
+                      SizedBox(height: ui.gap(2)),
+                      Text(
+                        sheetSubtitle!,
+                        maxLines: 2,
+                        style: TextStyle(
+                          fontSize: ui.font(11),
+                          fontWeight: FontWeight.w600,
+                          color: isDark ? cs.onSurfaceVariant : AppColors.textSecondary,
+                        ),
+                      ),
+                    ],
                     SizedBox(height: ui.gap(8)),
                     _TapableTile(
                       key: ctaKey,

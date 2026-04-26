@@ -649,6 +649,8 @@ class BookingController {
 
   // --- Core Booking Functions ---
 
+// --- Core Booking Functions ---
+
   Future<bool> createBooking({
     required RideOffer offer,
     required LatLng pickup,
@@ -659,6 +661,8 @@ class BookingController {
     String payMethod = 'cash',
     String? userId,
     String? driverId,
+    String rideType = 'street_ride',
+    String? instructions,
   }) async {
     _pickup = pickup;
     _destination = destination;
@@ -703,6 +707,8 @@ class BookingController {
         'vehicle': safeVehicleType,
         'currency': safeCurrency,
         'pay_method': _s(payMethod, 'cash'),
+        'ride_type': rideType,
+        'instructions': _s(instructions),
         'eta_min': _i(offer.etaToPickupMin, 0).toString(),
         'surge': _b(offer.surge, false) ? '1' : '0',
         'price': estimatedTotal.toStringAsFixed(2),
@@ -780,6 +786,8 @@ class BookingController {
     String? destinationText,
     List<LatLng> stops = const <LatLng>[],
     String payMethod = 'cash',
+    String rideType = 'street_ride',
+    String? instructions,
   }) async {
     final bool ok = await createBooking(
       offer: offer,
@@ -791,6 +799,8 @@ class BookingController {
       payMethod: payMethod,
       userId: riderId,
       driverId: driverId,
+      rideType: rideType,
+      instructions: instructions,
     );
     return ok ? _rideId : null;
   }
@@ -806,6 +816,8 @@ class BookingController {
     String? destinationText,
     List<LatLng> stops = const <LatLng>[],
     String payMethod = 'cash',
+    String rideType = 'street_ride',
+    String? instructions,
   }) => bookRide(
     riderId: riderId,
     driverId: driverId,
@@ -816,6 +828,8 @@ class BookingController {
     destinationText: destinationText,
     stops: stops,
     payMethod: payMethod,
+    rideType: rideType,
+    instructions: instructions,
   );
 
   Future<String?> createRide({
@@ -828,6 +842,8 @@ class BookingController {
     String? destinationText,
     List<LatLng> stops = const <LatLng>[],
     String payMethod = 'cash',
+    String rideType = 'street_ride',
+    String? instructions,
   }) => bookRide(
     riderId: riderId,
     driverId: driverId,
@@ -838,6 +854,8 @@ class BookingController {
     destinationText: destinationText,
     stops: stops,
     payMethod: payMethod,
+    rideType: rideType,
+    instructions: instructions,
   );
 
   Future<bool> startTrip() async {

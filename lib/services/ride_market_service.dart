@@ -436,6 +436,7 @@ class RideMarketService {
   Stream<RideMarketSnapshot> stream({
     required LatLng origin,
     required LatLng destination,
+    String rideType = 'street_ride', // <--- ADDED THIS
     Duration pollInterval = const Duration(seconds: 2),
     bool simulateOnFailure = false,
 
@@ -517,6 +518,7 @@ class RideMarketService {
               'vehicle': vehicle,
               // ✅ send trip_km for backends that use it
               'trip_km': tripKmVal.toStringAsFixed(3),
+              'ride_type': rideType, // <--- ADDED THIS
             };
 
             // ✅ user id (optional)
@@ -559,6 +561,7 @@ class RideMarketService {
               'cursor': _cursor ?? '',
               // ✅ critical for new PHP pricing
               'trip_km': tripKmVal.toStringAsFixed(3),
+              'ride_type': rideType, // <--- ADDED THIS
             };
 
             // ✅ user id (optional)

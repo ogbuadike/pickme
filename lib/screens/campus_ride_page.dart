@@ -1,4 +1,4 @@
-// lib/screens/home_page.dart
+// lib/screens/campus_ride_page.dart
 import 'dart:async';
 import 'dart:convert';
 import 'dart:math' as math;
@@ -38,7 +38,7 @@ import '../services/ride_market_service.dart';
 import '../models/geo_point.dart';
 import '../ui/ui_scale.dart';
 
-// --- OUR NEW ENTERPRISE DELEGATES ---
+// --- OUR ENTERPRISE DELEGATES ---
 import 'state/home_models.dart';
 import 'state/location_permission_modal.dart';
 import 'state/booking_flow_manager.dart';
@@ -89,14 +89,14 @@ class _SpatialNode {
   _SpatialNode(this.point, this.index) : lat = point.latitude, lng = point.longitude;
 }
 
-class HomePage extends StatefulWidget {
-  const HomePage({super.key});
+class CampusRidePage extends StatefulWidget {
+  const CampusRidePage({super.key});
 
   @override
-  State<HomePage> createState() => _HomePageState();
+  State<CampusRidePage> createState() => _CampusRidePageState();
 }
 
-class _HomePageState extends State<HomePage> with WidgetsBindingObserver, TickerProviderStateMixin {
+class _CampusRidePageState extends State<CampusRidePage> with WidgetsBindingObserver, TickerProviderStateMixin {
   static const double kBottomNavH = 74;
   static const double kHeaderVisualH = 88;
 
@@ -138,7 +138,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
   late ApiClient _api;
   Map<String, dynamic>? _user;
   bool _busyProfile = false;
-  int _currentIndex = 0;
+  int _currentIndex = 1;
 
   int _indexOfFocus(FocusNode focus) {
     for (int i = 0; i < _pts.length; i++) {
@@ -442,7 +442,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
   void _maybeKickNearbyDrivers() {
     if (!mounted || _tripPhase != TripPhase.browsing || _marketOpen) return;
     if (_curPos == null) return;
-    _pollingEngine?.start(LatLng(_curPos!.latitude, _curPos!.longitude), radiusKm: _homeRadiusKm());
+    _pollingEngine?.start(LatLng(_curPos!.latitude, _curPos!.longitude), radiusKm: _campusRadiusKm(), rideType: 'campus_ride');
   }
 
   Future<void> _useCurrentAsPickup() async {
@@ -581,7 +581,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
   void _dbg(String msg, [Object? data]) {
     assert(() {
       final d = data == null ? '' : ' → $data';
-      debugPrint('[Home] $msg$d');
+      debugPrint('[CampusRide] $msg$d');
       return true;
     }());
   }
@@ -701,7 +701,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
       } else {
         _refreshUserPosition();
         if (!_marketOpen && _tripPhase == TripPhase.browsing) {
-          _pollingEngine?.start(LatLng(_curPos!.latitude, _curPos!.longitude), radiusKm: _homeRadiusKm());
+          _pollingEngine?.start(LatLng(_curPos!.latitude, _curPos!.longitude), radiusKm: _campusRadiusKm(), rideType: 'campus_ride');
         }
       }
 
@@ -736,7 +736,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
 
       _curPos ??= last;
       final ll = LatLng(last.latitude, last.longitude);
-      _pollingEngine?.start(ll, radiusKm: _homeRadiusKm(), rideType: 'street_ride');
+      _pollingEngine?.start(ll, radiusKm: _campusRadiusKm(), rideType: 'campus_ride');
       _updateUserMarker(ll, rotation: (last.heading.isFinite && last.heading >= 0) ? last.heading : 0);
     } catch (_) {}
   }
@@ -1298,7 +1298,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
 
       await _startGpsStream(pos);
       if (!_marketOpen && _tripPhase == TripPhase.browsing) {
-        _pollingEngine?.start(ll, radiusKm: _homeRadiusKm());
+        _pollingEngine?.start(ll, radiusKm: _campusRadiusKm(), rideType: 'campus_ride');
       }
     });
   }
@@ -1384,7 +1384,10 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
     });
   }
 
-  double _visualSearchRadiusMeters() => (_homeRadiusKm() * 1000.0).clamp(_searchCircleMinM, _searchCircleMaxM).toDouble();
+  // TIGHT CAMPUS RADIUS (5.0 KM)
+  double _campusRadiusKm() => 5.0;
+
+  double _visualSearchRadiusMeters() => (_campusRadiusKm() * 1000.0).clamp(_searchCircleMinM, _searchCircleMaxM).toDouble();
   LatLng? _searchCircleCenter() => _pts.isNotEmpty && _pts.first.latLng != null ? _pts.first.latLng! : (_curPos != null ? LatLng(_curPos!.latitude, _curPos!.longitude) : null);
   bool _shouldShowSearchCircle() => _tripPhase == TripPhase.browsing && (_offersLoading || (_marketOpen && _offers.isEmpty));
 
@@ -1483,7 +1486,10 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
   String _fmtDistance(int m) => (m < 1000) ? '$m m' : '${(m / 1000.0).toStringAsFixed(1)} km';
   String _fmtDuration(int s) { final mins = (s / 60).round(); return mins < 60 ? '$mins min' : '${mins ~/ 60}h ${mins % 60}m'; }
 
-  static const _kRecentsKey = 'recent_places_v5';
+  // ----------------------------------------------------
+  // PERFECTLY ISOLATED CAMPUS HISTORY KEY
+  // ----------------------------------------------------
+  static const _kRecentsKey = 'campus_recent_places_v1';
   static const int _maxRecents = 30;
 
   Future<void> _loadRecents() async {
@@ -1509,7 +1515,8 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
     pickupFocus.addListener(() { if (pickupFocus.hasFocus) _onFocused(0); });
     final destFocus = FocusNode(), destCtl = TextEditingController();
     destFocus.addListener(() { if (destFocus.hasFocus) _onFocused(1); });
-    _pts.addAll([RoutePoint(type: PointType.pickup, controller: pickupCtl, focus: pickupFocus, hint: 'Pickup location'), RoutePoint(type: PointType.destination, controller: destCtl, focus: destFocus, hint: 'Where to?')]);
+    // CAMUS MODE HINT
+    _pts.addAll([RoutePoint(type: PointType.pickup, controller: pickupCtl, focus: pickupFocus, hint: 'Pickup location'), RoutePoint(type: PointType.destination, controller: destCtl, focus: destFocus, hint: 'Where to on campus?')]);
   }
 
   void _onFocused(int index) { setState(() { _activeIdx = index; _sugs = _recents; _autoStatus = null; _autoError = null; }); _expand(); }
@@ -1523,7 +1530,6 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
   }
 
   void _toast(String title, String msg) { if (!mounted) return; showToastNotification(context: context, title: title, message: msg, isSuccess: false); }
-  double _homeRadiusKm() => 50.0;
 
   void _ensurePlacesSession() { if (_placesSession.isEmpty) _placesSession = _uuid.v4(); }
 
@@ -1673,7 +1679,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
       destinationProvider: safeDrop,
       userIdProvider: () => _prefs.getString('user_id') ?? _user?['id']?.toString() ?? '',
       pollInterval: const Duration(seconds: 2),
-      rideType: 'street_ride',
+      rideType: 'campus_ride', // <--- SPECIFY CAMPUS RIDE
     ).listen((snap) {
       if (!mounted) return;
       _offers = snap.offers;
@@ -1681,12 +1687,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
       _refreshDriverMarkers();
       setState(() => _offersLoading = false);
       _syncSearchCircle();
-    }, onError: (_) {
-      if (mounted) {
-        setState(() => _offersLoading = false);
-        _syncSearchCircle();
-      }
-    });
+    }, onError: (_) { if (mounted) { setState(() => _offersLoading = false); _syncSearchCircle(); } });
   }
 
   void _stopRideMarket({bool restartNearbyPolling = true}) {
@@ -1694,7 +1695,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
     if (mounted) setState(() { _marketOpen = false; _offersLoading = false; _offers = const []; });
     _syncSearchCircle();
     if (restartNearbyPolling && _curPos != null) {
-      _pollingEngine?.start(LatLng(_curPos!.latitude, _curPos!.longitude), radiusKm: _homeRadiusKm());
+      _pollingEngine?.start(LatLng(_curPos!.latitude, _curPos!.longitude), radiusKm: _campusRadiusKm(), rideType: 'campus_ride');
     }
   }
 
@@ -1728,7 +1729,6 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
     final fabRight = uiScale.landscape ? uiScale.inset(uiScale.tiny ? 8 : 12).clamp(8.0, 24.0) : uiScale.inset(14).clamp(12.0, 24.0);
     final hasSummary = _distanceText != null && _durationText != null;
 
-    // TIGHTENED BOTTOM SHEET CONSTRAINTS so UI doesn't look too big
     final bottomSheetMaxH = uiScale.landscape
         ? mq.size.height * (uiScale.tablet ? 0.75 : 0.70)
         : mq.size.height * (uiScale.tiny ? 0.68 : (uiScale.compact ? 0.60 : 0.55));
@@ -1825,9 +1825,41 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
             child: HeaderBar(user: _user, busyProfile: _busyProfile, onMenu: () => _scaffoldKey.currentState?.openDrawer(), onWallet: _openWallet, onNotifications: () => Navigator.pushNamed(context, AppRoutes.notifications)),
           ),
 
+          // 🎓 BEAUTIFUL CAMPUS MODE BADGE
+          Positioned(
+            top: safeTop + (kHeaderVisualH * s) - uiScale.gap(16),
+            left: 0,
+            right: 0,
+            child: Center(
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(uiScale.radius(20)),
+                child: BackdropFilter(
+                  filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
+                  child: Container(
+                    padding: EdgeInsets.symmetric(horizontal: uiScale.inset(16), vertical: uiScale.inset(8)),
+                    decoration: BoxDecoration(
+                      color: isDark ? cs.primary.withOpacity(0.2) : AppColors.primary.withOpacity(0.15),
+                      borderRadius: BorderRadius.circular(uiScale.radius(20)),
+                      border: Border.all(color: isDark ? cs.primary.withOpacity(0.5) : AppColors.primary.withOpacity(0.5), width: 1.2),
+                      boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.1), blurRadius: 10, offset: const Offset(0, 4))],
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(Icons.school_rounded, color: isDark ? cs.primary : AppColors.primary, size: uiScale.icon(16)),
+                        SizedBox(width: uiScale.gap(8)),
+                        Text('CAMPUS MODE', style: TextStyle(color: isDark ? cs.onSurface : AppColors.textPrimary, fontWeight: FontWeight.w900, fontSize: uiScale.font(12), letterSpacing: 1.0)),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+
           if (hasSummary)
             Positioned(
-              top: safeTop + (kHeaderVisualH * s) + uiScale.gap(6),
+              top: safeTop + (kHeaderVisualH * s) + uiScale.gap(26), // Adjusted to sit below the badge
               left: uiScale.inset(10), right: uiScale.inset(10),
               child: Center(
                 child: ConstrainedBox(
@@ -1891,8 +1923,8 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
                   bottomNavHeight: bottomNavH,
 
                   // NEW: Passing Dynamic Narration Strings to RouteSheet
-                  sheetTitle: 'Street Ride',
-                  sheetSubtitle: 'Seamless city transit for your daily commute.',
+                  sheetTitle: 'Campus Transit',
+                  sheetSubtitle: 'Exclusive intra-campus rides for students and staff.',
 
                   recentDestinations: _recents,
                   onSearchTap: () {
@@ -1916,7 +1948,6 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
                   dropLocation: _destLL() == null ? null : GeoPoint(_destLL()!.latitude, _destLL()!.longitude),
                   onRefresh: _startRideMarket,
                   onCancel: () {
-                    // FIXED: This now successfully clears the route so it closes the RideMarketSheet
                     _stopRideMarket();
                     _resetTripState(keepRoute: false);
                     setState(() {
@@ -1958,6 +1989,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
                       pickupText: _pts.first.controller.text.trim(),
                       destinationText: _pts.last.controller.text.trim(),
                       isCurrentPickup: _pts.first.isCurrent,
+                      rideType: 'campus_ride', // <--- SPECIFY CAMPUS RIDE
                       onStopRideMarket: () => _stopRideMarket(restartNearbyPolling: false),
                       onStartRideMarket: () => _startRideMarket(),
                       onResetTripState: () => _resetTripState(keepRoute: true),
@@ -1970,7 +2002,6 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
                       snapshotProvider: _bookingLiveSnapshotProvider,
                       onStartTrip: _bookingStartTrip,
                       onCancelTrip: _bookingCancelTrip,
-                      rideType: 'street_ride',
                     );
                   },
                 ),
@@ -2015,10 +2046,14 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
           HapticFeedback.selectionClick();
           setState(() => _currentIndex = i);
           switch (i) {
-            case 0: break;
-            case 1: Navigator.pushNamed(context, AppRoutes.campus_ride); break;
-            case 2: break;
-            case 3: break;
+            case 0: Navigator.pushNamed(context, AppRoutes.home); break;
+            case 1:  break;
+            case 2:
+            // Navigator.pushReplacementNamed(context, AppRoutes.send_me);
+              break;
+            case 3:
+            // Navigator.pushReplacementNamed(context, AppRoutes.dispatch);
+              break;
             case 4: Navigator.pushNamed(context, AppRoutes.profile); break;
           }
         },

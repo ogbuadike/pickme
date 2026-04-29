@@ -221,6 +221,7 @@ class BookingFlowManager {
             pickup: pickup,
             destination: destination,
             dropOffs: stops,
+            rideType: rideType,
             originText: pickupText,
             destinationText: destinationText,
             dropOffTexts: dropOffTexts,

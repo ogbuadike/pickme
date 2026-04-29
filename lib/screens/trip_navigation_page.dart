@@ -47,7 +47,6 @@ class TripNavigationArgs {
   final String originText, destinationText;
   final List<String> dropOffTexts;
 
-  // New Additions for Advanced UI
   final String rideType;
   final VoidCallback? onSOSTap;
 
@@ -585,7 +584,7 @@ class _TripNavigationPageState extends State<TripNavigationPage> with TickerProv
   }
 
   Future<void> _activateOverviewMode() async {
-    HapticFeedback.mediumImpact();
+    HapticFeedback.lightImpact();
     setState(() { _viewMode = NavigationViewMode.atAGlance; _isFollowCameraEnabled = false; });
     final pts = <LatLng>[if (_displayDriverLL != null) _displayDriverLL!, _effectivePickupLL, ...widget.args.dropOffs, widget.args.destination];
     if (pts.isNotEmpty) {
@@ -792,10 +791,10 @@ class _TripNavigationPageState extends State<TripNavigationPage> with TickerProv
     final bool showLandscapePanel = ui.landscape;
     final double landscapePanelWidth = showLandscapePanel ? (mq.size.width * 0.35).clamp(320.0, 400.0) : 0;
     return EdgeInsets.only(
-      top: mq.padding.top + ui.gap(70),
+      top: mq.padding.top + ui.gap(60),
       left: showLandscapePanel ? landscapePanelWidth + ui.inset(16) : 0,
       right: ui.landscape ? ui.inset(16) : 0,
-      bottom: showLandscapePanel ? ui.inset(16) : (_viewMode == NavigationViewMode.navigation ? ui.gap(120) : ui.gap(200)),
+      bottom: showLandscapePanel ? ui.inset(16) : (_viewMode == NavigationViewMode.navigation ? ui.gap(100) : ui.gap(180)),
     );
   }
 
@@ -817,8 +816,8 @@ class _TripNavigationPageState extends State<TripNavigationPage> with TickerProv
       else if (_phase == TripNavPhase.arrivedDestination && widget.args.showCompleteTripButton) primaryLabel = 'COMPLETE RIDE';
     }
 
-    final double sheetInitialSize = ui.landscape ? 1.0 : (ui.tiny ? 0.40 : (ui.compact ? 0.38 : 0.35));
-    final double sheetMaxSize = ui.landscape ? 1.0 : (ui.tiny ? 0.70 : 0.60);
+    final double sheetInitialSize = ui.landscape ? 1.0 : (ui.tiny ? 0.38 : (ui.compact ? 0.35 : 0.32));
+    final double sheetMaxSize = ui.landscape ? 1.0 : (ui.tiny ? 0.65 : 0.55);
 
     return WillPopScope(
       onWillPop: () async => true,
@@ -849,31 +848,31 @@ class _TripNavigationPageState extends State<TripNavigationPage> with TickerProv
 
             if (!_booting) ...[
               Positioned(
-                top: 0, left: 0, right: 0, height: ui.gap(140),
+                top: 0, left: 0, right: 0, height: ui.gap(120),
                 child: IgnorePointer(
-                  child: Container(decoration: BoxDecoration(gradient: LinearGradient(begin: Alignment.topCenter, end: Alignment.bottomCenter, colors: [Colors.black.withOpacity(0.7), Colors.transparent]))),
+                  child: Container(decoration: BoxDecoration(gradient: LinearGradient(begin: Alignment.topCenter, end: Alignment.bottomCenter, colors: [Colors.black.withOpacity(0.6), Colors.transparent]))),
                 ),
               ),
 
               Positioned(
-                top: mq.padding.top + ui.gap(12), left: ui.inset(10), right: ui.inset(10),
+                top: mq.padding.top + ui.gap(8), left: ui.inset(10), right: ui.inset(10),
                 child: _SolidHeader(ui: ui, phaseLabel: _phaseLabel(), distanceText: _distanceText ?? '—', durationText: _durationText ?? '—', onBack: () => Navigator.of(context).maybePop()),
               ),
 
               Positioned(
-                top: mq.padding.top + ui.gap(76), right: ui.inset(10),
+                top: mq.padding.top + ui.gap(60), right: ui.inset(10),
                 child: _PillActionRail(ui: ui, isFollowCameraEnabled: _isFollowCameraEnabled, onOverviewMode: _activateOverviewMode, onRecenter: _recenterMap),
               ),
 
               if (showLandscapePanel)
                 Positioned(
-                  top: mq.padding.top + ui.gap(76), left: ui.inset(10), bottom: ui.inset(10), width: landscapePanelWidth,
+                  top: mq.padding.top + ui.gap(60), left: ui.inset(10), bottom: ui.inset(10), width: landscapePanelWidth,
                   child: SafeArea(top: false, child: _SolidPanelContainer(ui: ui, child: _buildSheetContent(ui, primaryLabel))),
                 )
               else
                 Positioned(
                   left: ui.inset(10), right: ui.inset(10), bottom: ui.inset(10),
-                  height: math.min(mq.size.height * 0.75, mq.size.height - (mq.padding.top + ui.gap(100))),
+                  height: math.min(mq.size.height * 0.70, mq.size.height - (mq.padding.top + ui.gap(80))),
                   child: SafeArea(
                     top: false,
                     child: DraggableScrollableSheet(
@@ -977,7 +976,7 @@ class _PremiumDashboardSheet extends StatelessWidget {
     final String profileTitle = role == TripNavigationRole.driver ? "YOUR RIDER" : "YOUR DRIVER";
 
     final List<Widget> content = [
-      if (controller != null) ...[SizedBox(height: ui.gap(10)), Center(child: Container(width: 40, height: 5, decoration: BoxDecoration(color: os.withOpacity(0.2), borderRadius: BorderRadius.circular(10)))), SizedBox(height: ui.gap(16))] else SizedBox(height: ui.gap(16)),
+      if (controller != null) ...[SizedBox(height: ui.gap(10)), Center(child: Container(width: 36, height: 4, decoration: BoxDecoration(color: os.withOpacity(0.2), borderRadius: BorderRadius.circular(2)))), SizedBox(height: ui.gap(12))] else SizedBox(height: ui.gap(12)),
 
       // Dynamic Context Header + SOS Button
       Row(
@@ -985,119 +984,118 @@ class _PremiumDashboardSheet extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Container(
-            padding: EdgeInsets.symmetric(horizontal: ui.inset(10), vertical: ui.inset(6)),
-            decoration: BoxDecoration(color: AppColors.primary.withOpacity(0.15), borderRadius: BorderRadius.circular(8)),
-            child: Text("$modeLabel • ${rideType.toUpperCase()}", style: TextStyle(color: AppColors.primary, fontSize: ui.font(10), fontWeight: FontWeight.w900, letterSpacing: 1.0)),
+            padding: EdgeInsets.symmetric(horizontal: ui.inset(8), vertical: ui.inset(4)),
+            decoration: BoxDecoration(color: AppColors.primary.withOpacity(0.15), borderRadius: BorderRadius.circular(6)),
+            child: Text("$modeLabel • ${rideType.toUpperCase()}", style: TextStyle(color: AppColors.primary, fontSize: ui.font(8.5), fontWeight: FontWeight.w900, letterSpacing: 0.5)),
           ),
 
-          // Highly visible SOS button
           GestureDetector(
             onTap: onSOSTap ?? () {},
             child: Container(
-              padding: EdgeInsets.symmetric(horizontal: ui.inset(12), vertical: ui.inset(6)),
-              decoration: BoxDecoration(color: Colors.red.withOpacity(0.1), border: Border.all(color: Colors.red.withOpacity(0.5), width: 1.5), borderRadius: BorderRadius.circular(20)),
+              padding: EdgeInsets.symmetric(horizontal: ui.inset(10), vertical: ui.inset(4)),
+              decoration: BoxDecoration(color: Colors.red.withOpacity(0.1), border: Border.all(color: Colors.red.withOpacity(0.5), width: 1.0), borderRadius: BorderRadius.circular(16)),
               child: Row(
                 children: [
-                  Icon(Icons.emergency_share_rounded, color: Colors.red, size: ui.icon(16)),
+                  Icon(Icons.emergency_share_rounded, color: Colors.red, size: ui.icon(14)),
                   SizedBox(width: ui.gap(4)),
-                  Text("SOS", style: TextStyle(color: Colors.red, fontSize: ui.font(12), fontWeight: FontWeight.w900, letterSpacing: 1.0)),
+                  Text("SOS", style: TextStyle(color: Colors.red, fontSize: ui.font(10), fontWeight: FontWeight.w900, letterSpacing: 0.5)),
                 ],
               ),
             ),
           )
         ],
       ),
-      SizedBox(height: ui.gap(16)),
+      SizedBox(height: ui.gap(12)),
 
-      Text(profileTitle, style: TextStyle(color: os.withOpacity(0.5), fontSize: ui.font(10), fontWeight: FontWeight.w800, letterSpacing: 1.0)),
-      SizedBox(height: ui.gap(8)),
+      Text(profileTitle, style: TextStyle(color: os.withOpacity(0.5), fontSize: ui.font(8.5), fontWeight: FontWeight.w800, letterSpacing: 0.5)),
+      SizedBox(height: ui.gap(6)),
 
       // Driver/Rider Profile Row
       Row(
         crossAxisAlignment: CrossAxisAlignment.center,
         children: [
-          CircleAvatar(radius: ui.font(24), backgroundColor: AppColors.primary.withOpacity(0.15), child: Icon(Icons.person, color: AppColors.primary, size: ui.icon(24))),
-          SizedBox(width: ui.gap(12)),
+          CircleAvatar(radius: ui.font(18), backgroundColor: AppColors.primary.withOpacity(0.15), child: Icon(Icons.person, color: AppColors.primary, size: ui.icon(18))),
+          SizedBox(width: ui.gap(10)),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(driverName.toUpperCase(), style: TextStyle(color: os, fontSize: ui.font(16), fontWeight: FontWeight.w900, letterSpacing: 0.5)),
-                SizedBox(height: ui.gap(4)),
-                Text(vehicleType, style: TextStyle(color: os.withOpacity(0.6), fontSize: ui.font(12), fontWeight: FontWeight.w600)),
+                Text(driverName.toUpperCase(), style: TextStyle(color: os, fontSize: ui.font(14), fontWeight: FontWeight.w900, letterSpacing: 0.2)),
+                SizedBox(height: ui.gap(2)),
+                Text(vehicleType, style: TextStyle(color: os.withOpacity(0.6), fontSize: ui.font(10), fontWeight: FontWeight.w600)),
               ],
             ),
           ),
           Column(
             crossAxisAlignment: CrossAxisAlignment.end,
             children: [
-              if (rating > 0) Container(padding: EdgeInsets.symmetric(horizontal: ui.inset(8), vertical: ui.inset(4)), decoration: BoxDecoration(color: Colors.amber.withOpacity(0.15), borderRadius: BorderRadius.circular(12)), child: Row(children: [Icon(Icons.star_rounded, color: Colors.amber, size: ui.icon(14)), SizedBox(width: ui.gap(4)), Text(rating.toStringAsFixed(1), style: TextStyle(color: Colors.amber, fontWeight: FontWeight.w800, fontSize: ui.font(12)))])),
-              if (rating > 0) SizedBox(height: ui.gap(8)),
-              if (carPlate.isNotEmpty) Container(padding: EdgeInsets.symmetric(horizontal: ui.inset(8), vertical: ui.inset(4)), decoration: BoxDecoration(color: const Color(0xFFFACC15), borderRadius: BorderRadius.circular(4), border: Border.all(color: Colors.black87, width: 1.5)), child: Text(carPlate.toUpperCase(), style: TextStyle(color: Colors.black, fontWeight: FontWeight.w900, fontSize: ui.font(12), letterSpacing: 1.2))),
+              if (rating > 0) Container(padding: EdgeInsets.symmetric(horizontal: ui.inset(6), vertical: ui.inset(3)), decoration: BoxDecoration(color: Colors.amber.withOpacity(0.15), borderRadius: BorderRadius.circular(8)), child: Row(children: [Icon(Icons.star_rounded, color: Colors.amber, size: ui.icon(12)), SizedBox(width: ui.gap(2)), Text(rating.toStringAsFixed(1), style: TextStyle(color: Colors.amber, fontWeight: FontWeight.w800, fontSize: ui.font(10)))])),
+              if (rating > 0) SizedBox(height: ui.gap(6)),
+              if (carPlate.isNotEmpty) Container(padding: EdgeInsets.symmetric(horizontal: ui.inset(6), vertical: ui.inset(3)), decoration: BoxDecoration(color: const Color(0xFFFACC15), borderRadius: BorderRadius.circular(4), border: Border.all(color: Colors.black87, width: 1.0)), child: Text(carPlate.toUpperCase(), style: TextStyle(color: Colors.black, fontWeight: FontWeight.w900, fontSize: ui.font(10), letterSpacing: 1.0))),
             ],
           )
         ],
       ),
 
-      SizedBox(height: ui.gap(20)),
+      SizedBox(height: ui.gap(16)),
 
       // The "Meta" Status Card
       Container(
-        padding: EdgeInsets.all(ui.inset(16)),
-        decoration: BoxDecoration(gradient: LinearGradient(colors: [AppColors.primary, AppColors.primary.withOpacity(0.8)], begin: Alignment.topLeft, end: Alignment.bottomRight), borderRadius: BorderRadius.circular(ui.radius(16)), boxShadow: [BoxShadow(color: AppColors.primary.withOpacity(0.3), blurRadius: 12, offset: const Offset(0, 6))]),
+        padding: EdgeInsets.all(ui.inset(12)),
+        decoration: BoxDecoration(gradient: LinearGradient(colors: [AppColors.primary, AppColors.primary.withOpacity(0.8)], begin: Alignment.topLeft, end: Alignment.bottomRight), borderRadius: BorderRadius.circular(ui.radius(14))),
         child: Row(
           children: [
-            Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text('CURRENT TARGET', style: TextStyle(color: Colors.white.withOpacity(0.8), fontSize: ui.font(10), fontWeight: FontWeight.w800, letterSpacing: 1.0)), SizedBox(height: ui.gap(4)), Text(currentTarget, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(color: Colors.white, fontSize: ui.font(15), fontWeight: FontWeight.w800))])),
-            Container(width: 1, height: 30, color: Colors.white.withOpacity(0.3), margin: EdgeInsets.symmetric(horizontal: ui.inset(12))),
-            Column(crossAxisAlignment: CrossAxisAlignment.end, children: [Text(durationText, style: TextStyle(color: Colors.white, fontSize: ui.font(18), fontWeight: FontWeight.w900, height: 1.0)), Text(distanceText, style: TextStyle(color: Colors.white.withOpacity(0.8), fontSize: ui.font(11), fontWeight: FontWeight.w700))]),
+            Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text('CURRENT TARGET', style: TextStyle(color: Colors.white.withOpacity(0.8), fontSize: ui.font(8.5), fontWeight: FontWeight.w800, letterSpacing: 0.5)), SizedBox(height: ui.gap(4)), Text(currentTarget, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(color: Colors.white, fontSize: ui.font(13), fontWeight: FontWeight.w800))])),
+            Container(width: 1, height: 24, color: Colors.white.withOpacity(0.3), margin: EdgeInsets.symmetric(horizontal: ui.inset(10))),
+            Column(crossAxisAlignment: CrossAxisAlignment.end, children: [Text(durationText, style: TextStyle(color: Colors.white, fontSize: ui.font(16), fontWeight: FontWeight.w900, height: 1.0)), Text(distanceText, style: TextStyle(color: Colors.white.withOpacity(0.8), fontSize: ui.font(9.5), fontWeight: FontWeight.w700))]),
           ],
         ),
       ),
 
-      SizedBox(height: ui.gap(24)),
+      SizedBox(height: ui.gap(16)),
 
       // Visual Timeline Tracker
-      Text('TRIP ROUTE', style: TextStyle(color: os.withOpacity(0.5), fontSize: ui.font(10), fontWeight: FontWeight.w800, letterSpacing: 1.0)),
-      SizedBox(height: ui.gap(12)),
+      Text('TRIP ROUTE', style: TextStyle(color: os.withOpacity(0.5), fontSize: ui.font(8.5), fontWeight: FontWeight.w800, letterSpacing: 0.5)),
+      SizedBox(height: ui.gap(8)),
       Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Column(
             children: [
-              Icon(Icons.radio_button_checked, color: AppColors.primary, size: ui.icon(18)),
-              Container(width: 2, height: ui.gap(24), color: os.withOpacity(0.15)),
-              Icon(Icons.location_on, color: Colors.green, size: ui.icon(18)),
+              Icon(Icons.radio_button_checked, color: AppColors.primary, size: ui.icon(14)),
+              Container(width: 1.5, height: ui.gap(18), color: os.withOpacity(0.15)),
+              Icon(Icons.location_on, color: Colors.green, size: ui.icon(14)),
             ],
           ),
-          SizedBox(width: ui.gap(12)),
+          SizedBox(width: ui.gap(10)),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(from, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(color: os, fontSize: ui.font(13), fontWeight: FontWeight.w700)),
-                SizedBox(height: ui.gap(22)),
-                Text(to, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(color: os, fontSize: ui.font(13), fontWeight: FontWeight.w700)),
+                Text(from, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(color: os, fontSize: ui.font(11.5), fontWeight: FontWeight.w700)),
+                SizedBox(height: ui.gap(16)),
+                Text(to, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(color: os, fontSize: ui.font(11.5), fontWeight: FontWeight.w700)),
               ],
             ),
           )
         ],
       ),
 
-      if (errorText != null && errorText!.trim().isNotEmpty) ...[SizedBox(height: ui.gap(20)), Container(padding: EdgeInsets.all(ui.inset(12)), decoration: BoxDecoration(color: AppColors.error.withOpacity(0.1), borderRadius: BorderRadius.circular(ui.radius(12)), border: Border.all(color: AppColors.error.withOpacity(0.3))), child: Row(children: [Icon(Icons.error_outline_rounded, color: AppColors.error, size: ui.icon(18)), SizedBox(width: ui.gap(8)), Expanded(child: Text(errorText!, style: TextStyle(color: AppColors.error, fontWeight: FontWeight.w800, fontSize: ui.font(12))))]))],
+      if (errorText != null && errorText!.trim().isNotEmpty) ...[SizedBox(height: ui.gap(16)), Container(padding: EdgeInsets.all(ui.inset(10)), decoration: BoxDecoration(color: AppColors.error.withOpacity(0.1), borderRadius: BorderRadius.circular(ui.radius(10)), border: Border.all(color: AppColors.error.withOpacity(0.3))), child: Row(children: [Icon(Icons.error_outline_rounded, color: AppColors.error, size: ui.icon(14)), SizedBox(width: ui.gap(6)), Expanded(child: Text(errorText!, style: TextStyle(color: AppColors.error, fontWeight: FontWeight.w800, fontSize: ui.font(10))))]))],
 
-      SizedBox(height: ui.gap(24)),
+      SizedBox(height: ui.gap(20)),
 
       // Action Buttons
       Row(
         children: [
           if (showPrimaryAction) Expanded(flex: 2, child: _PremiumButton(label: primaryLabel ?? 'ACTION', isLoading: busyPrimary, isDisabled: !primaryEnabled, isPrimary: true, onTap: onPrimaryAction, ui: ui)),
-          if (showPrimaryAction && showCancelButton) SizedBox(width: ui.gap(12)),
+          if (showPrimaryAction && showCancelButton) SizedBox(width: ui.gap(10)),
           if (showCancelButton) Expanded(flex: 1, child: _PremiumButton(label: 'CANCEL', isLoading: busyCancel, isDisabled: false, isPrimary: false, onTap: onCancelTrip, ui: ui))
         ],
       ),
-      SizedBox(height: ui.gap(20)),
+      SizedBox(height: ui.gap(16)),
     ];
-    return controller != null ? ListView(controller: controller, padding: EdgeInsets.symmetric(horizontal: ui.inset(20)), children: content) : SingleChildScrollView(padding: EdgeInsets.symmetric(horizontal: ui.inset(20)), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: content));
+    return controller != null ? ListView(controller: controller, padding: EdgeInsets.symmetric(horizontal: ui.inset(16)), children: content) : SingleChildScrollView(padding: EdgeInsets.symmetric(horizontal: ui.inset(16)), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: content));
   }
 }
 
@@ -1110,15 +1108,14 @@ class _PremiumButton extends StatelessWidget {
     return GestureDetector(
       onTap: disabled ? null : onTap,
       child: Container(
-        height: ui.gap(56), alignment: Alignment.center,
+        height: ui.gap(44), alignment: Alignment.center,
         decoration: BoxDecoration(
           gradient: isPrimary ? LinearGradient(colors: [disabled ? AppColors.primary.withOpacity(0.4) : AppColors.primary, disabled ? AppColors.primary.withOpacity(0.4) : AppColors.primary.withRed(100)]) : null,
           color: !isPrimary ? Colors.transparent : null,
-          borderRadius: BorderRadius.circular(ui.radius(16)),
-          border: Border.all(color: isPrimary ? Colors.transparent : os.withOpacity(0.2), width: 1.5),
-          boxShadow: isPrimary && !disabled ? [BoxShadow(color: AppColors.primary.withOpacity(0.4), blurRadius: 16, offset: const Offset(0, 8))] : [],
+          borderRadius: BorderRadius.circular(ui.radius(12)),
+          border: Border.all(color: isPrimary ? Colors.transparent : os.withOpacity(0.2), width: 1.0),
         ),
-        child: isLoading ? SizedBox(width: ui.gap(20), height: ui.gap(20), child: CircularProgressIndicator(strokeWidth: 2.5, color: isPrimary ? Colors.white : os)) : Text(label, style: TextStyle(color: isPrimary ? Colors.white.withOpacity(disabled ? 0.7 : 1.0) : os.withOpacity(disabled ? 0.5 : 0.9), fontSize: ui.font(14), fontWeight: FontWeight.w900, letterSpacing: 1.0)),
+        child: isLoading ? SizedBox(width: ui.gap(16), height: ui.gap(16), child: CircularProgressIndicator(strokeWidth: 2.0, color: isPrimary ? Colors.white : os)) : Text(label, style: TextStyle(color: isPrimary ? Colors.white.withOpacity(disabled ? 0.7 : 1.0) : os.withOpacity(disabled ? 0.5 : 0.9), fontSize: ui.font(12.5), fontWeight: FontWeight.w900, letterSpacing: 0.5)),
       ),
     );
   }
@@ -1132,11 +1129,10 @@ class _SolidPanelContainer extends StatelessWidget {
     final cs = Theme.of(context).colorScheme;
     return Container(
       decoration: BoxDecoration(
-        color: Theme.of(context).brightness == Brightness.dark ? cs.surface.withOpacity(0.98) : Colors.white.withOpacity(0.98),
-        borderRadius: BorderRadius.circular(ui.radius(24)), border: Border.all(color: cs.onSurface.withOpacity(0.05)),
-        boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.2), blurRadius: 24, offset: const Offset(0, 10))],
+        color: Theme.of(context).brightness == Brightness.dark ? cs.surface : Colors.white,
+        borderRadius: BorderRadius.circular(ui.radius(20)), border: Border.all(color: cs.outlineVariant.withOpacity(0.3), width: 1.0),
       ),
-      child: ClipRRect(borderRadius: BorderRadius.circular(ui.radius(24)), child: child),
+      child: ClipRRect(borderRadius: BorderRadius.circular(ui.radius(20)), child: child),
     );
   }
 }
@@ -1147,16 +1143,16 @@ class _SolidHeader extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      height: ui.gap(52), padding: EdgeInsets.symmetric(horizontal: ui.inset(12)),
-      decoration: BoxDecoration(color: Colors.black.withOpacity(0.85), borderRadius: BorderRadius.circular(ui.radius(20)), border: Border.all(color: Colors.white.withOpacity(0.15)), boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.3), blurRadius: 12, offset: const Offset(0, 6))]),
+      height: ui.gap(44), padding: EdgeInsets.symmetric(horizontal: ui.inset(8)),
+      decoration: BoxDecoration(color: Colors.black.withOpacity(0.85), borderRadius: BorderRadius.circular(ui.radius(16)), border: Border.all(color: Colors.white.withOpacity(0.15), width: 1.0)),
       child: Row(
         children: [
-          IconButton(onPressed: onBack, padding: EdgeInsets.zero, constraints: const BoxConstraints(), icon: Icon(Icons.close_rounded, color: Colors.white, size: ui.icon(20))),
-          SizedBox(width: ui.gap(12)), Container(width: 1, height: ui.gap(24), color: Colors.white.withOpacity(0.2)), SizedBox(width: ui.gap(12)),
-          Icon(Icons.directions_car_rounded, color: AppColors.primary, size: ui.icon(18)), SizedBox(width: ui.gap(8)),
-          Expanded(child: Text(phaseLabel, style: TextStyle(color: Colors.white, fontWeight: FontWeight.w900, fontSize: ui.font(13), letterSpacing: 0.5))),
-          Container(width: 1, height: ui.gap(24), color: Colors.white.withOpacity(0.2)), SizedBox(width: ui.gap(12)),
-          Column(mainAxisAlignment: MainAxisAlignment.center, crossAxisAlignment: CrossAxisAlignment.end, children: [Text(durationText, style: TextStyle(color: AppColors.primary, fontWeight: FontWeight.w900, fontSize: ui.font(16), height: 1.1)), Text(distanceText, style: TextStyle(color: Colors.white70, fontWeight: FontWeight.w700, fontSize: ui.font(11), height: 1.1))]),
+          IconButton(onPressed: onBack, padding: EdgeInsets.zero, constraints: const BoxConstraints(), icon: Icon(Icons.close_rounded, color: Colors.white, size: ui.icon(16))),
+          SizedBox(width: ui.gap(10)), Container(width: 1, height: ui.gap(20), color: Colors.white.withOpacity(0.2)), SizedBox(width: ui.gap(10)),
+          Icon(Icons.directions_car_rounded, color: AppColors.primary, size: ui.icon(14)), SizedBox(width: ui.gap(6)),
+          Expanded(child: Text(phaseLabel, style: TextStyle(color: Colors.white, fontWeight: FontWeight.w900, fontSize: ui.font(11.5), letterSpacing: 0.2))),
+          Container(width: 1, height: ui.gap(20), color: Colors.white.withOpacity(0.2)), SizedBox(width: ui.gap(10)),
+          Column(mainAxisAlignment: MainAxisAlignment.center, crossAxisAlignment: CrossAxisAlignment.end, children: [Text(durationText, style: TextStyle(color: AppColors.primary, fontWeight: FontWeight.w900, fontSize: ui.font(14), height: 1.1)), Text(distanceText, style: TextStyle(color: Colors.white70, fontWeight: FontWeight.w700, fontSize: ui.font(9.5), height: 1.1))]),
         ],
       ),
     );
@@ -1172,7 +1168,7 @@ class _PillActionRail extends StatelessWidget {
       mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.end,
       children: [
         _ActionPill(icon: Icons.map_rounded, label: 'Overview', isActive: !isFollowCameraEnabled, onTap: onOverviewMode, ui: ui),
-        if (!isFollowCameraEnabled) ...[SizedBox(height: ui.gap(12)), _ActionPill(icon: Icons.my_location_rounded, label: 'Re-center', isActive: true, onTap: onRecenter, ui: ui)]
+        if (!isFollowCameraEnabled) ...[SizedBox(height: ui.gap(8)), _ActionPill(icon: Icons.my_location_rounded, label: 'Re-center', isActive: true, onTap: onRecenter, ui: ui)]
       ],
     );
   }
@@ -1186,9 +1182,9 @@ class _ActionPill extends StatelessWidget {
     return GestureDetector(
       onTap: onTap,
       child: Container(
-        padding: EdgeInsets.symmetric(horizontal: ui.inset(16), vertical: ui.inset(12)),
-        decoration: BoxDecoration(color: Colors.black.withOpacity(0.85), borderRadius: BorderRadius.circular(ui.radius(24)), border: Border.all(color: isActive ? AppColors.primary.withOpacity(0.8) : Colors.white.withOpacity(0.15)), boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.3), blurRadius: 10, offset: const Offset(0, 5))]),
-        child: Row(mainAxisSize: MainAxisSize.min, children: [Icon(icon, color: isActive ? AppColors.primary : Colors.white70, size: ui.icon(18)), SizedBox(width: ui.gap(10)), Text(label, style: TextStyle(color: isActive ? Colors.white : Colors.white70, fontSize: ui.font(14), fontWeight: FontWeight.w900, letterSpacing: 0.5))]),
+        padding: EdgeInsets.symmetric(horizontal: ui.inset(12), vertical: ui.inset(8)),
+        decoration: BoxDecoration(color: Colors.black.withOpacity(0.85), borderRadius: BorderRadius.circular(ui.radius(16)), border: Border.all(color: isActive ? AppColors.primary.withOpacity(0.8) : Colors.white.withOpacity(0.15), width: 1.0)),
+        child: Row(mainAxisSize: MainAxisSize.min, children: [Icon(icon, color: isActive ? AppColors.primary : Colors.white70, size: ui.icon(14)), SizedBox(width: ui.gap(8)), Text(label, style: TextStyle(color: isActive ? Colors.white : Colors.white70, fontSize: ui.font(11.5), fontWeight: FontWeight.w900, letterSpacing: 0.2))]),
       ),
     );
   }

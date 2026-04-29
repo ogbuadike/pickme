@@ -30,6 +30,25 @@ import '../screens/state/location_permission_modal.dart';
 import 'state/driver_models.dart';
 import 'state/driver_command_center.dart';
 
+// --- ① PURE DART KALMAN FILTER ---
+class _Kalman1D {
+  final double q;
+  final double r;
+  double x;
+  double p;
+  double k;
+
+  _Kalman1D({this.q = 0.5, this.r = 3.0, required this.x, this.p = 1.0, this.k = 0.0});
+
+  double update(double measurement) {
+    p = p + q;
+    k = p / (p + r);
+    x = x + k * (measurement - x);
+    p = (1 - k) * p;
+    return x;
+  }
+}
+
 class DriverHomePage extends StatefulWidget {
   const DriverHomePage({super.key});
 
@@ -64,21 +83,25 @@ class _DriverHomePageState extends State<DriverHomePage> with WidgetsBindingObse
   bool _panelExpanded = false;
   int _currentIndex = 0;
 
-  // HIGH PERFORMANCE STATE
+  // --- AAA-GRADE ISOLATED MAP STATE ---
+  GoogleMapController? _mapController;
+  final ValueNotifier<Set<Marker>> _markersNotifier = ValueNotifier({});
+  final ValueNotifier<Set<Polyline>> _polylinesNotifier = ValueNotifier({});
+  final ValueNotifier<Set<Circle>> _circlesNotifier = ValueNotifier({});
+
   bool _booting = true;
-  bool _mapVisible = false; // Controls GPU destruction
-  DateTime _lastMarkerRebuild = DateTime.now();
+  bool _fetchingDashboard = false;
 
   DriverProfile? _driver;
   RideJob? _activeRide;
   List<RideJob> _queue = const <RideJob>[];
 
-  GoogleMapController? _map;
   Position? _currentPosition;
   StreamSubscription<Position>? _locationSub;
   StreamSubscription<CompassEvent>? _compassSub;
   Timer? _dashboardTimer;
   Timer? _heartbeatTimer;
+  Timer? _compassThrottleTimer;
 
   DateTime? _lastDashboardSyncAt;
   DateTime? _lastHeartbeatAt;
@@ -93,10 +116,18 @@ class _DriverHomePageState extends State<DriverHomePage> with WidgetsBindingObse
   BitmapDescriptor? _pickupIcon;
   BitmapDescriptor? _dropIcon;
 
+  // --- MATH & SMOOTHING FILTERS ---
+  _Kalman1D? _latKalman;
+  _Kalman1D? _lngKalman;
   double _emaHeading = 0.0;
   static const double _smoothingFactor = 0.25;
+
   List<LatLng> _overviewRoutePoints = [];
   String? _lastRouteId;
+
+  // Raw Sets
+  final Set<Marker> _markers = <Marker>{};
+  final Set<Polyline> _polylines = <Polyline>{};
 
   @override
   void initState() {
@@ -104,6 +135,50 @@ class _DriverHomePageState extends State<DriverHomePage> with WidgetsBindingObse
     WidgetsBinding.instance.addObserver(this);
     _api = ApiClient(http.Client(), context);
     _bootstrap();
+  }
+
+  // --- ISOLATED PUSH METHOD ---
+  void _pushMapState() {
+    _buildMarkersAndLines();
+    _markersNotifier.value = Set.from(_markers);
+    _polylinesNotifier.value = Set.from(_polylines);
+  }
+
+  void _buildMarkersAndLines() {
+    _markers.clear();
+    _polylines.clear();
+
+    if (_currentPosition != null && _userPinIcon != null) {
+      _markers.add(Marker(
+        markerId: const MarkerId('driver_self'),
+        position: LatLng(_currentPosition!.latitude, _currentPosition!.longitude),
+        icon: _userPinIcon!,
+        rotation: _emaHeading,
+        anchor: const Offset(0.5, 0.5),
+        flat: true,
+        zIndex: 999,
+      ));
+    }
+
+    if (_activeRide != null) {
+      if (_pickupIcon != null) _markers.add(Marker(markerId: const MarkerId('pickup'), position: LatLng(_activeRide!.pickupLat, _activeRide!.pickupLng), icon: _pickupIcon!, anchor: const Offset(0.5, 0.5), zIndex: 35));
+      if (_dropIcon != null) _markers.add(Marker(markerId: const MarkerId('destination'), position: LatLng(_activeRide!.destLat, _activeRide!.destLng), icon: _dropIcon!, anchor: const Offset(0.5, 0.5), zIndex: 35));
+
+      final List<LatLng> points = _overviewRoutePoints.isNotEmpty
+          ? _overviewRoutePoints
+          : [
+        if (_currentPosition != null) LatLng(_currentPosition!.latitude, _currentPosition!.longitude),
+        (_activeRide!.status.toLowerCase() == 'in_progress' || _activeRide!.status.toLowerCase() == 'arrived_destination')
+            ? LatLng(_activeRide!.destLat, _activeRide!.destLng)
+            : LatLng(_activeRide!.pickupLat, _activeRide!.pickupLng)
+      ];
+
+      if (points.isNotEmpty) {
+        final isDark = Theme.of(context).brightness == Brightness.dark;
+        _polylines.add(Polyline(polylineId: const PolylineId('active_trip_halo'), width: 10, points: points, color: isDark ? Colors.white.withOpacity(0.85) : Colors.white.withOpacity(0.92), startCap: Cap.roundCap, endCap: Cap.roundCap, jointType: JointType.round));
+        _polylines.add(Polyline(polylineId: const PolylineId('active_trip_line'), width: 5, points: points, color: AppColors.primary, startCap: Cap.roundCap, endCap: Cap.roundCap, jointType: JointType.round));
+      }
+    }
   }
 
   Future<void> _bootstrap() async {
@@ -132,10 +207,8 @@ class _DriverHomePageState extends State<DriverHomePage> with WidgetsBindingObse
       showToastNotification(context: context, title: 'Dashboard unavailable', message: _statusMessage ?? 'Please try again.', isSuccess: false);
     } finally {
       if (mounted) {
-        setState(() {
-          _booting = false;
-          _mapVisible = true;
-        });
+        setState(() => _booting = false);
+        _pushMapState();
       }
     }
   }
@@ -147,7 +220,11 @@ class _DriverHomePageState extends State<DriverHomePage> with WidgetsBindingObse
     _heartbeatTimer?.cancel();
     _locationSub?.cancel();
     _compassSub?.cancel();
-    try { _map?.dispose(); } catch (_) {}
+    _compassThrottleTimer?.cancel();
+    _markersNotifier.dispose();
+    _polylinesNotifier.dispose();
+    _circlesNotifier.dispose();
+    try { _mapController?.dispose(); } catch (_) {}
     super.dispose();
   }
 
@@ -172,7 +249,7 @@ class _DriverHomePageState extends State<DriverHomePage> with WidgetsBindingObse
   void _startHardwareCompass() {
     _compassSub?.cancel();
     _compassSub = FlutterCompass.events?.listen((CompassEvent event) {
-      if (event.heading == null || !mounted || !_mapVisible) return;
+      if (event.heading == null) return;
 
       double targetHeading = event.heading! % 360.0;
       if (targetHeading < 0) targetHeading += 360.0;
@@ -182,12 +259,10 @@ class _DriverHomePageState extends State<DriverHomePage> with WidgetsBindingObse
       while (diff > 180.0) diff -= 360.0;
       _emaHeading += diff * _smoothingFactor;
 
-      // Throttle setState to max 10 FPS to prevent UI choking
-      final now = DateTime.now();
-      if (now.difference(_lastMarkerRebuild).inMilliseconds > 100) {
-        _lastMarkerRebuild = now;
-        setState(() {});
-      }
+      if (_compassThrottleTimer?.isActive ?? false) return;
+      _compassThrottleTimer = Timer(const Duration(milliseconds: 60), () {
+        if (mounted) _pushMapState(); // Push to GPU layer ONLY. No setState().
+      });
     });
   }
 
@@ -198,8 +273,8 @@ class _DriverHomePageState extends State<DriverHomePage> with WidgetsBindingObse
 
     final results = await Future.wait<BitmapDescriptor>([
       MapGraphicsEngine.createPremiumAvatarPin(avatarImage: null, isDark: isDark, cs: cs),
-      MapGraphicsEngine.createRingDotMarker(const Color(0xFF1E8E3E)),
-      MapGraphicsEngine.createRingDotMarker(const Color(0xFFE53935)),
+      MapGraphicsEngine.createRingDotMarker(const Color(0xFF1A73E8)),
+      MapGraphicsEngine.createRingDotMarker(const Color(0xFF00A651)),
     ]);
 
     _userPinIcon = results[0];
@@ -215,16 +290,14 @@ class _DriverHomePageState extends State<DriverHomePage> with WidgetsBindingObse
       final uid = _prefs.getString('user_id')?.trim() ?? '';
       if (uid.isEmpty) return;
 
-      final res = await _api.request(ApiConstants.userInfoEndpoint, method: 'POST', data: {'user': uid});
+      final res = await _api.request(ApiConstants.userInfoEndpoint, method: 'POST', data: {'user': uid}).timeout(const Duration(seconds: 10));
       final body = jsonDecode(res.body);
 
       if (res.statusCode == 200 && body is Map && body['error'] == false) {
         final raw = body['user'];
         if (raw is Map) {
           if (!mounted) return;
-          setState(() {
-            _user = raw.map((k, v) => MapEntry<String, dynamic>(k.toString(), v));
-          });
+          setState(() { _user = raw.map((k, v) => MapEntry<String, dynamic>(k.toString(), v)); });
         }
       }
     } catch (_) {
@@ -238,7 +311,7 @@ class _DriverHomePageState extends State<DriverHomePage> with WidgetsBindingObse
     final uid = _prefs.getString('user_id')?.trim() ?? '';
     if (uid.isEmpty) throw Exception('User ID missing');
 
-    final res = await _api.request(_driverHubEndpoint, method: 'POST', data: {'action': 'dashboard', 'user': uid});
+    final res = await _api.request(_driverHubEndpoint, method: 'POST', data: {'action': 'dashboard', 'user': uid}).timeout(const Duration(seconds: 10));
     final body = jsonDecode(res.body);
 
     if (res.statusCode != 200 || body is! Map || body['error'] == true) {
@@ -266,12 +339,15 @@ class _DriverHomePageState extends State<DriverHomePage> with WidgetsBindingObse
 
     await _primeCurrentLocation(initial: initial);
     _fetchOverviewRoute();
-    if (_mapVisible) _fitMapToContext();
+    _pushMapState();
   }
 
   Future<void> _fetchOverviewRoute() async {
     if (_activeRide == null || _currentPosition == null) {
-      if (_overviewRoutePoints.isNotEmpty) setState(() => _overviewRoutePoints.clear());
+      if (_overviewRoutePoints.isNotEmpty) {
+        _overviewRoutePoints.clear();
+        _pushMapState();
+      }
       return;
     }
 
@@ -307,7 +383,9 @@ class _DriverHomePageState extends State<DriverHomePage> with WidgetsBindingObse
           final String encoded = routes.first['polyline']?['encodedPolyline']?.toString() ?? '';
           if (encoded.isNotEmpty) {
             _lastRouteId = routeId;
-            if (mounted) setState(() => _overviewRoutePoints = _decodePolyline(encoded));
+            _overviewRoutePoints = _decodePolyline(encoded);
+            _pushMapState();
+            _fitMapToContext();
           }
         }
       }
@@ -336,7 +414,15 @@ class _DriverHomePageState extends State<DriverHomePage> with WidgetsBindingObse
   }
 
   Future<void> _safeDashboardRefresh() async {
-    try { await _fetchDashboard(); } catch (_) { if (mounted) setState(() => _dashboardConnected = false); }
+    if (_fetchingDashboard) return; // Prevent API pile-ups
+    _fetchingDashboard = true;
+    try {
+      await _fetchDashboard();
+    } catch (_) {
+      if (mounted) setState(() => _dashboardConnected = false);
+    } finally {
+      _fetchingDashboard = false;
+    }
   }
 
   Future<void> _primeCurrentLocation({bool initial = false}) async {
@@ -344,7 +430,17 @@ class _DriverHomePageState extends State<DriverHomePage> with WidgetsBindingObse
       if (!await _ensureLocationPermission()) return;
       final fix = await Geolocator.getCurrentPosition(desiredAccuracy: LocationAccuracy.bestForNavigation);
       _currentPosition = fix;
+
+      if (_latKalman == null) {
+        _latKalman = _Kalman1D(x: fix.latitude);
+        _lngKalman = _Kalman1D(x: fix.longitude);
+      } else {
+        _latKalman!.update(fix.latitude);
+        _lngKalman!.update(fix.longitude);
+      }
+
       if (initial) _initialCamera = CameraPosition(target: LatLng(fix.latitude, fix.longitude), zoom: 15.8);
+      _pushMapState();
     } catch (_) {}
   }
 
@@ -380,7 +476,7 @@ class _DriverHomePageState extends State<DriverHomePage> with WidgetsBindingObse
     try {
       if (!await _ensureLocationPermission()) return;
       _currentPosition = await Geolocator.getCurrentPosition(desiredAccuracy: LocationAccuracy.bestForNavigation);
-      if (mounted && _mapVisible) setState(() {});
+      _pushMapState();
     } catch (_) {
       if (!silent && mounted) showToastNotification(context: context, title: 'Fix unavailable', message: 'Unable to refresh live location.', isSuccess: false);
     }
@@ -393,8 +489,14 @@ class _DriverHomePageState extends State<DriverHomePage> with WidgetsBindingObse
 
     _locationSub = Geolocator.getPositionStream(locationSettings: _platformLocationSettings()).listen(
           (pos) {
-        _currentPosition = pos;
-        if (mounted && _mapVisible) setState(() {});
+        if (_latKalman != null && _lngKalman != null) {
+          double lat = _latKalman!.update(pos.latitude);
+          double lng = _lngKalman!.update(pos.longitude);
+          _currentPosition = Position(longitude: lng, latitude: lat, timestamp: pos.timestamp, accuracy: pos.accuracy, altitude: pos.altitude, altitudeAccuracy: pos.altitudeAccuracy, heading: pos.heading, headingAccuracy: pos.headingAccuracy, speed: pos.speed, speedAccuracy: pos.speedAccuracy);
+        } else {
+          _currentPosition = pos;
+        }
+        _pushMapState();
         _fetchOverviewRoute();
       },
       onError: (_) { if (mounted) showToastNotification(context: context, title: 'Stream interrupted', message: 'Live location stream will retry.', isSuccess: false); },
@@ -427,7 +529,9 @@ class _DriverHomePageState extends State<DriverHomePage> with WidgetsBindingObse
           'heading': _emaHeading.toStringAsFixed(2),
           'phase': _phaseForHeartbeat(_activeRide?.status),
         },
-      );
+      ).timeout(const Duration(seconds: 5));
+
+      // Update heartbeat visually without blocking map UI
       if (mounted) setState(() => _lastHeartbeatAt = DateTime.now());
     } catch (_) {}
   }
@@ -548,7 +652,7 @@ class _DriverHomePageState extends State<DriverHomePage> with WidgetsBindingObse
     try {
       final uid = _prefs.getString('user_id')?.trim() ?? '';
       if (uid.isEmpty) return null;
-      final res = await _api.request(_driverHubEndpoint, method: 'POST', data: {'action': 'dashboard', 'user': uid});
+      final res = await _api.request(_driverHubEndpoint, method: 'POST', data: {'action': 'dashboard', 'user': uid}).timeout(const Duration(seconds: 10));
       final body = jsonDecode(res.body);
       if (res.statusCode != 200 || body is! Map || body['error'] == true) return null;
 
@@ -582,9 +686,6 @@ class _DriverHomePageState extends State<DriverHomePage> with WidgetsBindingObse
     final ride = _activeRide;
     final driver = _driver;
     if (ride == null || driver == null) return;
-
-    // ENTERPRISE FIX: Destroy background map to free 100% of RAM/GPU
-    setState(() => _mapVisible = false);
 
     await Navigator.of(context).push(
       MaterialPageRoute(
@@ -631,9 +732,7 @@ class _DriverHomePageState extends State<DriverHomePage> with WidgetsBindingObse
       ),
     );
 
-    // Rebuild map when returned
     if (mounted) {
-      setState(() => _mapVisible = true);
       await _fetchDashboard();
     }
   }
@@ -663,7 +762,7 @@ class _DriverHomePageState extends State<DriverHomePage> with WidgetsBindingObse
           if (pos != null) 'heading': _emaHeading.toStringAsFixed(2),
           if (pos != null) 'accuracy': pos.accuracy.toStringAsFixed(2),
         },
-      );
+      ).timeout(const Duration(seconds: 10));
 
       final body = jsonDecode(res.body);
       if (res.statusCode != 200 || body is! Map || body['error'] == true) throw Exception(body is Map ? (body['message'] ?? body['error_msg']) : 'Ride update failed');
@@ -680,7 +779,7 @@ class _DriverHomePageState extends State<DriverHomePage> with WidgetsBindingObse
   }
 
   void _fitMapToContext() {
-    final map = _map;
+    final map = _mapController;
     if (map == null) return;
 
     final points = <LatLng>[];
@@ -705,49 +804,7 @@ class _DriverHomePageState extends State<DriverHomePage> with WidgetsBindingObse
       if (point.longitude > maxLng) maxLng = point.longitude;
     }
 
-    map.animateCamera(CameraUpdate.newLatLngBounds(LatLngBounds(southwest: LatLng(minLat, minLng), northeast: LatLng(maxLat, maxLng)), 140));
-  }
-
-  Set<Marker> _buildMarkers() {
-    final markers = <Marker>{};
-    if (_currentPosition != null && _userPinIcon != null) {
-      markers.add(Marker(
-        markerId: const MarkerId('driver_self'),
-        position: LatLng(_currentPosition!.latitude, _currentPosition!.longitude),
-        icon: _userPinIcon!,
-        rotation: _emaHeading,
-        anchor: const Offset(0.5, 0.5),
-        flat: true,
-        zIndex: 999,
-      ));
-    }
-
-    if (_activeRide != null) {
-      if (_pickupIcon != null) markers.add(Marker(markerId: const MarkerId('pickup'), position: LatLng(_activeRide!.pickupLat, _activeRide!.pickupLng), icon: _pickupIcon!));
-      if (_dropIcon != null) markers.add(Marker(markerId: const MarkerId('destination'), position: LatLng(_activeRide!.destLat, _activeRide!.destLng), icon: _dropIcon!));
-    }
-
-    return markers;
-  }
-
-  Set<Polyline> _buildPolylines() {
-    if (_currentPosition == null || _activeRide == null) return const <Polyline>{};
-
-    final List<LatLng> points = _overviewRoutePoints.isNotEmpty
-        ? _overviewRoutePoints
-        : [
-      LatLng(_currentPosition!.latitude, _currentPosition!.longitude),
-      (_activeRide!.status.toLowerCase() == 'in_progress' || _activeRide!.status.toLowerCase() == 'arrived_destination')
-          ? LatLng(_activeRide!.destLat, _activeRide!.destLng)
-          : LatLng(_activeRide!.pickupLat, _activeRide!.pickupLng)
-    ];
-
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-
-    return <Polyline>{
-      Polyline(polylineId: const PolylineId('active_trip_halo'), width: 10, points: points, color: isDark ? Colors.white.withOpacity(0.85) : Colors.white.withOpacity(0.92), startCap: Cap.roundCap, endCap: Cap.roundCap, jointType: JointType.round),
-      Polyline(polylineId: const PolylineId('active_trip_line'), width: 5, points: points, color: AppColors.primary, startCap: Cap.roundCap, endCap: Cap.roundCap, jointType: JointType.round),
-    };
+    map.animateCamera(CameraUpdate.newLatLngBounds(LatLngBounds(southwest: LatLng(minLat - 0.005, minLng - 0.005), northeast: LatLng(maxLat + 0.005, maxLng + 0.005)), 140));
   }
 
   void _openWallet() {
@@ -782,26 +839,18 @@ class _DriverHomePageState extends State<DriverHomePage> with WidgetsBindingObse
       extendBodyBehindAppBar: true,
       body: Stack(
         children: [
-          // STAGGERED MAP LAYER & RAM PRESERVATION
+          // --- REPLACED WITH ISOLATED MAP LAYER ---
           Positioned.fill(
-            child: (!_mapVisible || _booting)
+            child: _booting
                 ? Container(color: theme.scaffoldBackgroundColor)
-                : GoogleMap(
+                : _IsolatedDriverMapLayer(
+              markersNotifier: _markersNotifier,
+              polylinesNotifier: _polylinesNotifier,
+              circlesNotifier: _circlesNotifier,
               initialCameraPosition: _initialCamera,
-              myLocationEnabled: false,
-              myLocationButtonEnabled: false,
-              compassEnabled: false,
-              mapToolbarEnabled: false,
-              zoomControlsEnabled: false,
-              rotateGesturesEnabled: true,
-              tiltGesturesEnabled: true,
-              markers: _buildMarkers(),
-              polylines: _buildPolylines(),
+              isDark: theme.brightness == Brightness.dark,
               onMapCreated: (controller) {
-                _map = controller;
-                if (theme.brightness == Brightness.dark) {
-                  _map!.setMapStyle('''[{"elementType":"geometry","stylers":[{"color":"#212121"}]},{"elementType":"labels.icon","stylers":[{"visibility":"off"}]},{"elementType":"labels.text.fill","stylers":[{"color":"#757575"}]},{"featureType":"road","elementType":"geometry.fill","stylers":[{"color":"#2c2c2c"}]},{"featureType":"water","elementType":"geometry","stylers":[{"color":"#000000"}]}]''');
-                }
+                _mapController = controller;
                 _fitMapToContext();
               },
             ),
@@ -840,7 +889,7 @@ class _DriverHomePageState extends State<DriverHomePage> with WidgetsBindingObse
                     heroTag: 'driver_locate_fab',
                     backgroundColor: cs.surface.withOpacity(0.96),
                     onPressed: () {
-                      if (_map != null && _currentPosition != null) _map!.animateCamera(CameraUpdate.newLatLngZoom(LatLng(_currentPosition!.latitude, _currentPosition!.longitude), 16.4));
+                      if (_mapController != null && _currentPosition != null) _mapController!.animateCamera(CameraUpdate.newLatLngZoom(LatLng(_currentPosition!.latitude, _currentPosition!.longitude), 16.4));
                     },
                     child: const Icon(Icons.my_location_rounded),
                   ),
@@ -873,7 +922,7 @@ class _DriverHomePageState extends State<DriverHomePage> with WidgetsBindingObse
               onWallet: _openWallet,
               onHistory: () => Navigator.pushNamed(context, AppRoutes.rideHistory),
               onProfile: () => Navigator.pushNamed(context, AppRoutes.profile),
-              onRefresh: () => unawaited(_fetchDashboard()),
+              onRefresh: () => unawaited(_safeDashboardRefresh()),
               onAccept: _acceptRide,
               onRideAction: (action) => unawaited(_performRideAction(action)),
               onNavigate: _openTripNavigation,
@@ -892,6 +941,74 @@ class _DriverHomePageState extends State<DriverHomePage> with WidgetsBindingObse
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+// --- ④ ISOLATED MAP LAYER WIDGET ---
+class _IsolatedDriverMapLayer extends StatelessWidget {
+  final ValueNotifier<Set<Marker>> markersNotifier;
+  final ValueNotifier<Set<Polyline>> polylinesNotifier;
+  final ValueNotifier<Set<Circle>> circlesNotifier;
+
+  final CameraPosition initialCameraPosition;
+  final bool isDark;
+  final void Function(GoogleMapController) onMapCreated;
+
+  const _IsolatedDriverMapLayer({
+    super.key,
+    required this.markersNotifier,
+    required this.polylinesNotifier,
+    required this.circlesNotifier,
+    required this.initialCameraPosition,
+    required this.isDark,
+    required this.onMapCreated,
+  });
+
+  String? _getMapStyle() {
+    if (!isDark) return null;
+    return '''[{"elementType":"geometry","stylers":[{"color":"#212121"}]},{"elementType":"labels.icon","stylers":[{"visibility":"off"}]},{"elementType":"labels.text.fill","stylers":[{"color":"#757575"}]},{"elementType":"labels.text.stroke","stylers":[{"color":"#212121"}]},{"featureType":"administrative","elementType":"geometry","stylers":[{"color":"#757575"}]},{"featureType":"administrative.country","elementType":"labels.text.fill","stylers":[{"color":"#9e9e9e"}]},{"featureType":"administrative.land_parcel","stylers":[{"visibility":"off"}]},{"featureType":"administrative.locality","elementType":"labels.text.fill","stylers":[{"color":"#bdbdbd"}]},{"featureType":"poi","elementType":"labels.text.fill","stylers":[{"color":"#757575"}]},{"featureType":"poi.park","elementType":"geometry","stylers":[{"color":"#181818"}]},{"featureType":"poi.park","elementType":"labels.text.fill","stylers":[{"color":"#616161"}]},{"featureType":"poi.park","elementType":"labels.text.stroke","stylers":[{"color":"#1b1b1b"}]},{"featureType":"road","elementType":"geometry.fill","stylers":[{"color":"#2c2c2c"}]},{"featureType":"road","elementType":"labels.text.fill","stylers":[{"color":"#8a8a8a"}]},{"featureType":"road.arterial","elementType":"geometry","stylers":[{"color":"#373737"}]},{"featureType":"road.highway","elementType":"geometry","stylers":[{"color":"#3c3c3c"}]},{"featureType":"road.highway.controlled_access","elementType":"geometry","stylers":[{"color":"#4e4e4e"}]},{"featureType":"road.local","elementType":"labels.text.fill","stylers":[{"color":"#616161"}]},{"featureType":"transit","elementType":"labels.text.fill","stylers":[{"color":"#757575"}]},{"featureType":"water","elementType":"geometry","stylers":[{"color":"#000000"}]},{"featureType":"water","elementType":"labels.text.fill","stylers":[{"color":"#3d3d3d"}]}]''';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return RepaintBoundary(
+      child: ValueListenableBuilder<Set<Marker>>(
+        valueListenable: markersNotifier,
+        builder: (context, markers, _) {
+          return ValueListenableBuilder<Set<Polyline>>(
+            valueListenable: polylinesNotifier,
+            builder: (context, polylines, _) {
+              return ValueListenableBuilder<Set<Circle>>(
+                valueListenable: circlesNotifier,
+                builder: (context, circles, _) {
+                  return GoogleMap(
+                    initialCameraPosition: initialCameraPosition,
+                    myLocationEnabled: false,
+                    myLocationButtonEnabled: false,
+                    zoomControlsEnabled: false,
+                    compassEnabled: false,
+                    mapToolbarEnabled: false,
+                    rotateGesturesEnabled: true,
+                    tiltGesturesEnabled: true,
+                    // --- MASSIVE MEMORY FIXES ---
+                    buildingsEnabled: false,
+                    indoorViewEnabled: false,
+                    trafficEnabled: false,
+                    markers: markers,
+                    polylines: polylines,
+                    circles: circles,
+                    onMapCreated: (c) {
+                      if (isDark) c.setMapStyle(_getMapStyle());
+                      onMapCreated(c);
+                    },
+                  );
+                },
+              );
+            },
+          );
+        },
       ),
     );
   }

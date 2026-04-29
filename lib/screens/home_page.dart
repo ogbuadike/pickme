@@ -38,7 +38,6 @@ import '../services/ride_market_service.dart';
 import '../models/geo_point.dart';
 import '../ui/ui_scale.dart';
 
-// --- OUR NEW ENTERPRISE DELEGATES ---
 import 'state/home_models.dart';
 import 'state/location_permission_modal.dart';
 import 'state/booking_flow_manager.dart';
@@ -147,7 +146,12 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
     return 0;
   }
 
+  // --- AAA-GRADE ISOLATED MAP STATE ---
   GoogleMapController? _map;
+  final ValueNotifier<Set<Marker>> _markersNotifier = ValueNotifier({});
+  final ValueNotifier<Set<Polyline>> _polylinesNotifier = ValueNotifier({});
+  final ValueNotifier<Set<Circle>> _circlesNotifier = ValueNotifier({});
+
   final CameraPosition _initialCam = const CameraPosition(
     target: LatLng(4.9757, 8.3417),
     zoom: 15,
@@ -177,18 +181,18 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
   bool _iconsPreloaded = false;
 
   BitmapDescriptor? _driverIcon;
-  final Set<Marker> _driverMarkers = <Marker>{};
 
+  // Raw Sets that hold the data before being pushed to Notifiers
+  final Set<Marker> _driverMarkers = <Marker>{};
   final Set<Marker> _markers = <Marker>{};
   final Set<Polyline> _lines = <Polyline>{};
   final Set<Circle> _circles = <Circle>{};
+  final Set<Polyline> _driverLines = <Polyline>{};
 
   static const MarkerId _userMarkerId = MarkerId('user_location');
   static const MarkerId _etaMarkerId = MarkerId('eta_label');
   static const MarkerId _minsMarkerId = MarkerId('mins_label');
-
   static const MarkerId _driverSelectedId = MarkerId('driver_selected');
-  final Set<Polyline> _driverLines = <Polyline>{};
 
   BookingController? _booking;
   StreamSubscription<dynamic>? _bookingSub;
@@ -264,7 +268,6 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
   bool _offersLoading = false;
   List<RideOffer> _offers = const <RideOffer>[];
 
-  // DRIVER POLLING ENGINE
   DriverPollingEngine? _pollingEngine;
   final Map<String, DriverCar> _drivers = <String, DriverCar>{};
   final Map<String, double> _driverComputedHeading = <String, double>{};
@@ -279,34 +282,13 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
 
   late final RideMarketService _rideMarketService;
 
-  String? _getMapStyle(bool isDark) {
-    if (!isDark) return null;
-    return '''[
-      {"elementType":"geometry","stylers":[{"color":"#212121"}]},
-      {"elementType":"labels.icon","stylers":[{"visibility":"off"}]},
-      {"elementType":"labels.text.fill","stylers":[{"color":"#757575"}]},
-      {"elementType":"labels.text.stroke","stylers":[{"color":"#212121"}]},
-      {"featureType":"administrative","elementType":"geometry","stylers":[{"color":"#757575"}]},
-      {"featureType":"administrative.country","elementType":"labels.text.fill","stylers":[{"color":"#9e9e9e"}]},
-      {"featureType":"administrative.land_parcel","stylers":[{"visibility":"off"}]},
-      {"featureType":"administrative.locality","elementType":"labels.text.fill","stylers":[{"color":"#bdbdbd"}]},
-      {"featureType":"poi","elementType":"labels.text.fill","stylers":[{"color":"#757575"}]},
-      {"featureType":"poi.park","elementType":"geometry","stylers":[{"color":"#181818"}]},
-      {"featureType":"poi.park","elementType":"labels.text.fill","stylers":[{"color":"#616161"}]},
-      {"featureType":"poi.park","elementType":"labels.text.stroke","stylers":[{"color":"#1b1b1b"}]},
-      {"featureType":"road","elementType":"geometry.fill","stylers":[{"color":"#2c2c2c"}]},
-      {"featureType":"road","elementType":"labels.text.fill","stylers":[{"color":"#8a8a8a"}]},
-      {"featureType":"road.arterial","elementType":"geometry","stylers":[{"color":"#373737"}]},
-      {"featureType":"road.highway","elementType":"geometry","stylers":[{"color":"#3c3c3c"}]},
-      {"featureType":"road.highway.controlled_access","elementType":"geometry","stylers":[{"color":"#4e4e4e"}]},
-      {"featureType":"road.local","elementType":"labels.text.fill","stylers":[{"color":"#616161"}]},
-      {"featureType":"transit","elementType":"labels.text.fill","stylers":[{"color":"#757575"}]},
-      {"featureType":"water","elementType":"geometry","stylers":[{"color":"#000000"}]},
-      {"featureType":"water","elementType":"labels.text.fill","stylers":[{"color":"#3d3d3d"}]}
-    ]''';
+  // --- THE NEW ISOLATED PUSH METHOD ---
+  void _pushMapState() {
+    _markersNotifier.value = {..._markers, ..._driverMarkers};
+    _polylinesNotifier.value = {..._lines, ..._driverLines};
+    _circlesNotifier.value = _circles;
   }
 
-  // --- RESTORED HELPER METHODS ---
   LatLng? _pickupAnchorLL() {
     if (_pts.isNotEmpty && _pts.first.isCurrent && _curPos != null) {
       return LatLng(_curPos!.latitude, _curPos!.longitude);
@@ -323,19 +305,17 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
   }
 
   void _setEngagedDriverMarker(LatLng ll, double heading) {
-    if (!mounted) return;
-    setState(() {
-      _markers.removeWhere((m) => m.markerId == _driverSelectedId);
-      _markers.add(Marker(
-        markerId: _driverSelectedId,
-        position: ll,
-        icon: _driverIcon ?? BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueViolet),
-        flat: true,
-        rotation: heading,
-        anchor: const Offset(0.5, 0.5),
-        zIndex: 50,
-      ));
-    });
+    _markers.removeWhere((m) => m.markerId == _driverSelectedId);
+    _markers.add(Marker(
+      markerId: _driverSelectedId,
+      position: ll,
+      icon: _driverIcon ?? BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueViolet),
+      flat: true,
+      rotation: heading,
+      anchor: const Offset(0.5, 0.5),
+      zIndex: 50,
+    ));
+    _pushMapState();
   }
 
   void _refreshDriverMarkers() {
@@ -353,11 +333,8 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
         zIndex: 5,
       ));
     }
-    if (mounted) {
-      setState(() {
-        _driverMarkers..clear()..addAll(next);
-      });
-    }
+    _driverMarkers..clear()..addAll(next);
+    _pushMapState();
   }
 
   void _resetTripState({bool keepRoute = true}) {
@@ -375,12 +352,10 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
     _bookingSub?.cancel();
     _bookingSub = null;
 
-    if (mounted) {
-      setState(() {
-        _driverLines.clear();
-        _markers.removeWhere((m) => m.markerId == _driverSelectedId);
-      });
-    }
+    _driverLines.clear();
+    _markers.removeWhere((m) => m.markerId == _driverSelectedId);
+    _pushMapState();
+
     _enterFollowMode();
     _syncSearchCircle();
   }
@@ -397,14 +372,13 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
     final result = await RoutingEngine.computeRoute(origin: driverLL, destination: pickupLL, stops: const []);
     if (result == null || result.points.isEmpty) return;
 
-    if (!mounted) return;
-    setState(() {
-      final isDark = Theme.of(context).brightness == Brightness.dark;
-      _driverLines
-        ..clear()
-        ..add(Polyline(polylineId: const PolylineId('driver_halo'), points: result.points, color: isDark ? Colors.white.withOpacity(0.85) : Colors.white.withOpacity(0.92), width: 10, startCap: Cap.roundCap, endCap: Cap.roundCap, jointType: JointType.round, geodesic: true))
-        ..add(Polyline(polylineId: const PolylineId('driver_path'), points: result.points, color: const Color(0xFF7B1FA2), width: 6, startCap: Cap.roundCap, endCap: Cap.roundCap, jointType: JointType.round, geodesic: true));
-    });
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    _driverLines
+      ..clear()
+      ..add(Polyline(polylineId: const PolylineId('driver_halo'), points: result.points, color: isDark ? Colors.white.withOpacity(0.85) : Colors.white.withOpacity(0.92), width: 10, startCap: Cap.roundCap, endCap: Cap.roundCap, jointType: JointType.round, geodesic: true))
+      ..add(Polyline(polylineId: const PolylineId('driver_path'), points: result.points, color: const Color(0xFF7B1FA2), width: 6, startCap: Cap.roundCap, endCap: Cap.roundCap, jointType: JointType.round, geodesic: true));
+
+    _pushMapState();
 
     if (!_didFitDriverLeg && !_expanded) {
       _didFitDriverLeg = true;
@@ -424,14 +398,13 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
     final result = await RoutingEngine.computeRoute(origin: from, destination: to, stops: const []);
     if (result == null || result.points.isEmpty) return;
 
-    if (!mounted) return;
-    setState(() {
-      final isDark = Theme.of(context).brightness == Brightness.dark;
-      _driverLines
-        ..clear()
-        ..add(Polyline(polylineId: const PolylineId('trip_halo'), points: result.points, color: isDark ? Colors.white.withOpacity(0.85) : Colors.white.withOpacity(0.92), width: 10, startCap: Cap.roundCap, endCap: Cap.roundCap, jointType: JointType.round, geodesic: true))
-        ..add(Polyline(polylineId: const PolylineId('trip_path'), points: result.points, color: const Color(0xFF1A73E8), width: 6, startCap: Cap.roundCap, endCap: Cap.roundCap, jointType: JointType.round, geodesic: true));
-    });
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    _driverLines
+      ..clear()
+      ..add(Polyline(polylineId: const PolylineId('trip_halo'), points: result.points, color: isDark ? Colors.white.withOpacity(0.85) : Colors.white.withOpacity(0.92), width: 10, startCap: Cap.roundCap, endCap: Cap.roundCap, jointType: JointType.round, geodesic: true))
+      ..add(Polyline(polylineId: const PolylineId('trip_path'), points: result.points, color: const Color(0xFF1A73E8), width: 6, startCap: Cap.roundCap, endCap: Cap.roundCap, jointType: JointType.round, geodesic: true));
+
+    _pushMapState();
 
     if (!_didFitTripLeg && !_expanded) {
       _didFitTripLeg = true;
@@ -484,11 +457,9 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
     final p = _pts[idx];
     final id = MarkerId('p_$idx');
     final icon = p.type == PointType.pickup ? (_pickupIcon ?? BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueAzure)) : p.type == PointType.destination ? (_dropIcon ?? BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueGreen)) : BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueOrange);
-    if (!mounted) return;
-    setState(() {
-      _markers.removeWhere((m) => m.markerId == id);
-      _markers.add(Marker(markerId: id, position: pos, icon: icon, anchor: const Offset(0.5, 0.5), infoWindow: InfoWindow(title: _pointLabel(p.type), snippet: title), consumeTapEvents: false));
-    });
+    _markers.removeWhere((m) => m.markerId == id);
+    _markers.add(Marker(markerId: id, position: pos, icon: icon, anchor: const Offset(0.5, 0.5), infoWindow: InfoWindow(title: _pointLabel(p.type), snippet: title), consumeTapEvents: false));
+    _pushMapState();
   }
 
   String _fmtPlacemark(geo.Placemark? p) {
@@ -555,7 +526,6 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
       } catch (_) {}
     });
   }
-  // -------------------------------
 
   Future<void> _bookingStartTrip() async {
     final b = _booking;
@@ -680,6 +650,11 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
     _fitBoundsDebounce?.cancel();
     _tripTickTimer?.cancel();
 
+    // Dispose Notifiers
+    _markersNotifier.dispose();
+    _polylinesNotifier.dispose();
+    _circlesNotifier.dispose();
+
     for (final p in _pts) {
       p.controller.dispose();
       p.focus.dispose();
@@ -744,16 +719,12 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
   Future<void> _bootstrap() async {
     _prefs = await SharedPreferences.getInstance();
 
-    // Initialize Polling Engine
     _pollingEngine = DriverPollingEngine(
       api: _api,
       userId: _prefs.getString('user_id') ?? _user?['id']?.toString() ?? 'guest',
       onDriversUpdated: (activeDrivers, computedHeadings) {
-        if (!mounted) return;
-        setState(() {
-          _drivers..clear()..addEntries(activeDrivers.map((d) => MapEntry(d.id, d)));
-          _driverComputedHeading..clear()..addAll(computedHeadings);
-        });
+        _drivers..clear()..addEntries(activeDrivers.map((d) => MapEntry(d.id, d)));
+        _driverComputedHeading..clear()..addAll(computedHeadings);
         _refreshDriverMarkers();
       },
     );
@@ -818,10 +789,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
     try {
       await Future.wait<void>([_ensurePointIcons(), _createUserPinIcon(), _createDriverIcon()]);
       _iconsPreloaded = true;
-      if (mounted) {
-        _refreshDriverMarkers();
-        setState(() {});
-      }
+      _refreshDriverMarkers();
     } catch (_) {}
   }
 
@@ -847,9 +815,6 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
         isDark: theme.brightness == Brightness.dark,
         cs: theme.colorScheme,
       );
-
-      if (!mounted) return;
-      setState(() {});
 
       if (_curPos != null) {
         _updateUserMarker(
@@ -880,11 +845,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
     if (_driverIcon != null) return;
     try {
       _driverIcon = await MapGraphicsEngine.assetToMarker('assets/images/open_top_view_car.png', targetWidth: 96);
-      if (mounted) {
-        _refreshDriverMarkers();
-        setState(() {});
-      }
-      return;
+      _refreshDriverMarkers();
     } catch (_) {}
   }
 
@@ -903,11 +864,9 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
     _lastUserMarkerLL = pos;
     _lastUserMarkerRot = _userMarkerRotation;
 
-    if (!mounted) return;
-    setState(() {
-      _markers.removeWhere((m) => m.markerId == _userMarkerId);
-      _markers.add(Marker(markerId: _userMarkerId, position: pos, icon: _userPinIcon!, anchor: const Offset(0.5, 1.0), flat: true, rotation: _userMarkerRotation, zIndex: 999));
-    });
+    _markers.removeWhere((m) => m.markerId == _userMarkerId);
+    _markers.add(Marker(markerId: _userMarkerId, position: pos, icon: _userPinIcon!, anchor: const Offset(0.5, 1.0), flat: true, rotation: _userMarkerRotation, zIndex: 999));
+    _pushMapState();
   }
 
   void _startCompass() {
@@ -1375,13 +1334,11 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
     final r = accuracy.clamp(8, 100).toDouble();
     if (_lastAccuracyLL != null && RoutingEngine.haversine(_lastAccuracyLL!, c) < 2.0 && (r - _lastAccuracyRadius).abs() < 2.0) return;
     _lastAccuracyLL = c; _lastAccuracyRadius = r;
-    if (!mounted) return;
-    setState(() {
-      final isDark = Theme.of(context).brightness == Brightness.dark;
-      final cs = Theme.of(context).colorScheme;
-      _circles.removeWhere((x) => x.circleId == _accuracyCircleId);
-      _circles.add(Circle(circleId: _accuracyCircleId, center: c, radius: r, fillColor: (isDark ? cs.primary : AppColors.primary).withOpacity(0.10), strokeColor: (isDark ? cs.primary : AppColors.primary).withOpacity(0.32), strokeWidth: 2));
-    });
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final cs = Theme.of(context).colorScheme;
+    _circles.removeWhere((x) => x.circleId == _accuracyCircleId);
+    _circles.add(Circle(circleId: _accuracyCircleId, center: c, radius: r, fillColor: (isDark ? cs.primary : AppColors.primary).withOpacity(0.10), strokeColor: (isDark ? cs.primary : AppColors.primary).withOpacity(0.32), strokeWidth: 2));
+    _pushMapState();
   }
 
   double _visualSearchRadiusMeters() => (_homeRadiusKm() * 1000.0).clamp(_searchCircleMinM, _searchCircleMaxM).toDouble();
@@ -1391,17 +1348,16 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
   void _syncSearchCircle() {
     final show = _shouldShowSearchCircle();
     final center = _searchCircleCenter();
-    if (!mounted) return;
     if (!show || center == null) {
-      if (_circles.any((c) => c.circleId == _searchCircleId)) setState(() => _circles.removeWhere((x) => x.circleId == _searchCircleId));
+      _circles.removeWhere((x) => x.circleId == _searchCircleId);
+      _pushMapState();
       return;
     }
-    setState(() {
-      final isDark = Theme.of(context).brightness == Brightness.dark;
-      final cs = Theme.of(context).colorScheme;
-      _circles.removeWhere((x) => x.circleId == _searchCircleId);
-      _circles.add(Circle(circleId: _searchCircleId, center: center, radius: _visualSearchRadiusMeters(), fillColor: (isDark ? cs.primary : const Color(0xFF00A651)).withOpacity(0.12), strokeColor: (isDark ? cs.primary : const Color(0xFF00A651)).withOpacity(0.30), strokeWidth: 2));
-    });
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final cs = Theme.of(context).colorScheme;
+    _circles.removeWhere((x) => x.circleId == _searchCircleId);
+    _circles.add(Circle(circleId: _searchCircleId, center: center, radius: _visualSearchRadiusMeters(), fillColor: (isDark ? cs.primary : const Color(0xFF00A651)).withOpacity(0.12), strokeColor: (isDark ? cs.primary : const Color(0xFF00A651)).withOpacity(0.30), strokeWidth: 2));
+    _pushMapState();
   }
 
   bool get _hasPickupAndDropoff => _pts.length >= 2 && _pts.first.latLng != null && _pts.last.latLng != null;
@@ -1415,7 +1371,13 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
       await _fitCurrentRouteToViewportV2(waitForLayout: true);
       return;
     }
-    setState(() { _lines.clear(); _distanceText = null; _durationText = null; _fare = null; _arrivalTime = null; _routeUiError = null; _markers.removeWhere((m) => m.markerId == _etaMarkerId || m.markerId == _minsMarkerId); _routePts.clear(); _spatialIndex.clear(); _lastSnapIndex = -1; });
+    setState(() { _distanceText = null; _durationText = null; _fare = null; _arrivalTime = null; _routeUiError = null; });
+
+    _lines.clear();
+    _markers.removeWhere((m) => m.markerId == _etaMarkerId || m.markerId == _minsMarkerId);
+    _routePts.clear(); _spatialIndex.clear(); _lastSnapIndex = -1;
+    _pushMapState();
+
     final origin = _pts.first.latLng!;
     final destination = _pts.last.latLng!;
     final stops = <LatLng>[for (int i = 1; i < _pts.length - 1; i++) if (_pts[i].latLng != null) _pts[i].latLng!];
@@ -1438,26 +1400,33 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
         }
       });
     } else {
-      _routeUiError = 'Route calculation failed';
+      setState(() { _routeUiError = 'Route calculation failed'; _isConnected = false; });
       _toast('Route Error', 'Unable to calculate route.');
-      setState(() => _isConnected = false);
     }
   }
 
   void _applyRouteFromCache(_V2Route route) {
     if (route.points.isEmpty) return;
-    _arrivalTime = DateTime.now().add(Duration(seconds: route.durationSeconds));
-    setState(() { _distanceText = _fmtDistance(route.distanceMeters); _durationText = _fmtDuration(route.durationSeconds); _fare = _calcFare(route.distanceMeters); _isConnected = true; _lines.clear(); });
-    _routePts = route.points; _buildSpatialIndex(); _buildSpeedColoredPolylines(route.points, route.speedIntervals);
+    setState(() {
+      _arrivalTime = DateTime.now().add(Duration(seconds: route.durationSeconds));
+      _distanceText = _fmtDistance(route.distanceMeters);
+      _durationText = _fmtDuration(route.durationSeconds);
+      _fare = _calcFare(route.distanceMeters);
+      _isConnected = true;
+    });
+
+    _lines.clear();
+    _routePts = route.points;
+    _buildSpatialIndex();
+    _buildSpeedColoredPolylines(route.points, route.speedIntervals);
     _updateRouteBubbles(origin: _pts.first.latLng!, destination: _pts.last.latLng!, secs: route.durationSeconds).then((_) => _fitCurrentRouteToViewportV2(waitForLayout: true));
   }
 
   void _buildSpeedColoredPolylines(List<LatLng> decPts, List<_SpeedInterval> intervals) {
-    if (!mounted) return;
     final isDark = Theme.of(context).brightness == Brightness.dark;
     _lines.add(Polyline(polylineId: const PolylineId('route_halo'), points: decPts, color: isDark ? Colors.white.withOpacity(0.85) : Colors.white.withOpacity(0.92), width: 11, startCap: Cap.roundCap, endCap: Cap.roundCap, jointType: JointType.round, geodesic: true));
     _lines.add(Polyline(polylineId: const PolylineId('route_main'), points: decPts, color: AppColors.primary, width: 3, startCap: Cap.roundCap, endCap: Cap.roundCap, jointType: JointType.round, geodesic: true));
-    setState(() {});
+    _pushMapState();
   }
 
   Future<void> _updateRouteBubbles({required LatLng origin, required LatLng destination, required int secs}) async {
@@ -1471,12 +1440,10 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
     _minsBubbleIcon = await MapGraphicsEngine.createMinutesCircleBadge(minutes: minutes, isDark: isDark, cs: cs);
     _etaBubbleIcon = await MapGraphicsEngine.createArrivePillBadge(text: arrive, isDark: isDark, cs: cs);
 
-    if (!mounted) return;
-    setState(() {
-      _markers.removeWhere((m) => m.markerId == _etaMarkerId || m.markerId == _minsMarkerId);
-      _markers.add(Marker(markerId: _minsMarkerId, position: destination, icon: _minsBubbleIcon!, anchor: const Offset(0.5, 1.0), consumeTapEvents: false, zIndex: 998));
-      _markers.add(Marker(markerId: _etaMarkerId, position: origin, icon: _etaBubbleIcon!, anchor: const Offset(0.5, 1.0), consumeTapEvents: false, zIndex: 998));
-    });
+    _markers.removeWhere((m) => m.markerId == _etaMarkerId || m.markerId == _minsMarkerId);
+    _markers.add(Marker(markerId: _minsMarkerId, position: destination, icon: _minsBubbleIcon!, anchor: const Offset(0.5, 1.0), consumeTapEvents: false, zIndex: 998));
+    _markers.add(Marker(markerId: _etaMarkerId, position: origin, icon: _etaBubbleIcon!, anchor: const Offset(0.5, 1.0), consumeTapEvents: false, zIndex: 998));
+    _pushMapState();
   }
 
   double _calcFare(int meters) => 500.0 + (meters / 1000.0) * 120.0;
@@ -1632,15 +1599,13 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
   }
 
   void _rebuildPointMarkers() {
-    if (!mounted) return;
-    setState(() {
-      _markers.removeWhere((m) => m.markerId.value.startsWith('p_'));
-      for (int i = 0; i < _pts.length; i++) {
-        if (_pts[i].latLng == null) continue;
-        final icon = _pts[i].type == PointType.pickup ? (_pickupIcon ?? BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueAzure)) : _pts[i].type == PointType.destination ? (_dropIcon ?? BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueGreen)) : BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueOrange);
-        _markers.add(Marker(markerId: MarkerId('p_$i'), position: _pts[i].latLng!, icon: icon, anchor: const Offset(0.5, 0.5), infoWindow: InfoWindow(title: _pointLabel(_pts[i].type), snippet: _pts[i].controller.text), consumeTapEvents: false));
-      }
-    });
+    _markers.removeWhere((m) => m.markerId.value.startsWith('p_'));
+    for (int i = 0; i < _pts.length; i++) {
+      if (_pts[i].latLng == null) continue;
+      final icon = _pts[i].type == PointType.pickup ? (_pickupIcon ?? BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueAzure)) : _pts[i].type == PointType.destination ? (_dropIcon ?? BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueGreen)) : BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueOrange);
+      _markers.add(Marker(markerId: MarkerId('p_$i'), position: _pts[i].latLng!, icon: icon, anchor: const Offset(0.5, 0.5), infoWindow: InfoWindow(title: _pointLabel(_pts[i].type), snippet: _pts[i].controller.text), consumeTapEvents: false));
+    }
+    _pushMapState();
   }
 
   void _swap() {
@@ -1728,7 +1693,6 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
     final fabRight = uiScale.landscape ? uiScale.inset(uiScale.tiny ? 8 : 12).clamp(8.0, 24.0) : uiScale.inset(14).clamp(12.0, 24.0);
     final hasSummary = _distanceText != null && _durationText != null;
 
-    // TIGHTENED BOTTOM SHEET CONSTRAINTS so UI doesn't look too big
     final bottomSheetMaxH = uiScale.landscape
         ? mq.size.height * (uiScale.tablet ? 0.75 : 0.70)
         : mq.size.height * (uiScale.tiny ? 0.68 : (uiScale.compact ? 0.60 : 0.55));
@@ -1743,22 +1707,16 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
       body: Stack(
         children: [
           Positioned.fill(
-            child: GoogleMap(
+            // --- REPLACE RAW GOOGLEMAP WITH ISOLATED LAYER ---
+            child: _IsolatedHomeMapLayer(
+              markersNotifier: _markersNotifier,
+              polylinesNotifier: _polylinesNotifier,
+              circlesNotifier: _circlesNotifier,
               initialCameraPosition: _initialCam,
               padding: _mapPadding,
-              myLocationEnabled: false,
-              myLocationButtonEnabled: false,
-              zoomControlsEnabled: false,
-              compassEnabled: false,
-              mapToolbarEnabled: false,
-              rotateGesturesEnabled: false,
-              tiltGesturesEnabled: false,
-              markers: {..._markers, ..._driverMarkers},
-              polylines: {..._lines, ..._driverLines},
-              circles: _circles,
+              isDark: isDark,
               onMapCreated: (c) {
                 _map = c;
-                if (isDark) _map!.setMapStyle(_getMapStyle(isDark));
                 _scheduleMapPaddingUpdate();
                 _lastCamTarget = _initialCam.target;
                 if (_routePts.isNotEmpty) Future.delayed(const Duration(milliseconds: 80), () => _fitCurrentRouteToViewportV2(waitForLayout: false));
@@ -1890,7 +1848,6 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
                   key: ValueKey('route_sheet_${_expanded}_$_marketOpen'),
                   bottomNavHeight: bottomNavH,
 
-                  // NEW: Passing Dynamic Narration Strings to RouteSheet
                   sheetTitle: 'Street Ride',
                   sheetSubtitle: 'Seamless city transit for your daily commute.',
 
@@ -1916,7 +1873,6 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
                   dropLocation: _destLL() == null ? null : GeoPoint(_destLL()!.latitude, _destLL()!.longitude),
                   onRefresh: _startRideMarket,
                   onCancel: () {
-                    // FIXED: This now successfully clears the route so it closes the RideMarketSheet
                     _stopRideMarket();
                     _resetTripState(keepRoute: false);
                     setState(() {
@@ -1937,6 +1893,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
                       _arrivalTime = null;
                       _cachedRoute = null;
                     });
+                    _pushMapState();
                     _rebuildPointMarkers();
                     _syncSearchCircle();
                     if (_curPos != null) {
@@ -2024,6 +1981,83 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
         },
       )
           : null,
+    );
+  }
+}
+
+// --- ④ ISOLATED MAP LAYER WIDGET ---
+class _IsolatedHomeMapLayer extends StatelessWidget {
+  final ValueNotifier<Set<Marker>> markersNotifier;
+  final ValueNotifier<Set<Polyline>> polylinesNotifier;
+  final ValueNotifier<Set<Circle>> circlesNotifier;
+
+  final CameraPosition initialCameraPosition;
+  final EdgeInsets padding;
+  final bool isDark;
+  final void Function(GoogleMapController) onMapCreated;
+  final void Function(CameraPosition) onCameraMove;
+  final void Function(LatLng) onTap;
+
+  const _IsolatedHomeMapLayer({
+    super.key,
+    required this.markersNotifier,
+    required this.polylinesNotifier,
+    required this.circlesNotifier,
+    required this.initialCameraPosition,
+    required this.padding,
+    required this.isDark,
+    required this.onMapCreated,
+    required this.onCameraMove,
+    required this.onTap,
+  });
+
+  String? _getMapStyle() {
+    if (!isDark) return null;
+    return '''[{"elementType":"geometry","stylers":[{"color":"#212121"}]},{"elementType":"labels.icon","stylers":[{"visibility":"off"}]},{"elementType":"labels.text.fill","stylers":[{"color":"#757575"}]},{"elementType":"labels.text.stroke","stylers":[{"color":"#212121"}]},{"featureType":"administrative","elementType":"geometry","stylers":[{"color":"#757575"}]},{"featureType":"administrative.country","elementType":"labels.text.fill","stylers":[{"color":"#9e9e9e"}]},{"featureType":"administrative.land_parcel","stylers":[{"visibility":"off"}]},{"featureType":"administrative.locality","elementType":"labels.text.fill","stylers":[{"color":"#bdbdbd"}]},{"featureType":"poi","elementType":"labels.text.fill","stylers":[{"color":"#757575"}]},{"featureType":"poi.park","elementType":"geometry","stylers":[{"color":"#181818"}]},{"featureType":"poi.park","elementType":"labels.text.fill","stylers":[{"color":"#616161"}]},{"featureType":"poi.park","elementType":"labels.text.stroke","stylers":[{"color":"#1b1b1b"}]},{"featureType":"road","elementType":"geometry.fill","stylers":[{"color":"#2c2c2c"}]},{"featureType":"road","elementType":"labels.text.fill","stylers":[{"color":"#8a8a8a"}]},{"featureType":"road.arterial","elementType":"geometry","stylers":[{"color":"#373737"}]},{"featureType":"road.highway","elementType":"geometry","stylers":[{"color":"#3c3c3c"}]},{"featureType":"road.highway.controlled_access","elementType":"geometry","stylers":[{"color":"#4e4e4e"}]},{"featureType":"road.local","elementType":"labels.text.fill","stylers":[{"color":"#616161"}]},{"featureType":"transit","elementType":"labels.text.fill","stylers":[{"color":"#757575"}]},{"featureType":"water","elementType":"geometry","stylers":[{"color":"#000000"}]},{"featureType":"water","elementType":"labels.text.fill","stylers":[{"color":"#3d3d3d"}]}]''';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return RepaintBoundary(
+      child: ValueListenableBuilder<Set<Marker>>(
+        valueListenable: markersNotifier,
+        builder: (context, markers, _) {
+          return ValueListenableBuilder<Set<Polyline>>(
+            valueListenable: polylinesNotifier,
+            builder: (context, polylines, _) {
+              return ValueListenableBuilder<Set<Circle>>(
+                valueListenable: circlesNotifier,
+                builder: (context, circles, _) {
+                  return GoogleMap(
+                    initialCameraPosition: initialCameraPosition,
+                    padding: padding,
+                    myLocationEnabled: false,
+                    myLocationButtonEnabled: false,
+                    zoomControlsEnabled: false,
+                    compassEnabled: false,
+                    mapToolbarEnabled: false,
+                    rotateGesturesEnabled: false,
+                    tiltGesturesEnabled: false,
+                    // --- MASSIVE MEMORY FIXES ---
+                    buildingsEnabled: false,
+                    indoorViewEnabled: false,
+                    trafficEnabled: false,
+                    markers: markers,
+                    polylines: polylines,
+                    circles: circles,
+                    onMapCreated: (c) {
+                      if (isDark) c.setMapStyle(_getMapStyle());
+                      onMapCreated(c);
+                    },
+                    onCameraMove: onCameraMove,
+                    onTap: onTap,
+                  );
+                },
+              );
+            },
+          );
+        },
+      ),
     );
   }
 }

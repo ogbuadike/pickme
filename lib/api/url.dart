@@ -23,6 +23,8 @@ class ApiConstants {
   static const String driversNearbyEndpoint = 'drivers_nearby.php';
   static const String driversPollEndpoint = 'drivers_poll.php';
 
+  static const String sendMeDispatchEndpoint = 'user_logistics.php';
+
   static const String rideBookEndpoint = 'ride_book.php';
   static const String rideStatusEndpoint = 'ride_status.php';
   static const String rideStartEndpoint = 'ride_start_trip.php';

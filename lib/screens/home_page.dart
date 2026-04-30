@@ -1974,8 +1974,8 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
           switch (i) {
             case 0: break;
             case 1: Navigator.pushNamed(context, AppRoutes.campus_ride); break;
-            case 2: break;
-            case 3: break;
+            case 2: Navigator.pushNamed(context, AppRoutes.send_me); break;
+            case 3: Navigator.pushNamed(context, AppRoutes.dispatch); break;
             case 4: Navigator.pushNamed(context, AppRoutes.profile); break;
           }
         },

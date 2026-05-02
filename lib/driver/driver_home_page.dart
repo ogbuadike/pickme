@@ -81,7 +81,7 @@ class _DriverHomePageState extends State<DriverHomePage> with WidgetsBindingObse
   bool _busyRideAction = false;
   bool _dashboardConnected = true;
   bool _panelExpanded = false;
-  int _currentIndex = 0;
+  int _currentIndex = 2;
 
   GoogleMapController? _mapController;
   final ValueNotifier<Set<Marker>> _markersNotifier = ValueNotifier({});
@@ -950,8 +950,13 @@ class _DriverHomePageState extends State<DriverHomePage> with WidgetsBindingObse
               onTap: (i) {
                 HapticFeedback.selectionClick();
                 setState(() => _currentIndex = i);
-                if (i == 1) Navigator.pushNamed(context, AppRoutes.rideHistory);
-                if (i == 4) Navigator.pushNamed(context, AppRoutes.profile);
+                switch (i) {
+                  case 0: Navigator.pushNamed(context, AppRoutes.rideHistory);
+                  case 1: Navigator.pushNamed(context, AppRoutes.transactions); break;
+                  case 2: break;
+                  case 3: Navigator.pushNamed(context, AppRoutes.settings); break;
+                  case 4: Navigator.pushNamed(context, AppRoutes.profile); break;
+                }
               },
             ),
           ),

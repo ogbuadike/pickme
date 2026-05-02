@@ -4,22 +4,21 @@ import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_svg/flutter_svg.dart';
+import 'package:shared_preferences/shared_preferences.dart'; // <-- ADDED THIS
 
 import '../themes/app_theme.dart';
 import '../ui/ui_scale.dart';
 
 /// TRANSPARENT FLOATING NAV BAR (glass, strokes only)
-/// - Responsive to User vs Driver modes
+/// - Auto-detects User vs Driver using SharedPreferences
 /// - Labels UNDER icons (always visible) for side items
 /// - Center hero button adapts to "SEND" or "HOME"
 /// - Icons larger, centered; layout responsive & overflow-safe
-/// - Unified active styling
 class CustomBottomNavBar extends StatefulWidget {
   final int currentIndex;
   final ValueChanged<int> onTap;
   final VoidCallback? onCenterAction;
   final List<int?> badges;
-  final bool isDriver; // <-- NEW: Determines which menu to show
 
   const CustomBottomNavBar({
     Key? key,
@@ -27,7 +26,6 @@ class CustomBottomNavBar extends StatefulWidget {
     required this.onTap,
     this.onCenterAction,
     this.badges = const [null, null, null, null, null],
-    this.isDriver = false, // Defaults to user if not provided
   }) : super(key: key);
 
   @override
@@ -41,6 +39,25 @@ class _CustomBottomNavBarState extends State<CustomBottomNavBar>
   late final AnimationController _pulse =
   AnimationController(vsync: this, duration: const Duration(milliseconds: 3500))
     ..repeat(reverse: true);
+
+  // <-- NEW: Internal state to track if user is a driver
+  bool _isDriver = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _checkDriverStatus(); // <-- Fetch the status as soon as the nav bar loads
+  }
+
+  // <-- NEW: Exact same logic you used in your Drawer!
+  Future<void> _checkDriverStatus() async {
+    final prefs = await SharedPreferences.getInstance();
+    if (mounted) {
+      setState(() {
+        _isDriver = prefs.getBool('user_is_driver') ?? false;
+      });
+    }
+  }
 
   @override
   void dispose() {
@@ -67,8 +84,8 @@ class _CustomBottomNavBarState extends State<CustomBottomNavBar>
     final cs = theme.colorScheme;
     final isDark = theme.brightness == Brightness.dark;
 
-    // Dynamically set labels based on user type
-    final labels = widget.isDriver
+    // Dynamically set labels based on the local _isDriver state
+    final labels = _isDriver
         ? ['My Ride', 'Transaction', 'Home', 'Settings', 'Profile']
         : ['Street Ride', 'Campus Ride', 'Send Me', 'Dispatch', 'Profile'];
 
@@ -184,7 +201,8 @@ class _CustomBottomNavBarState extends State<CustomBottomNavBar>
                                   return Expanded(
                                     flex: 1,
                                     child: _SideItem(
-                                      icon: _iconForIndex(i, selected, kIcon, isDark, cs, widget.isDriver),
+                                      // Passed _isDriver into the icon generator
+                                      icon: _iconForIndex(i, selected, kIcon, isDark, cs, _isDriver),
                                       label: labels[i],
                                       chipDiameter: kChip,
                                       selected: selected,
@@ -207,7 +225,7 @@ class _CustomBottomNavBarState extends State<CustomBottomNavBar>
                     ),
                   ),
 
-                  // 💎 MATURE, PREMIUM CENTER HERO (Adapts to Send or Home)
+                  // 💎 MATURE, PREMIUM CENTER HERO (Adapts to Send or Home automatically)
                   Positioned(
                     bottom: uiScale.inset(8),
                     left: 0,
@@ -216,8 +234,9 @@ class _CustomBottomNavBarState extends State<CustomBottomNavBar>
                       active: widget.currentIndex == 2,
                       pulse: _pulse,
                       size: kHero,
-                      label: widget.isDriver ? 'HOME' : 'SEND',
-                      iconData: widget.isDriver ? Icons.space_dashboard_rounded : Icons.near_me_rounded,
+                      // Automatically swaps label and icon
+                      label: _isDriver ? 'HOME' : 'SEND',
+                      iconData: _isDriver ? Icons.space_dashboard_rounded : Icons.near_me_rounded,
                       onTap: () => _select(2),
                       isDark: isDark,
                       cs: cs,
@@ -240,13 +259,13 @@ class _CustomBottomNavBarState extends State<CustomBottomNavBar>
     // DRIVER ICONS
     if (isDriver) {
       switch (index) {
-        case 0:
+        case 0: // My Ride
           return Icon(Icons.local_taxi_rounded, size: size, color: iconColor);
-        case 1:
+        case 1: // Transaction
           return Icon(Icons.receipt_long_rounded, size: size, color: iconColor);
-        case 3:
+        case 3: // Settings
           return Icon(Icons.settings_rounded, size: size, color: iconColor);
-        case 4:
+        case 4: // Profile
           return Icon(Icons.person_rounded, size: size, color: iconColor);
         default:
           return Icon(Icons.circle, size: size, color: iconColor);

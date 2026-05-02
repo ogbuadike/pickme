@@ -16,6 +16,7 @@ import '../widgets/app_menu_drawer.dart';
 import '../widgets/bottom_navigation_bar.dart';
 import '../widgets/fund_account_sheet.dart';
 import '../widgets/header_bar.dart';
+import '../widgets/inner_background.dart';
 import 'logistics_map_picker.dart';
 
 class SendMeLandingPage extends StatefulWidget {
@@ -46,9 +47,10 @@ class _SendMeLandingPageState extends State<SendMeLandingPage> with SingleTicker
     super.initState();
     _api = ApiClient(http.Client(), context);
 
-    _animCtrl = AnimationController(vsync: this, duration: const Duration(milliseconds: 400));
+    _animCtrl = AnimationController(vsync: this, duration: const Duration(milliseconds: 600));
     _fadeAnim = CurvedAnimation(parent: _animCtrl, curve: Curves.easeOutCubic);
-    _slideAnim = Tween<Offset>(begin: const Offset(0, 0.05), end: Offset.zero).animate(CurvedAnimation(parent: _animCtrl, curve: Curves.easeOutCubic));
+    _slideAnim = Tween<Offset>(begin: const Offset(0, 0.05), end: Offset.zero)
+        .animate(CurvedAnimation(parent: _animCtrl, curve: Curves.easeOutCubic));
 
     _bootstrap();
   }
@@ -78,9 +80,7 @@ class _SendMeLandingPageState extends State<SendMeLandingPage> with SingleTicker
           if (mounted) setState(() => _user = body['user']);
         }
       }
-    } catch (_) {
-      // Ignore network errors on silent fetch
-    } finally {
+    } catch (_) {} finally {
       if (mounted) setState(() => _busyProfile = false);
     }
   }
@@ -89,49 +89,35 @@ class _SendMeLandingPageState extends State<SendMeLandingPage> with SingleTicker
     final balance = _user != null ? double.tryParse(_user!['user_bal']?.toString() ?? _user!['bal']?.toString() ?? '0.0') ?? 0.0 : null;
     final currency = _user?['user_currency']?.toString() ?? 'NGN';
     showModalBottomSheet(
-        context: context,
-        backgroundColor: Theme.of(context).scaffoldBackgroundColor,
-        shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
-        builder: (_) => FundAccountSheet(account: _user, balance: balance, currency: currency)
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) => FundAccountSheet(account: _user, balance: balance, currency: currency),
     );
-  }
-
-  double _scaleFromUi(UIScale uiScale) {
-    double scale = (uiScale.shortest / 390.0).clamp(0.58, 1.12);
-    if (uiScale.tiny) scale *= 0.88;
-    if (uiScale.compact) scale *= 0.94;
-    return scale.clamp(0.56, 1.12);
   }
 
   @override
   Widget build(BuildContext context) {
     final mq = MediaQuery.of(context);
     final safeTop = mq.padding.top;
-    final uiScale = UIScale.of(context);
-    final s = _scaleFromUi(uiScale);
+    final ui = UIScale.of(context);
     final theme = Theme.of(context);
     final cs = theme.colorScheme;
     final isDark = theme.brightness == Brightness.dark;
 
-    final themeColor = Colors.blueAccent;
+    // Send Me Brand Color
+    final Color sendMeColor = Colors.blueAccent.shade400;
 
     return Scaffold(
       key: _scaffoldKey,
-      backgroundColor: theme.scaffoldBackgroundColor,
+      backgroundColor: isDark ? Colors.black : AppColors.offWhite,
       drawer: AppMenuDrawer(user: _user),
       extendBody: true,
       extendBodyBehindAppBar: true,
       body: Stack(
         children: [
-          // 1. Premium Glowing Orb Background (Send Me Theme)
-          Positioned(
-            top: -50, right: -100,
-            child: Container(
-              width: 400 * s, height: 400 * s,
-              decoration: BoxDecoration(shape: BoxShape.circle, color: themeColor.withOpacity(isDark ? 0.15 : 0.08)),
-            ),
-          ),
-          Positioned.fill(child: BackdropFilter(filter: ImageFilter.blur(sigmaX: 80, sigmaY: 80), child: const SizedBox())),
+          // 1. Premium App Background
+          BackgroundWidget(style: HoloStyle.vapor, intensity: isDark ? 0.15 : 0.5, animate: true),
 
           // 2. Main Scrollable Content
           Positioned.fill(
@@ -141,56 +127,102 @@ class _SendMeLandingPageState extends State<SendMeLandingPage> with SingleTicker
                 position: _slideAnim,
                 child: ListView(
                   physics: const BouncingScrollPhysics(),
-                  padding: EdgeInsets.only(top: safeTop + (kHeaderVisualH * s) + uiScale.inset(20), bottom: uiScale.inset(120), left: uiScale.inset(24), right: uiScale.inset(24)),
+                  padding: EdgeInsets.only(
+                    top: safeTop + kHeaderVisualH + ui.inset(20),
+                    bottom: ui.inset(140),
+                    left: ui.inset(20),
+                    right: ui.inset(20),
+                  ),
                   children: [
-                    // Animated Hero Graphic
+                    // Premium Hero Icon
                     Align(
                       alignment: Alignment.centerLeft,
                       child: Container(
-                        width: uiScale.inset(84), height: uiScale.inset(84),
+                        padding: EdgeInsets.all(ui.inset(20)),
                         decoration: BoxDecoration(
-                          color: isDark ? cs.surface : Colors.white,
-                          borderRadius: BorderRadius.circular(uiScale.radius(24)),
-                          boxShadow: [BoxShadow(color: themeColor.withOpacity(0.3), blurRadius: 30, offset: const Offset(0, 10))],
+                          color: sendMeColor.withOpacity(isDark ? 0.15 : 0.1),
+                          borderRadius: BorderRadius.circular(ui.radius(24)),
+                          border: Border.all(color: sendMeColor.withOpacity(0.4), width: 2),
+                          boxShadow: [
+                            BoxShadow(color: sendMeColor.withOpacity(0.2), blurRadius: 30, offset: const Offset(0, 10))
+                          ],
                         ),
-                        child: Icon(Icons.shopping_cart_checkout_rounded, size: uiScale.icon(42), color: themeColor),
+                        child: Icon(Icons.shopping_cart_checkout_rounded, size: ui.icon(42).clamp(36.0, 50.0).toDouble(), color: sendMeColor),
                       ),
                     ),
 
-                    SizedBox(height: uiScale.gap(32)),
-                    Text('Send Me.', style: TextStyle(fontSize: uiScale.font(46), fontWeight: FontWeight.w900, color: isDark ? cs.onSurface : AppColors.textPrimary, letterSpacing: -1.5)),
-                    SizedBox(height: uiScale.gap(8)),
-                    Text('Your personal assistant on wheels. We go to the market, pick up groceries, and run your daily errands.', style: TextStyle(fontSize: uiScale.font(16), fontWeight: FontWeight.w600, color: cs.onSurfaceVariant, height: 1.4)),
-                    SizedBox(height: uiScale.gap(40)),
+                    SizedBox(height: ui.gap(28)),
+                    Text(
+                      'Send Me\nErrands.',
+                      style: TextStyle(
+                        fontSize: ui.font(42).clamp(36.0, 48.0).toDouble(),
+                        fontWeight: FontWeight.w900,
+                        color: isDark ? cs.onSurface : AppColors.textPrimary,
+                        letterSpacing: -1.5,
+                        height: 1.1,
+                      ),
+                    ),
+                    SizedBox(height: ui.gap(12)),
+                    Text(
+                      'Your personal assistant on wheels. We go to the market, pick up groceries, and run your daily errands.',
+                      style: TextStyle(
+                        fontSize: ui.font(15).clamp(14.0, 16.0).toDouble(),
+                        fontWeight: FontWeight.w600,
+                        color: isDark ? cs.onSurfaceVariant : AppColors.textSecondary,
+                        height: 1.4,
+                      ),
+                    ),
+                    SizedBox(height: ui.gap(36)),
 
-                    // Feature Cards
-                    _FeatureCard(uiScale: uiScale, icon: Icons.checklist_rounded, title: 'Custom Instructions', subtitle: 'Tell the rider exactly what to do or buy.', color: themeColor),
-                    SizedBox(height: uiScale.gap(16)),
-                    _FeatureCard(uiScale: uiScale, icon: Icons.store_rounded, title: 'Store Pickups', subtitle: 'Perfect for groceries, pharmacy, or food.', color: Colors.teal),
-                    SizedBox(height: uiScale.gap(16)),
-                    _FeatureCard(uiScale: uiScale, icon: Icons.motorcycle_rounded, title: 'Dedicated Rider', subtitle: 'A driver solely focused on your tasks.', color: Colors.purpleAccent),
+                    // Premium Glassmorphic Features
+                    _buildFeatureCard(
+                      ui: ui, cs: cs, isDark: isDark,
+                      icon: Icons.checklist_rounded, color: sendMeColor,
+                      title: 'Custom Instructions',
+                      subtitle: 'Tell the rider exactly what to do or buy.',
+                    ),
+                    SizedBox(height: ui.gap(16)),
+                    _buildFeatureCard(
+                      ui: ui, cs: cs, isDark: isDark,
+                      icon: Icons.store_rounded, color: const Color(0xFF10B981),
+                      title: 'Store Pickups',
+                      subtitle: 'Perfect for groceries, pharmacy, or food.',
+                    ),
+                    SizedBox(height: ui.gap(16)),
+                    _buildFeatureCard(
+                      ui: ui, cs: cs, isDark: isDark,
+                      icon: Icons.motorcycle_rounded, color: const Color(0xFF8B5CF6),
+                      title: 'Dedicated Rider',
+                      subtitle: 'A driver solely focused on your tasks.',
+                    ),
 
-                    SizedBox(height: uiScale.gap(48)),
+                    SizedBox(height: ui.gap(48)),
 
-                    // CTA Button
+                    // Action Button
                     SizedBox(
-                      width: double.infinity, height: uiScale.inset(64),
+                      width: double.infinity,
+                      height: ui.inset(60).clamp(54.0, 64.0).toDouble(),
                       child: ElevatedButton(
                         onPressed: () {
                           HapticFeedback.heavyImpact();
                           Navigator.push(context, MaterialPageRoute(builder: (_) => LogisticsMapPicker(api: _api, userId: _prefs.getString('user_id') ?? '', rideType: 'send_me')));
                         },
                         style: ElevatedButton.styleFrom(
-                          backgroundColor: themeColor, foregroundColor: Colors.white,
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(uiScale.radius(20))),
-                          elevation: 12, shadowColor: themeColor.withOpacity(0.5),
+                          backgroundColor: sendMeColor,
+                          foregroundColor: Colors.white,
+                          elevation: 8,
+                          shadowColor: sendMeColor.withOpacity(0.4),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(ui.radius(20))),
                         ),
                         child: Row(
                           mainAxisAlignment: MainAxisAlignment.center,
                           children: [
-                            Text('Start an Errand', style: TextStyle(fontSize: uiScale.font(16), fontWeight: FontWeight.w900, letterSpacing: 0.5)),
-                            SizedBox(width: uiScale.gap(10)),
-                            Icon(Icons.arrow_forward_rounded, size: uiScale.icon(20)),
+                            Text(
+                              'Start an Errand',
+                              style: TextStyle(fontSize: ui.font(16).clamp(15.0, 17.0).toDouble(), fontWeight: FontWeight.w900, letterSpacing: 0.5),
+                            ),
+                            SizedBox(width: ui.gap(10)),
+                            Icon(Icons.arrow_forward_rounded, size: ui.icon(22)),
                           ],
                         ),
                       ),
@@ -201,31 +233,39 @@ class _SendMeLandingPageState extends State<SendMeLandingPage> with SingleTicker
             ),
           ),
 
-          // 3. Header Background Gradient
+          // 3. Header Background Blur
           Positioned(
             top: 0, left: 0, right: 0,
             child: IgnorePointer(
-              child: Container(
-                height: safeTop + (kHeaderVisualH * s),
-                decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    begin: Alignment.topCenter, end: Alignment.bottomCenter,
-                    colors: isDark ? [theme.scaffoldBackgroundColor.withOpacity(0.95), theme.scaffoldBackgroundColor.withOpacity(0.0)] : [theme.scaffoldBackgroundColor.withOpacity(0.95), theme.scaffoldBackgroundColor.withOpacity(0.0)],
+              child: ClipRRect(
+                child: BackdropFilter(
+                  filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
+                  child: Container(
+                    height: safeTop + kHeaderVisualH,
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        begin: Alignment.topCenter, end: Alignment.bottomCenter,
+                        colors: [
+                          (isDark ? Colors.black : Colors.white).withOpacity(0.8),
+                          (isDark ? Colors.black : Colors.white).withOpacity(0.0)
+                        ],
+                      ),
+                    ),
                   ),
                 ),
               ),
             ),
           ),
 
-          // 4. Custom Header Bar
+          // 4. Header Bar
           Positioned(
             top: safeTop, left: 0, right: 0,
             child: HeaderBar(
-                user: _user,
-                busyProfile: _busyProfile,
-                onMenu: () => _scaffoldKey.currentState?.openDrawer(),
-                onWallet: _openWallet,
-                onNotifications: () => Navigator.pushNamed(context, AppRoutes.notifications)
+              user: _user,
+              busyProfile: _busyProfile,
+              onMenu: () => _scaffoldKey.currentState?.openDrawer(),
+              onWallet: _openWallet,
+              onNotifications: () => Navigator.pushNamed(context, AppRoutes.notifications),
             ),
           ),
         ],
@@ -249,44 +289,53 @@ class _SendMeLandingPageState extends State<SendMeLandingPage> with SingleTicker
       ),
     );
   }
-}
 
-class _FeatureCard extends StatelessWidget {
-  final UIScale uiScale; final IconData icon; final String title; final String subtitle; final Color color;
-  const _FeatureCard({required this.uiScale, required this.icon, required this.title, required this.subtitle, required this.color});
-
-  @override
-  Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-
-    return Container(
-      padding: EdgeInsets.all(uiScale.inset(16)),
-      decoration: BoxDecoration(
-        color: isDark ? cs.surfaceVariant.withOpacity(0.4) : Colors.white,
-        borderRadius: BorderRadius.circular(uiScale.radius(20)),
-        border: Border.all(color: isDark ? cs.outline.withOpacity(0.3) : Colors.black.withOpacity(0.04)),
-        boxShadow: isDark ? [] : [BoxShadow(color: Colors.black.withOpacity(0.03), blurRadius: 10, offset: const Offset(0, 4))],
-      ),
-      child: Row(
-        children: [
-          Container(
-            padding: EdgeInsets.all(uiScale.inset(12)),
-            decoration: BoxDecoration(color: color.withOpacity(0.15), borderRadius: BorderRadius.circular(uiScale.radius(14))),
-            child: Icon(icon, color: color, size: uiScale.icon(22)),
+  Widget _buildFeatureCard({
+    required UIScale ui, required ColorScheme cs, required bool isDark,
+    required IconData icon, required Color color, required String title, required String subtitle,
+  }) {
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(ui.radius(20)),
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 16, sigmaY: 16),
+        child: Container(
+          padding: EdgeInsets.all(ui.inset(16)),
+          decoration: BoxDecoration(
+            color: isDark ? cs.surface.withOpacity(0.85) : Colors.white.withOpacity(0.85),
+            borderRadius: BorderRadius.circular(ui.radius(20)),
+            border: Border.all(color: isDark ? cs.outline.withOpacity(0.4) : AppColors.mintBgLight.withOpacity(0.3)),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(isDark ? 0.3 : 0.04),
+                blurRadius: 20,
+                offset: const Offset(0, 8),
+              ),
+            ],
           ),
-          SizedBox(width: uiScale.gap(16)),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(title, style: TextStyle(fontSize: uiScale.font(15), fontWeight: FontWeight.w900, color: isDark ? cs.onSurface : AppColors.textPrimary)),
-                SizedBox(height: uiScale.gap(4)),
-                Text(subtitle, style: TextStyle(fontSize: uiScale.font(12.5), fontWeight: FontWeight.w600, color: cs.onSurfaceVariant)),
-              ],
-            ),
+          child: Row(
+            children: [
+              Container(
+                padding: EdgeInsets.all(ui.inset(12)),
+                decoration: BoxDecoration(
+                  color: color.withOpacity(0.15),
+                  shape: BoxShape.circle,
+                ),
+                child: Icon(icon, color: color, size: ui.icon(24).clamp(20.0, 26.0).toDouble()),
+              ),
+              SizedBox(width: ui.gap(16)),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(title, style: TextStyle(fontSize: ui.font(14.5).clamp(13.5, 16.0).toDouble(), fontWeight: FontWeight.w800, color: isDark ? cs.onSurface : AppColors.textPrimary)),
+                    SizedBox(height: ui.gap(4)),
+                    Text(subtitle, style: TextStyle(fontSize: ui.font(12).clamp(11.0, 13.0).toDouble(), fontWeight: FontWeight.w600, color: isDark ? cs.onSurfaceVariant : AppColors.textSecondary, height: 1.3)),
+                  ],
+                ),
+              ),
+            ],
           ),
-        ],
+        ),
       ),
     );
   }

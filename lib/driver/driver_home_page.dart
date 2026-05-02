@@ -29,8 +29,8 @@ import '../screens/state/map_graphics_engine.dart';
 import '../screens/state/location_permission_modal.dart';
 import 'state/driver_models.dart';
 import 'state/driver_command_center.dart';
+import 'widgets/delivery_otp_sheet.dart'; // Implemented properly
 
-// --- ① PURE DART KALMAN FILTER ---
 class _Kalman1D {
   final double q;
   final double r;
@@ -83,7 +83,6 @@ class _DriverHomePageState extends State<DriverHomePage> with WidgetsBindingObse
   bool _panelExpanded = false;
   int _currentIndex = 0;
 
-  // --- AAA-GRADE ISOLATED MAP STATE ---
   GoogleMapController? _mapController;
   final ValueNotifier<Set<Marker>> _markersNotifier = ValueNotifier({});
   final ValueNotifier<Set<Polyline>> _polylinesNotifier = ValueNotifier({});
@@ -116,7 +115,6 @@ class _DriverHomePageState extends State<DriverHomePage> with WidgetsBindingObse
   BitmapDescriptor? _pickupIcon;
   BitmapDescriptor? _dropIcon;
 
-  // --- MATH & SMOOTHING FILTERS ---
   _Kalman1D? _latKalman;
   _Kalman1D? _lngKalman;
   double _emaHeading = 0.0;
@@ -125,7 +123,6 @@ class _DriverHomePageState extends State<DriverHomePage> with WidgetsBindingObse
   List<LatLng> _overviewRoutePoints = [];
   String? _lastRouteId;
 
-  // Raw Sets
   final Set<Marker> _markers = <Marker>{};
   final Set<Polyline> _polylines = <Polyline>{};
 
@@ -137,7 +134,6 @@ class _DriverHomePageState extends State<DriverHomePage> with WidgetsBindingObse
     _bootstrap();
   }
 
-  // --- ISOLATED PUSH METHOD ---
   void _pushMapState() {
     _buildMarkersAndLines();
     _markersNotifier.value = Set.from(_markers);
@@ -261,7 +257,7 @@ class _DriverHomePageState extends State<DriverHomePage> with WidgetsBindingObse
 
       if (_compassThrottleTimer?.isActive ?? false) return;
       _compassThrottleTimer = Timer(const Duration(milliseconds: 60), () {
-        if (mounted) _pushMapState(); // Push to GPU layer ONLY. No setState().
+        if (mounted) _pushMapState();
       });
     });
   }
@@ -414,7 +410,7 @@ class _DriverHomePageState extends State<DriverHomePage> with WidgetsBindingObse
   }
 
   Future<void> _safeDashboardRefresh() async {
-    if (_fetchingDashboard) return; // Prevent API pile-ups
+    if (_fetchingDashboard) return;
     _fetchingDashboard = true;
     try {
       await _fetchDashboard();
@@ -531,7 +527,6 @@ class _DriverHomePageState extends State<DriverHomePage> with WidgetsBindingObse
         },
       ).timeout(const Duration(seconds: 5));
 
-      // Update heartbeat visually without blocking map UI
       if (mounted) setState(() => _lastHeartbeatAt = DateTime.now());
     } catch (_) {}
   }
@@ -709,35 +704,28 @@ class _DriverHomePageState extends State<DriverHomePage> with WidgetsBindingObse
             onArrivedPickup: () async => _performRideAction('arrived_pickup'),
             onStartTrip: () async => _performRideAction('start_trip'),
             onArrivedDestination: () async => _performRideAction('arrived_destination'),
-
-            // --- UPDATED LOGISTICS HANDOFF INTERCEPTOR ---
             onCompleteTrip: () async {
-              // Check if the current ride involves a package delivery
-              // Ensure your driver_models.dart extracts rideType & recipientPhone from the JSON payload.
-              final String type = (ride.rideType ?? 'street_ride').trim().toLowerCase();
+              final String type = (ride.rideType).trim().toLowerCase();
 
               if (type == 'send_me' || type == 'dispatch') {
-                // Intercept the completion process to demand the cryptographic OTP
-                // Inside onCompleteTrip:
+                // Send Me connects directly with Rider. Dispatch uses recipient.
+                final phoneToCall = type == 'dispatch' ? (ride.recipientPhone ?? ride.riderPhone ?? 'Customer') : (ride.riderPhone ?? 'Customer');
+
                 final bool isVerified = await DeliveryOtpSheet.show(
                   context,
                   _api,
-                  _prefs.getString('user_id')?.trim() ?? '', // <-- Add this line here
+                  _prefs.getString('user_id')?.trim() ?? '',
                   ride.id.toString(),
-                  ride.recipientPhone ?? 'Customer',
+                  phoneToCall,
                 );
 
-                // Only mark as complete on the backend if the OTP was verified successfully
                 if (isVerified) {
                   await _performRideAction('complete_trip');
                 }
               } else {
-                // Standard street/campus transit flow
                 await _performRideAction('complete_trip');
               }
             },
-            // ---------------------------------------------
-
             onCancelTrip: () async => _performRideAction('cancel'),
             role: TripNavigationRole.driver,
             tickEvery: const Duration(seconds: 1),
@@ -867,7 +855,6 @@ class _DriverHomePageState extends State<DriverHomePage> with WidgetsBindingObse
       extendBodyBehindAppBar: true,
       body: Stack(
         children: [
-          // --- REPLACED WITH ISOLATED MAP LAYER ---
           Positioned.fill(
             child: _booting
                 ? Container(color: theme.scaffoldBackgroundColor)
@@ -974,7 +961,6 @@ class _DriverHomePageState extends State<DriverHomePage> with WidgetsBindingObse
   }
 }
 
-// --- ④ ISOLATED MAP LAYER WIDGET ---
 class _IsolatedDriverMapLayer extends StatelessWidget {
   final ValueNotifier<Set<Marker>> markersNotifier;
   final ValueNotifier<Set<Polyline>> polylinesNotifier;
@@ -1020,7 +1006,6 @@ class _IsolatedDriverMapLayer extends StatelessWidget {
                     mapToolbarEnabled: false,
                     rotateGesturesEnabled: true,
                     tiltGesturesEnabled: true,
-                    // --- MASSIVE MEMORY FIXES ---
                     buildingsEnabled: false,
                     indoorViewEnabled: false,
                     trafficEnabled: false,
@@ -1037,132 +1022,6 @@ class _IsolatedDriverMapLayer extends StatelessWidget {
             },
           );
         },
-      ),
-    );
-  }
-}
-
-// ============================================================================
-// NATIVE DELIVERY OTP SHEET WIDGET (FIXED)
-// ============================================================================
-class DeliveryOtpSheet extends StatefulWidget {
-  final ApiClient api;
-  final String userId; // <-- Added this
-  final String rideId;
-  final String recipientPhone;
-
-  const DeliveryOtpSheet({super.key, required this.api, required this.userId, required this.rideId, required this.recipientPhone});
-
-  static Future<bool> show(BuildContext context, ApiClient api, String userId, String rideId, String phone) async {
-    final result = await showModalBottomSheet<bool>(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      barrierColor: Colors.black.withOpacity(0.85),
-      builder: (_) => DeliveryOtpSheet(api: api, userId: userId, rideId: rideId, recipientPhone: phone),
-    );
-    return result ?? false;
-  }
-
-  @override
-  State<DeliveryOtpSheet> createState() => _DeliveryOtpSheetState();
-}
-
-class _DeliveryOtpSheetState extends State<DeliveryOtpSheet> {
-  final TextEditingController _otpCtrl = TextEditingController();
-  bool _isVerifying = false;
-
-  Future<void> _verify() async {
-    final otp = _otpCtrl.text.trim();
-    if (otp.length < 4) {
-      showToastNotification(context: context, title: 'Invalid PIN', message: 'Enter the full OTP code.', isSuccess: false);
-      return;
-    }
-
-    setState(() => _isVerifying = true);
-    try {
-      final res = await widget.api.request(
-        'driver_hub.php',
-        method: 'POST',
-        data: {
-          'action': 'verify_otp',
-          'user': widget.userId, // <-- Uses the passed ID now
-          'ride_id': widget.rideId,
-          'otp': otp,
-        },
-      );
-      final body = jsonDecode(res.body);
-      if (res.statusCode == 200 && body['error'] == false) {
-        HapticFeedback.heavyImpact();
-        if (mounted) Navigator.pop(context, true);
-      } else {
-        throw Exception(body['message'] ?? 'Verification failed');
-      }
-    } catch (e) {
-      HapticFeedback.vibrate();
-      showToastNotification(context: context, title: 'Handoff Denied', message: e.toString().replaceFirst('Exception: ', ''), isSuccess: false);
-    } finally {
-      if (mounted) setState(() => _isVerifying = false);
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final uiScale = UIScale.of(context);
-    final cs = Theme.of(context).colorScheme;
-
-    return Padding(
-      padding: EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
-      child: Container(
-        padding: EdgeInsets.all(uiScale.inset(20)),
-        decoration: BoxDecoration(
-          color: cs.surface,
-          borderRadius: BorderRadius.vertical(top: Radius.circular(uiScale.radius(24))),
-          boxShadow: const [BoxShadow(color: Colors.black54, blurRadius: 20, offset: Offset(0, -5))],
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Container(width: 40, height: 4, decoration: BoxDecoration(color: cs.onSurface.withOpacity(0.2), borderRadius: BorderRadius.circular(2))),
-            SizedBox(height: uiScale.gap(20)),
-            Icon(Icons.security_rounded, size: uiScale.icon(40), color: AppColors.primary),
-            SizedBox(height: uiScale.gap(12)),
-            Text('Secure Package Handoff', style: TextStyle(fontSize: uiScale.font(18), fontWeight: FontWeight.w900)),
-            SizedBox(height: uiScale.gap(4)),
-            Text('Ask the recipient (${widget.recipientPhone}) for their 4-digit PIN to release the package.', textAlign: TextAlign.center, style: TextStyle(fontSize: uiScale.font(13), color: cs.onSurfaceVariant)),
-            SizedBox(height: uiScale.gap(24)),
-            TextField(
-              controller: _otpCtrl,
-              keyboardType: TextInputType.number,
-              maxLength: 4,
-              textAlign: TextAlign.center,
-              style: TextStyle(fontSize: uiScale.font(28), fontWeight: FontWeight.bold, letterSpacing: 12),
-              decoration: InputDecoration(
-                counterText: '',
-                filled: true,
-                fillColor: cs.onSurface.withOpacity(0.05),
-                border: OutlineInputBorder(borderRadius: BorderRadius.circular(uiScale.radius(12)), borderSide: BorderSide.none),
-              ),
-            ),
-            SizedBox(height: uiScale.gap(24)),
-            SizedBox(
-              width: double.infinity,
-              height: uiScale.gap(50),
-              child: ElevatedButton(
-                onPressed: _isVerifying ? null : _verify,
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: AppColors.primary,
-                  foregroundColor: Colors.white,
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(uiScale.radius(16))),
-                ),
-                child: _isVerifying
-                    ? const CircularProgressIndicator(color: Colors.white)
-                    : Text('Verify & Complete', style: TextStyle(fontSize: uiScale.font(15), fontWeight: FontWeight.bold)),
-              ),
-            ),
-            SizedBox(height: uiScale.gap(16)),
-          ],
-        ),
       ),
     );
   }

@@ -260,14 +260,41 @@ class _QuickActionStrip extends StatelessWidget {
   }
 }
 
+// --- MISSING CLASS RESTORED ---
 class _ActionPill extends StatelessWidget {
-  final UIScale uiScale; final IconData icon; final String label; final VoidCallback onTap; final bool isDark; final ColorScheme cs;
+  final UIScale uiScale;
+  final IconData icon;
+  final String label;
+  final VoidCallback onTap;
+  final bool isDark;
+  final ColorScheme cs;
+
   const _ActionPill({required this.uiScale, required this.icon, required this.label, required this.onTap, required this.isDark, required this.cs});
+
   @override
   Widget build(BuildContext context) {
-    return Material(color: Colors.transparent, child: InkWell(onTap: onTap, borderRadius: BorderRadius.circular(999), child: Ink(padding: EdgeInsets.symmetric(horizontal: uiScale.inset(12), vertical: uiScale.inset(8)), decoration: BoxDecoration(color: isDark ? cs.surfaceVariant.withOpacity(0.4) : AppColors.mintBgLight.withOpacity(0.4), borderRadius: BorderRadius.circular(999), border: Border.all(color: isDark ? cs.outline.withOpacity(0.5) : Colors.black.withOpacity(0.05))), child: Row(mainAxisSize: MainAxisSize.min, children: [Icon(icon, size: uiScale.icon(14), color: isDark ? cs.primary : AppColors.primary), SizedBox(width: uiScale.gap(6)), Text(label, style: TextStyle(fontSize: uiScale.font(11.0), fontWeight: FontWeight.w800, color: isDark ? cs.onSurface : AppColors.textPrimary))]))));
+    return Material(
+        color: Colors.transparent,
+        child: InkWell(
+            onTap: onTap,
+            borderRadius: BorderRadius.circular(999),
+            child: Ink(
+                padding: EdgeInsets.symmetric(horizontal: uiScale.inset(12), vertical: uiScale.inset(8)),
+                decoration: BoxDecoration(color: isDark ? cs.surfaceVariant.withOpacity(0.4) : AppColors.mintBgLight.withOpacity(0.4), borderRadius: BorderRadius.circular(999), border: Border.all(color: isDark ? cs.outline.withOpacity(0.5) : Colors.black.withOpacity(0.05))),
+                child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(icon, size: uiScale.icon(14), color: isDark ? cs.primary : AppColors.primary),
+                      SizedBox(width: uiScale.gap(6)),
+                      Text(label, style: TextStyle(fontSize: uiScale.font(11.0), fontWeight: FontWeight.w800, color: isDark ? cs.onSurface : AppColors.textPrimary))
+                    ]
+                )
+            )
+        )
+    );
   }
 }
+// ------------------------------
 
 class _TripStateCard extends StatelessWidget {
   final UIScale uiScale; final RideJob ride; final bool busy; final ValueChanged<String> onRideAction; final VoidCallback onNavigate; final bool isDark; final ColorScheme cs;
@@ -286,10 +313,31 @@ class _TripStateCard extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(children: [Expanded(child: Text(isSendMe ? 'Active Errand · ${ride.riderName}' : (isDispatch ? 'Active Delivery · ${ride.riderName}' : 'Active Trip · ${ride.riderName}'), maxLines: 1, style: TextStyle(fontSize: uiScale.font(13.5), fontWeight: FontWeight.w900, color: isDark ? cs.onSurface : AppColors.textPrimary))), _StatusDotChip(uiScale: uiScale, color: AppColors.primary, label: 'Live', isDark: isDark, cs: cs)]),
+
           if (isLogistics) ...[
             SizedBox(height: uiScale.gap(8)),
             Container(padding: EdgeInsets.all(uiScale.inset(8)), decoration: BoxDecoration(color: Colors.orange.withOpacity(0.15), borderRadius: BorderRadius.circular(6)), child: Row(children: [Icon(Icons.security_rounded, color: Colors.orange, size: uiScale.icon(14)), SizedBox(width: uiScale.gap(6)), Expanded(child: Text('Secure OTP required at destination to complete dropoff.', style: TextStyle(color: isDark ? Colors.orange.shade300 : Colors.orange.shade900, fontSize: uiScale.font(10), fontWeight: FontWeight.bold)))])),
           ],
+
+          if (isDispatch && ride.packageImage != null && ride.packageImage!.isNotEmpty) ...[
+            SizedBox(height: uiScale.gap(12)),
+            ClipRRect(
+              borderRadius: BorderRadius.circular(uiScale.radius(12)),
+              child: SizedBox(
+                width: double.infinity, height: 140,
+                child: Image.network(ride.packageImage!, fit: BoxFit.cover, errorBuilder: (_,__,___) => Container(color: cs.surfaceVariant, child: Icon(Icons.broken_image, color: cs.onSurfaceVariant))),
+              ),
+            ),
+          ],
+
+          if (isDispatch) ...[
+            SizedBox(height: uiScale.gap(6)),
+            Text('${ride.packageSize?.toUpperCase() ?? 'PACKAGE'} • ${ride.packageWeight}kg', style: TextStyle(color: isDark ? cs.onSurfaceVariant : AppColors.textSecondary, fontSize: uiScale.font(10.5), fontWeight: FontWeight.w800)),
+          ] else if (isSendMe) ...[
+            SizedBox(height: uiScale.gap(6)),
+            Text('Instructions: ${ride.instructions ?? 'No specific instructions provided.'}', maxLines: 2, overflow: TextOverflow.ellipsis, style: TextStyle(color: isDark ? cs.onSurfaceVariant : AppColors.textSecondary, fontSize: uiScale.font(11.5), fontStyle: FontStyle.italic)),
+          ],
+
           SizedBox(height: uiScale.gap(12)),
           Row(children: [Icon(Icons.place_rounded, size: uiScale.icon(14), color: AppColors.primary), SizedBox(width: uiScale.gap(6)), Expanded(child: Text(ride.pickupText, maxLines: 1, style: TextStyle(fontSize: uiScale.font(11.5), fontWeight: FontWeight.w700, color: isDark ? cs.onSurface : AppColors.textPrimary)))]),
           SizedBox(height: uiScale.gap(6)),
@@ -347,7 +395,6 @@ class _QueueCard extends StatelessWidget {
                         ],
                       ),
 
-                      // --- PACKAGE PHOTO VISUALIZATION FOR DRIVERS ---
                       if (isDispatch && ride.packageImage != null && ride.packageImage!.isNotEmpty) ...[
                         SizedBox(height: uiScale.gap(12)),
                         ClipRRect(

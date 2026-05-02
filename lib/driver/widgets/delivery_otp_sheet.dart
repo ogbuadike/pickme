@@ -9,21 +9,21 @@ import '../../ui/ui_scale.dart';
 import '../../utility/notification.dart';
 import '../../api/url.dart';
 
-
 class DeliveryOtpSheet extends StatefulWidget {
   final ApiClient api;
+  final String userId;
   final String rideId;
   final String recipientPhone;
 
-  const DeliveryOtpSheet({super.key, required this.api, required this.rideId, required this.recipientPhone});
+  const DeliveryOtpSheet({super.key, required this.api, required this.userId, required this.rideId, required this.recipientPhone});
 
-  static Future<bool> show(BuildContext context, ApiClient api, String rideId, String phone) async {
+  static Future<bool> show(BuildContext context, ApiClient api, String userId, String rideId, String phone) async {
     final result = await showModalBottomSheet<bool>(
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
       barrierColor: Colors.black.withOpacity(0.85),
-      builder: (_) => DeliveryOtpSheet(api: api, rideId: rideId, recipientPhone: phone),
+      builder: (_) => DeliveryOtpSheet(api: api, userId: userId, rideId: rideId, recipientPhone: phone),
     );
     return result ?? false;
   }
@@ -46,11 +46,11 @@ class _DeliveryOtpSheetState extends State<DeliveryOtpSheet> {
     setState(() => _isVerifying = true);
     try {
       final res = await widget.api.request(
-        ApiConstants._driverHubEndpoint,
+        'driver_hub.php',
         method: 'POST',
         data: {
           'action': 'verify_otp',
-          'user': widget.api.prefs?.getString('user_id') ?? '',
+          'user': widget.userId,
           'ride_id': widget.rideId,
           'otp': otp,
         },
@@ -58,7 +58,7 @@ class _DeliveryOtpSheetState extends State<DeliveryOtpSheet> {
       final body = jsonDecode(res.body);
       if (res.statusCode == 200 && body['error'] == false) {
         HapticFeedback.heavyImpact();
-        if (mounted) Navigator.pop(context, true); // Success
+        if (mounted) Navigator.pop(context, true);
       } else {
         throw Exception(body['message'] ?? 'Verification failed');
       }

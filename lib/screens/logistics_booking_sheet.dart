@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:intl/intl.dart' hide TextDirection;
 
 import '../api/api_client.dart';
 import '../themes/app_theme.dart';
@@ -89,6 +90,7 @@ class _LogisticsBookingSheetState extends State<LogisticsBookingSheet> {
 
   Future<void> _pickImage() async {
     try {
+      // Added compression directly from the camera to prevent PHP memory exhaustion
       final picked = await _picker.pickImage(
         source: ImageSource.camera,
         imageQuality: 75,
@@ -205,90 +207,100 @@ class _LogisticsBookingSheetState extends State<LogisticsBookingSheet> {
           child: Container(
             color: isDark ? cs.surface.withOpacity(0.95) : Colors.white.withOpacity(0.98),
             padding: EdgeInsets.fromLTRB(uiScale.inset(20), uiScale.inset(12), uiScale.inset(20), uiScale.inset(24)),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Center(child: Container(width: 48, height: 5, decoration: BoxDecoration(color: cs.onSurface.withOpacity(0.2), borderRadius: BorderRadius.circular(10)))),
-                SizedBox(height: uiScale.gap(24)),
-
-                Row(
-                  children: [
-                    Container(padding: EdgeInsets.all(uiScale.inset(10)), decoration: BoxDecoration(color: themeColor.withOpacity(0.15), shape: BoxShape.circle), child: Icon(isDispatch ? Icons.local_shipping_rounded : Icons.shopping_cart_checkout_rounded, color: themeColor, size: uiScale.icon(24))),
-                    SizedBox(width: uiScale.gap(12)),
-                    Expanded(child: Text(isDispatch ? 'Fleet Dispatch Setup' : 'Errand Instructions', style: TextStyle(fontSize: uiScale.font(20), fontWeight: FontWeight.w900, color: isDark ? cs.onSurface : AppColors.textPrimary, letterSpacing: -0.5))),
-                  ],
-                ),
-                SizedBox(height: uiScale.gap(24)),
-
-                if (isDispatch) ...[
-                  // --- DISPATCH: IMAGE, PHONE, SIZE, WEIGHT ---
-                  GestureDetector(
-                    onTap: _pickImage,
-                    child: Container(
-                      width: double.infinity, height: uiScale.inset(100),
-                      decoration: BoxDecoration(color: isDark ? cs.surfaceVariant.withOpacity(0.5) : AppColors.mintBgLight.withOpacity(0.5), borderRadius: BorderRadius.circular(uiScale.radius(16)), border: Border.all(color: _packageImage == null ? cs.error.withOpacity(0.5) : themeColor, width: 2), image: _packageImage != null ? DecorationImage(image: FileImage(_packageImage!), fit: BoxFit.cover) : null),
-                      child: _packageImage == null ? Column(mainAxisAlignment: MainAxisAlignment.center, children: [Icon(Icons.camera_alt_rounded, color: themeColor), SizedBox(height: uiScale.gap(4)), Text('Tap to snap package photo', style: TextStyle(fontWeight: FontWeight.bold, color: cs.onSurfaceVariant))]) : null,
-                    ),
-                  ),
-                  SizedBox(height: uiScale.gap(16)),
-
-                  TextField(
-                    controller: _phoneCtrl, keyboardType: TextInputType.phone, style: TextStyle(fontSize: uiScale.font(16), fontWeight: FontWeight.w700),
-                    decoration: InputDecoration(hintText: 'Recipient Phone', prefixIcon: Icon(Icons.contact_phone_rounded, color: themeColor), filled: true, fillColor: cs.onSurface.withOpacity(0.05), border: OutlineInputBorder(borderRadius: BorderRadius.circular(uiScale.radius(16)), borderSide: BorderSide.none)),
-                  ),
-                  SizedBox(height: uiScale.gap(16)),
+            // Wrap in SingleChildScrollView to prevent RenderFlex overflow when keyboard is active
+            child: SingleChildScrollView(
+              physics: const BouncingScrollPhysics(),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Center(child: Container(width: 48, height: 5, decoration: BoxDecoration(color: cs.onSurface.withOpacity(0.2), borderRadius: BorderRadius.circular(10)))),
+                  SizedBox(height: uiScale.gap(24)),
 
                   Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      _buildSizeChip(uiScale, cs, isDark, themeColor, 'Envelope', 'envelope', Icons.mail_outline_rounded),
-                      _buildSizeChip(uiScale, cs, isDark, themeColor, 'Medium Box', 'box', Icons.inventory_2_outlined),
-                      _buildSizeChip(uiScale, cs, isDark, themeColor, 'Heavy Freight', 'heavy', Icons.widgets_outlined),
+                      Container(padding: EdgeInsets.all(uiScale.inset(10)), decoration: BoxDecoration(color: themeColor.withOpacity(0.15), shape: BoxShape.circle), child: Icon(isDispatch ? Icons.local_shipping_rounded : Icons.shopping_cart_checkout_rounded, color: themeColor, size: uiScale.icon(24))),
+                      SizedBox(width: uiScale.gap(12)),
+                      Expanded(child: Text(isDispatch ? 'Fleet Dispatch Setup' : 'Errand Instructions', style: TextStyle(fontSize: uiScale.font(20), fontWeight: FontWeight.w900, color: isDark ? cs.onSurface : AppColors.textPrimary, letterSpacing: -0.5))),
                     ],
                   ),
-                  SizedBox(height: uiScale.gap(16)),
+                  SizedBox(height: uiScale.gap(24)),
 
-                  Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [Text('Weight Limit', style: TextStyle(fontWeight: FontWeight.bold, color: cs.onSurfaceVariant)), Text('${_weightKg.toStringAsFixed(1)} kg', style: TextStyle(fontWeight: FontWeight.w900, color: themeColor))]),
-                  SliderTheme(
-                    data: SliderThemeData(trackHeight: 6, thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 12), overlayShape: const RoundSliderOverlayShape(overlayRadius: 24)),
-                    child: Slider(value: _weightKg, min: 0.5, max: 1000.0, divisions: 100, activeColor: themeColor, inactiveColor: cs.onSurface.withOpacity(0.1), onChanged: (val) => setState(() => _weightKg = val), onChangeEnd: (_) => _fetchEstimate()),
-                  ),
-                ] else ...[
-                  // --- SEND ME: ERRAND INSTRUCTIONS ---
-                  Text('What do you need the rider to do?', style: TextStyle(fontSize: uiScale.font(13), fontWeight: FontWeight.bold, color: cs.onSurfaceVariant)),
-                  SizedBox(height: uiScale.gap(8)),
-                  TextField(
-                    controller: _instructionsCtrl, maxLines: 4, minLines: 3, style: TextStyle(fontSize: uiScale.font(14), fontWeight: FontWeight.w600),
-                    decoration: InputDecoration(hintText: 'e.g., Buy 2 loaves of bread at St Mary\'s plaza.', filled: true, fillColor: cs.onSurface.withOpacity(0.05), border: OutlineInputBorder(borderRadius: BorderRadius.circular(uiScale.radius(16)), borderSide: BorderSide.none)),
-                  ),
-                ],
-
-                SizedBox(height: uiScale.gap(24)),
-                Row(
-                  children: [
-                    Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text('Estimated Price', style: TextStyle(fontSize: uiScale.font(12), color: cs.onSurfaceVariant, fontWeight: FontWeight.w600)),
-                        SizedBox(height: uiScale.gap(4)),
-                        _isEstimating ? const SizedBox(height: 24, width: 24, child: CircularProgressIndicator(strokeWidth: 2)) : Text('NGN ${_estimatedPrice.toStringAsFixed(0)}', style: TextStyle(fontSize: uiScale.font(24), fontWeight: FontWeight.w900, color: isDark ? cs.onSurface : AppColors.textPrimary, letterSpacing: -0.5)),
-                      ],
-                    ),
-                    SizedBox(width: uiScale.gap(20)),
-                    Expanded(
-                      child: SizedBox(
-                        height: uiScale.inset(56),
-                        child: ElevatedButton(
-                          onPressed: _isBooking ? null : _bookService,
-                          style: ElevatedButton.styleFrom(backgroundColor: themeColor, foregroundColor: isDispatch ? Colors.black : Colors.white, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(uiScale.radius(16))), elevation: 8, shadowColor: themeColor.withOpacity(0.4)),
-                          child: _isBooking ? CircularProgressIndicator(color: isDispatch ? Colors.black : Colors.white) : Text('Confirm Booking', style: TextStyle(fontSize: uiScale.font(15), fontWeight: FontWeight.w800, letterSpacing: 0.5)),
-                        ),
+                  if (isDispatch) ...[
+                    // --- DISPATCH: IMAGE, PHONE, SIZE, WEIGHT ---
+                    GestureDetector(
+                      onTap: _pickImage,
+                      child: Container(
+                        width: double.infinity, height: uiScale.inset(100),
+                        decoration: BoxDecoration(color: isDark ? cs.surfaceVariant.withOpacity(0.5) : AppColors.mintBgLight.withOpacity(0.5), borderRadius: BorderRadius.circular(uiScale.radius(16)), border: Border.all(color: _packageImage == null ? cs.error.withOpacity(0.5) : themeColor, width: 2), image: _packageImage != null ? DecorationImage(image: FileImage(_packageImage!), fit: BoxFit.cover) : null),
+                        child: _packageImage == null ? Column(mainAxisAlignment: MainAxisAlignment.center, children: [Icon(Icons.camera_alt_rounded, color: themeColor), SizedBox(height: uiScale.gap(4)), Text('Tap to snap package photo', style: TextStyle(fontWeight: FontWeight.bold, color: cs.onSurfaceVariant))]) : null,
                       ),
                     ),
+                    SizedBox(height: uiScale.gap(16)),
+
+                    TextField(
+                      controller: _phoneCtrl, keyboardType: TextInputType.phone, style: TextStyle(fontSize: uiScale.font(16), fontWeight: FontWeight.w700),
+                      decoration: InputDecoration(hintText: 'Recipient Phone', prefixIcon: Icon(Icons.contact_phone_rounded, color: themeColor), filled: true, fillColor: cs.onSurface.withOpacity(0.05), border: OutlineInputBorder(borderRadius: BorderRadius.circular(uiScale.radius(16)), borderSide: BorderSide.none)),
+                    ),
+                    SizedBox(height: uiScale.gap(16)),
+
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        _buildSizeChip(uiScale, cs, isDark, themeColor, 'Envelope', 'envelope', Icons.mail_outline_rounded),
+                        _buildSizeChip(uiScale, cs, isDark, themeColor, 'Medium Box', 'box', Icons.inventory_2_outlined),
+                        _buildSizeChip(uiScale, cs, isDark, themeColor, 'Heavy Freight', 'heavy', Icons.widgets_outlined),
+                      ],
+                    ),
+                    SizedBox(height: uiScale.gap(16)),
+
+                    Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [Text('Weight Limit', style: TextStyle(fontWeight: FontWeight.bold, color: cs.onSurfaceVariant)), Text('${_weightKg.toStringAsFixed(1)} kg', style: TextStyle(fontWeight: FontWeight.w900, color: themeColor))]),
+                    SliderTheme(
+                      data: SliderThemeData(trackHeight: 6, thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 12), overlayShape: const RoundSliderOverlayShape(overlayRadius: 24)),
+                      child: Slider(value: _weightKg, min: 0.5, max: 1000.0, divisions: 100, activeColor: themeColor, inactiveColor: cs.onSurface.withOpacity(0.1), onChanged: (val) => setState(() => _weightKg = val), onChangeEnd: (_) => _fetchEstimate()),
+                    ),
+                  ] else ...[
+                    // --- SEND ME: ERRAND INSTRUCTIONS ---
+                    Text('What do you need the rider to do?', style: TextStyle(fontSize: uiScale.font(13), fontWeight: FontWeight.bold, color: cs.onSurfaceVariant)),
+                    SizedBox(height: uiScale.gap(8)),
+                    TextField(
+                      controller: _instructionsCtrl, maxLines: 4, minLines: 3, style: TextStyle(fontSize: uiScale.font(14), fontWeight: FontWeight.w600),
+                      decoration: InputDecoration(hintText: 'e.g., Buy 2 loaves of bread at St Mary\'s plaza.', filled: true, fillColor: cs.onSurface.withOpacity(0.05), border: OutlineInputBorder(borderRadius: BorderRadius.circular(uiScale.radius(16)), borderSide: BorderSide.none)),
+                    ),
                   ],
-                ),
-              ],
+
+                  SizedBox(height: uiScale.gap(24)),
+                  Row(
+                    children: [
+                      Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text('Estimated Price', style: TextStyle(fontSize: uiScale.font(12), color: cs.onSurfaceVariant, fontWeight: FontWeight.w600)),
+                          SizedBox(height: uiScale.gap(4)),
+                          _isEstimating
+                              ? const SizedBox(height: 24, width: 24, child: CircularProgressIndicator(strokeWidth: 2))
+                              : Text(
+                            // NumberFormat adds commas to the amount dynamically
+                              'NGN ${NumberFormat('#,##0').format(_estimatedPrice)}',
+                              style: TextStyle(fontSize: uiScale.font(24), fontWeight: FontWeight.w900, color: isDark ? cs.onSurface : AppColors.textPrimary, letterSpacing: -0.5)
+                          ),
+                        ],
+                      ),
+                      SizedBox(width: uiScale.gap(20)),
+                      Expanded(
+                        child: SizedBox(
+                          height: uiScale.inset(56),
+                          child: ElevatedButton(
+                            onPressed: _isBooking ? null : _bookService,
+                            style: ElevatedButton.styleFrom(backgroundColor: themeColor, foregroundColor: isDispatch ? Colors.black : Colors.white, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(uiScale.radius(16))), elevation: 8, shadowColor: themeColor.withOpacity(0.4)),
+                            child: _isBooking ? CircularProgressIndicator(color: isDispatch ? Colors.black : Colors.white) : Text('Confirm Booking', style: TextStyle(fontSize: uiScale.font(15), fontWeight: FontWeight.w800, letterSpacing: 0.5)),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
             ),
           ),
         ),

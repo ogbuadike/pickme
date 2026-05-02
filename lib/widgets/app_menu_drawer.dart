@@ -228,6 +228,7 @@ class _AppMenuDrawerState extends State<AppMenuDrawer>
                       isDark: isDark,
                       onTap: () => _nav(AppRoutes.transactions),
                     ),
+                    /*
                     _MenuItem(
                       icon: Icons.payments_rounded,
                       label: 'Payments',
@@ -235,6 +236,10 @@ class _AppMenuDrawerState extends State<AppMenuDrawer>
                       isDark: isDark,
                       onTap: () => _nav(AppRoutes.payments),
                     ),
+
+                     */
+
+ /*
 
                     SizedBox(height: 8 * s),
                     _SectionLabel('Explore', s, isDark),
@@ -252,7 +257,7 @@ class _AppMenuDrawerState extends State<AppMenuDrawer>
                       isDark: isDark,
                       onTap: () => _nav(AppRoutes.notifications),
                     ),
-
+ */
                     SizedBox(height: 8 * s),
                     _SectionLabel('Support', s, isDark),
                     _MenuItem(

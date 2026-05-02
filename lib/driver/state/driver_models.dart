@@ -83,6 +83,9 @@ class RideJob {
   final String? packageImage;
   final String? instructions;
 
+  // --- FINANCIAL FIELD ---
+  final double appFeePercentage; // Added this!
+
   const RideJob({
     required this.id, required this.riderId, required this.riderName, required this.riderPhone,
     required this.status, required this.category, required this.vehicleType, required this.seats,
@@ -92,6 +95,7 @@ class RideJob {
     required this.rideType, required this.packageSize, required this.packageWeight,
     required this.deliveryOtp, required this.batchGroupId, required this.recipientPhone,
     required this.packageImage, required this.instructions,
+    required this.appFeePercentage, // Added this!
   });
 
   factory RideJob.fromJson(Map<dynamic, dynamic> json) {
@@ -115,6 +119,9 @@ class RideJob {
       recipientPhone: _stringOrNull(json['recipient_phone']),
       packageImage: _stringOrNull(json['package_image']),
       instructions: _stringOrNull(json['instructions']),
+
+      // Mapped from PHP with a safe fallback to 25.0%
+      appFeePercentage: _toDouble(json['app_fee_percentage'], fallback: 25.0),
     );
   }
 }

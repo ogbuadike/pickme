@@ -6,9 +6,10 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'firebase_options.dart';
 
 import 'themes/app_theme.dart';
-import 'routes/routes.dart';
+import 'routes/routes.dart'; // Your AppRoutes class
+import 'services/push_notification_service.dart'; // Import the service we built
 
-// 1. Create a global key for navigation
+// 1. Create a global key for navigation without BuildContext
 final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 
 @pragma('vm:entry-point')
@@ -19,9 +20,14 @@ Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
   await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
   FirebaseMessaging.onBackgroundMessage(firebaseMessagingBackgroundHandler);
   await FirebaseMessaging.instance.setAutoInitEnabled(true);
+
+  // 2. Initialize our custom Push Notification Service
+  final pushService = PushNotificationService();
+  await pushService.initialize();
 
   runApp(const MyApp());
 }
@@ -29,8 +35,6 @@ Future<void> main() async {
 class MyApp extends StatefulWidget {
   const MyApp({super.key});
 
-  // This global notifier is what the SettingsScreen talks to.
-  // When this changes, the whole app instantly repaints with the new theme!
   static final ValueNotifier<ThemeMode> themeNotifier = ValueNotifier(ThemeMode.system);
 
   @override
@@ -44,7 +48,6 @@ class _MyAppState extends State<MyApp> {
     _loadSavedTheme();
   }
 
-  // Fetch the saved theme from SharedPreferences the second the app opens
   Future<void> _loadSavedTheme() async {
     final prefs = await SharedPreferences.getInstance();
     final savedTheme = prefs.getString('set_theme') ?? 'System';
@@ -63,22 +66,19 @@ class _MyAppState extends State<MyApp> {
 
   @override
   Widget build(BuildContext context) {
-    // ValueListenableBuilder listens to MyApp.themeNotifier.
-    // When the value changes, it rebuilds the MaterialApp instantly.
     return ValueListenableBuilder<ThemeMode>(
       valueListenable: MyApp.themeNotifier,
       builder: (_, ThemeMode currentMode, __) {
         return MaterialApp(
           debugShowCheckedModeBanner: false,
           title: 'Pick Me',
-
-          // Connect to the AppTheme we built earlier
           theme: AppTheme.light(),
           darkTheme: AppTheme.dark(),
-          themeMode: currentMode, // This dynamically switches based on the setting
+          themeMode: currentMode,
 
-          // 2. Attach the key to your MaterialApp
+          // 3. Attach the GlobalKey to the app
           navigatorKey: navigatorKey,
+
           initialRoute: AppRoutes.loading,
           routes: AppRoutes.getRoutes(),
         );

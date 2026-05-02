@@ -12,7 +12,7 @@ import 'package:geolocator/geolocator.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:url_launcher/url_launcher.dart'; // REQUIRED FOR CALL BUTTONS
+import 'package:url_launcher/url_launcher.dart';
 
 import '../api/api_client.dart';
 import '../api/url.dart';
@@ -39,7 +39,7 @@ class _Kalman1D {
   double p;
   double k;
 
-  _Kalman1D({this.q = 0.5, this.r = 3.0, required this.x, this.p = 1.0, this.k = 0.0});
+  _Kalman1D({this.q = 0.00001, this.r = 0.0001, required this.x, this.p = 1.0, this.k = 0.0});
 
   double update(double measurement) {
     p = p + q;
@@ -709,7 +709,6 @@ class _DriverHomePageState extends State<DriverHomePage> with WidgetsBindingObse
               final String type = (ride.rideType).trim().toLowerCase();
 
               if (type == 'send_me' || type == 'dispatch') {
-                // Send Me connects directly with Rider. Dispatch uses recipient.
                 final phoneToCall = type == 'dispatch' ? (ride.recipientPhone ?? ride.riderPhone ?? 'Customer') : (ride.riderPhone ?? 'Customer');
 
                 final bool isVerified = await DeliveryOtpSheet.show(
@@ -922,13 +921,13 @@ class _DriverHomePageState extends State<DriverHomePage> with WidgetsBindingObse
             child: _booting
                 ? Container(height: 150, decoration: BoxDecoration(color: cs.surface.withOpacity(0.95), borderRadius: BorderRadius.circular(uiScale.radius(28))), child: const Center(child: CircularProgressIndicator()))
                 : (_activeRide != null)
-            // 🚀 HIGH-END ACTIVE RIDE UI (REPLACES COMMAND CENTER WHEN RIDE IS ACTIVE)
+            // 🚀 HIGH-END ACTIVE RIDE UI
                 ? _AdvancedActiveRideCard(
               ride: _activeRide!,
               uiScale: uiScale,
               onNavigate: _openTripNavigation,
             )
-            // 🛑 STANDARD COMMAND CENTER FOR IDLE/QUEUE STATE
+            // 🛑 STANDARD COMMAND CENTER
                 : DriverCommandCenter(
               uiScale: uiScale,
               height: panelExpandedHeight,
@@ -960,7 +959,7 @@ class _DriverHomePageState extends State<DriverHomePage> with WidgetsBindingObse
                 HapticFeedback.selectionClick();
                 setState(() => _currentIndex = i);
                 switch (i) {
-                  case 0: Navigator.pushNamed(context, AppRoutes.rideHistory);
+                  case 0: Navigator.pushNamed(context, AppRoutes.rideHistory); break;
                   case 1: Navigator.pushNamed(context, AppRoutes.transactions); break;
                   case 2: break;
                   case 3: Navigator.pushNamed(context, AppRoutes.settings); break;
@@ -1041,9 +1040,8 @@ class _IsolatedDriverMapLayer extends StatelessWidget {
   }
 }
 
-
 // ============================================================================
-// 🚀 ADVANCED ACTIVE RIDE CARD (TREE LAYOUT, IMAGE VIEWER & CALL ACTIONS)
+// 🚀 ADVANCED ACTIVE RIDE CARD (TREE LAYOUT, IMAGE VIEWER, CALLS & FINANCES)
 // ============================================================================
 
 class _AdvancedActiveRideCard extends StatelessWidget {
@@ -1101,16 +1099,29 @@ class _AdvancedActiveRideCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final cs = theme.colorScheme;
-    final os = cs.onSurface; // <-- Add this line right here
+    final os = cs.onSurface;
     final isDark = theme.brightness == Brightness.dark;
 
-    // Determine ride type string
+    // -------------------------------------------------------------
+    // DYNAMIC VARIABLES & FINANCIAL MATH
+    // -------------------------------------------------------------
     String displayType = ride.rideType.replaceAll('_', ' ').toUpperCase();
     bool isDelivery = ride.rideType == 'send_me' || ride.rideType == 'dispatch';
 
-    // Determine the phone numbers
+    // Explicitly grab Sender and Receiver phones
     final String senderPhone = ride.riderPhone ?? '';
     final String receiverPhone = ride.recipientPhone ?? '';
+
+    // 🔥 Dynamic Math Driven Completely by your PHP Backend
+    final double feePercent = ride.appFeePercentage; // Pulled straight from DB via PHP
+    final double driverPercent = 100.0 - feePercent;
+
+    final double totalFare = ride.price;
+    final double appFee = totalFare * (feePercent / 100);
+    final double driverEarnings = totalFare - appFee;
+
+    final String currency = ride.currency;
+    final String payMethod = (ride.payMethod).toUpperCase();
 
     return Container(
       width: double.infinity,
@@ -1134,7 +1145,7 @@ class _AdvancedActiveRideCard extends StatelessWidget {
             children: [
               Text(
                 'Active $displayType',
-                style: TextStyle(color: cs.onSurface, fontSize: uiScale.font(14), fontWeight: FontWeight.w900, letterSpacing: 0.3),
+                style: TextStyle(color: os, fontSize: uiScale.font(14), fontWeight: FontWeight.w900, letterSpacing: 0.3),
               ),
               Container(
                 padding: EdgeInsets.symmetric(horizontal: uiScale.inset(10), vertical: uiScale.inset(4)),
@@ -1189,7 +1200,7 @@ class _AdvancedActiveRideCard extends StatelessWidget {
                     ),
                     Container(
                       padding: const EdgeInsets.all(8),
-                      decoration: BoxDecoration(color: Colors.black54, shape: BoxShape.circle),
+                      decoration: const BoxDecoration(color: Colors.black54, shape: BoxShape.circle),
                       child: const Icon(Icons.fullscreen_rounded, color: Colors.white, size: 24),
                     )
                   ],
@@ -1199,12 +1210,12 @@ class _AdvancedActiveRideCard extends StatelessWidget {
             SizedBox(height: uiScale.gap(8)),
             Text(
               "${(ride.packageSize ?? 'PACKAGE').toUpperCase()} • ${ride.packageWeight.toStringAsFixed(1)}kg",
-              style: TextStyle(color: cs.onSurface.withOpacity(0.6), fontSize: uiScale.font(10), fontWeight: FontWeight.w800, letterSpacing: 0.5),
+              style: TextStyle(color: os.withOpacity(0.6), fontSize: uiScale.font(10), fontWeight: FontWeight.w800, letterSpacing: 0.5),
             ),
             SizedBox(height: uiScale.gap(16)),
           ],
 
-          // TREE LAYOUT FOR LOCATIONS & CALL BUTTONS
+          // TREE LAYOUT FOR LOCATIONS & DUAL CALL BUTTONS
           Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -1212,7 +1223,7 @@ class _AdvancedActiveRideCard extends StatelessWidget {
               Column(
                 children: [
                   Icon(Icons.radio_button_checked, color: AppColors.primary, size: uiScale.icon(16)),
-                  Container(width: 2, height: uiScale.gap(45), color: cs.onSurface.withOpacity(0.15)),
+                  Container(width: 2, height: uiScale.gap(45), color: os.withOpacity(0.15)),
                   Icon(Icons.location_on, color: Colors.green, size: uiScale.icon(16)),
                 ],
               ),
@@ -1224,13 +1235,20 @@ class _AdvancedActiveRideCard extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
 
-                    // FROM (PICKUP)
-                    Text('FROM', style: TextStyle(color: cs.onSurface.withOpacity(0.5), fontSize: uiScale.font(8), fontWeight: FontWeight.w800, letterSpacing: 0.5)),
-                    Text(ride.pickupText, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(color: cs.onSurface, fontSize: uiScale.font(13), fontWeight: FontWeight.w800)),
+                    // FROM (PICKUP / SENDER)
+                    Text('FROM', style: TextStyle(color: os.withOpacity(0.5), fontSize: uiScale.font(8), fontWeight: FontWeight.w800, letterSpacing: 0.5)),
+                    Text(ride.pickupText, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(color: os, fontSize: uiScale.font(13), fontWeight: FontWeight.w800)),
                     Row(
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
-                        Text(ride.riderName.isNotEmpty ? ride.riderName : 'Sender', style: TextStyle(color: cs.onSurface.withOpacity(0.6), fontSize: uiScale.font(11), fontWeight: FontWeight.w600)),
+                        Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(ride.riderName.isNotEmpty ? ride.riderName : 'Sender', style: TextStyle(color: os.withOpacity(0.6), fontSize: uiScale.font(11), fontWeight: FontWeight.w600)),
+                            if (senderPhone.isNotEmpty)
+                              Text(senderPhone, style: TextStyle(color: os.withOpacity(0.45), fontSize: uiScale.font(9), fontWeight: FontWeight.w700)),
+                          ],
+                        ),
                         if (senderPhone.isNotEmpty)
                           GestureDetector(
                             onTap: () => _makePhoneCall(senderPhone),
@@ -1240,7 +1258,7 @@ class _AdvancedActiveRideCard extends StatelessWidget {
                               child: Row(
                                 children: [
                                   Icon(Icons.call, color: Colors.green, size: uiScale.icon(12)),
-                                  SizedBox(width: 4),
+                                  const SizedBox(width: 4),
                                   Text("Call Sender", style: TextStyle(color: Colors.green, fontWeight: FontWeight.w700, fontSize: uiScale.font(10))),
                                 ],
                               ),
@@ -1251,14 +1269,21 @@ class _AdvancedActiveRideCard extends StatelessWidget {
 
                     SizedBox(height: uiScale.gap(16)),
 
-                    // TO (DESTINATION)
-                    Text('TO', style: TextStyle(color: cs.onSurface.withOpacity(0.5), fontSize: uiScale.font(8), fontWeight: FontWeight.w800, letterSpacing: 0.5)),
-                    Text(ride.destText, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(color: cs.onSurface, fontSize: uiScale.font(13), fontWeight: FontWeight.w800)),
+                    // TO (DESTINATION / RECEIVER)
+                    Text('TO', style: TextStyle(color: os.withOpacity(0.5), fontSize: uiScale.font(8), fontWeight: FontWeight.w800, letterSpacing: 0.5)),
+                    Text(ride.destText, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(color: os, fontSize: uiScale.font(13), fontWeight: FontWeight.w800)),
                     Row(
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
-                        Text(isDelivery ? 'Receiver' : 'Dropoff Point', style: TextStyle(color: cs.onSurface.withOpacity(0.6), fontSize: uiScale.font(11), fontWeight: FontWeight.w600)),
-                        if (isDelivery && receiverPhone.isNotEmpty)
+                        Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(isDelivery ? 'Receiver' : 'Dropoff Point', style: TextStyle(color: os.withOpacity(0.6), fontSize: uiScale.font(11), fontWeight: FontWeight.w600)),
+                            if (isDelivery && receiverPhone.isNotEmpty && receiverPhone != senderPhone)
+                              Text(receiverPhone, style: TextStyle(color: os.withOpacity(0.45), fontSize: uiScale.font(9), fontWeight: FontWeight.w700)),
+                          ],
+                        ),
+                        if (isDelivery && receiverPhone.isNotEmpty && receiverPhone != senderPhone)
                           GestureDetector(
                             onTap: () => _makePhoneCall(receiverPhone),
                             child: Container(
@@ -1267,7 +1292,7 @@ class _AdvancedActiveRideCard extends StatelessWidget {
                               child: Row(
                                 children: [
                                   Icon(Icons.call, color: Colors.blue, size: uiScale.icon(12)),
-                                  SizedBox(width: 4),
+                                  const SizedBox(width: 4),
                                   Text("Call Receiver", style: TextStyle(color: Colors.blue, fontWeight: FontWeight.w700, fontSize: uiScale.font(10))),
                                 ],
                               ),
@@ -1280,6 +1305,90 @@ class _AdvancedActiveRideCard extends StatelessWidget {
               ),
             ],
           ),
+
+          SizedBox(height: uiScale.gap(20)),
+
+          // -------------------------------------------------------------
+          // 💰 PROFESSIONAL FINANCIAL BREAKDOWN BLOCK (DYNAMIC FROM DB)
+          // -------------------------------------------------------------
+          Container(
+            padding: EdgeInsets.all(uiScale.inset(14)),
+            decoration: BoxDecoration(
+              color: isDark ? Colors.black26 : Colors.grey.shade50,
+              borderRadius: BorderRadius.circular(uiScale.radius(16)),
+              border: Border.all(color: cs.outlineVariant.withOpacity(0.4)),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // Fare & Payment Method Row
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  crossAxisAlignment: CrossAxisAlignment.center,
+                  children: [
+                    Text(
+                        'TOTAL FARE',
+                        style: TextStyle(color: os.withOpacity(0.5), fontSize: uiScale.font(9), fontWeight: FontWeight.w800, letterSpacing: 1.0)
+                    ),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                      decoration: BoxDecoration(
+                          color: payMethod == 'WALLET' ? Colors.blue.withOpacity(0.1) : Colors.orange.withOpacity(0.1),
+                          borderRadius: BorderRadius.circular(6),
+                          border: Border.all(color: payMethod == 'WALLET' ? Colors.blue.withOpacity(0.3) : Colors.orange.withOpacity(0.3))
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(payMethod == 'WALLET' ? Icons.account_balance_wallet_rounded : Icons.payments_rounded,
+                              color: payMethod == 'WALLET' ? Colors.blue : Colors.orange.shade700,
+                              size: uiScale.icon(10)
+                          ),
+                          const SizedBox(width: 4),
+                          Text(
+                              payMethod,
+                              style: TextStyle(color: payMethod == 'WALLET' ? Colors.blue : Colors.orange.shade700, fontSize: uiScale.font(9), fontWeight: FontWeight.w900, letterSpacing: 0.5)
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+
+                Text(
+                    '$currency ${totalFare.toStringAsFixed(2)}',
+                    style: TextStyle(color: os, fontSize: uiScale.font(20), fontWeight: FontWeight.w900)
+                ),
+
+                Padding(
+                  padding: EdgeInsets.symmetric(vertical: uiScale.gap(12)),
+                  child: Divider(color: cs.outlineVariant.withOpacity(0.4), height: 1, thickness: 1),
+                ),
+
+                // Dynamic Revenue Split Row
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text('YOUR EARNINGS (${driverPercent.toStringAsFixed(0)}%)', style: TextStyle(color: Colors.green, fontSize: uiScale.font(8.5), fontWeight: FontWeight.w800, letterSpacing: 0.5)),
+                        Text('$currency ${driverEarnings.toStringAsFixed(2)}', style: TextStyle(color: Colors.green, fontSize: uiScale.font(14), fontWeight: FontWeight.w900)),
+                      ],
+                    ),
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.end,
+                      children: [
+                        Text('APP FEE (${feePercent.toStringAsFixed(0)}%)', style: TextStyle(color: os.withOpacity(0.5), fontSize: uiScale.font(8.5), fontWeight: FontWeight.w800, letterSpacing: 0.5)),
+                        Text('$currency ${appFee.toStringAsFixed(2)}', style: TextStyle(color: os.withOpacity(0.7), fontSize: uiScale.font(14), fontWeight: FontWeight.w800)),
+                      ],
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+          // -------------------------------------------------------------
 
           SizedBox(height: uiScale.gap(20)),
 

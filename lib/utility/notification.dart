@@ -40,6 +40,7 @@ void showInAppNotification(
       required String title,
       required String message,
       String? imageUrl,
+      VoidCallback? onTap, // <--- ADDED: Accepts the tap action from our FCM Service
     }) {
   showDialog(
     context: context,
@@ -52,6 +53,7 @@ void showInAppNotification(
         textColor: Colors.white,
         image: imageUrl != null ? NetworkImage(imageUrl) : null,
         countdown: const Duration(seconds: 5),
+        onTap: onTap, // <--- ADDED: Passes it down to the widget
       );
     },
   );
@@ -63,6 +65,7 @@ class DelayedCloseButtonDialog extends StatefulWidget {
   final String? message;
   final Color textColor;
   final Duration countdown;
+  final VoidCallback? onTap; // <--- ADDED: Stores the tap action
 
   const DelayedCloseButtonDialog({
     super.key,
@@ -71,6 +74,7 @@ class DelayedCloseButtonDialog extends StatefulWidget {
     this.message,
     required this.textColor,
     this.countdown = const Duration(seconds: 5),
+    this.onTap, // <--- ADDED
   });
 
   @override
@@ -113,124 +117,133 @@ class _DelayedCloseButtonDialogState extends State<DelayedCloseButtonDialog>
       child: Dialog(
         backgroundColor: Colors.transparent,
         insetPadding: EdgeInsets.zero,
-        child: Stack(
-          fit: StackFit.expand,
-          children: [
-            if (widget.image != null)
-              Container(
-                color: Colors.black,
-                alignment: Alignment.center,
-                child: FittedBox(
-                  fit: BoxFit.cover,
-                  child: Image(
-                    image: widget.image!,
-                    width: screen.width,
-                    height: screen.height,
+        // ADDED: GestureDetector wraps the entire popup so tapping anywhere triggers the route
+        child: GestureDetector(
+          onTap: () {
+            if (widget.onTap != null) {
+              widget.onTap!(); // Trigger the navigation route
+              Navigator.of(context).pop(); // Close the popup automatically
+            }
+          },
+          child: Stack(
+            fit: StackFit.expand,
+            children: [
+              if (widget.image != null)
+                Container(
+                  color: Colors.black,
+                  alignment: Alignment.center,
+                  child: FittedBox(
+                    fit: BoxFit.cover,
+                    child: Image(
+                      image: widget.image!,
+                      width: screen.width,
+                      height: screen.height,
+                    ),
                   ),
-                ),
-              )
-            else
-              Container(color: Colors.black.withOpacity(0.85)),
+                )
+              else
+                Container(color: Colors.black.withOpacity(0.85)),
 
-            Positioned.fill(
-              child: Center(
-                child: ConstrainedBox(
-                  constraints: BoxConstraints(maxWidth: uiScale.tablet ? 520 : 400),
-                  child: ClipRRect(
-                    borderRadius: BorderRadius.circular(uiScale.radius(24)),
-                    child: BackdropFilter(
-                      filter: ui.ImageFilter.blur(sigmaX: 16, sigmaY: 16),
-                      child: Container(
-                        margin: EdgeInsets.symmetric(horizontal: uiScale.inset(20)),
-                        padding: EdgeInsets.all(uiScale.inset(24)),
-                        decoration: BoxDecoration(
-                          color: Colors.black.withOpacity(0.45),
-                          borderRadius: BorderRadius.circular(uiScale.radius(24)),
-                          border: Border.all(color: Colors.white.withOpacity(0.15), width: 1.5),
-                          boxShadow: [
-                            BoxShadow(
-                              color: Colors.black.withOpacity(0.3),
-                              blurRadius: 30,
-                              offset: const Offset(0, 10),
-                            ),
-                          ],
-                        ),
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            if (widget.title != null)
-                              Text(
-                                widget.title!,
-                                textAlign: TextAlign.center,
-                                style: TextStyle(
-                                  fontSize: uiScale.font(22),
-                                  color: widget.textColor,
-                                  fontWeight: FontWeight.w900,
-                                  letterSpacing: -0.5,
-                                ),
-                              ),
-                            if (widget.message != null) ...[
-                              SizedBox(height: uiScale.gap(12)),
-                              Text(
-                                widget.message!,
-                                textAlign: TextAlign.center,
-                                style: TextStyle(
-                                  fontSize: uiScale.font(15),
-                                  color: widget.textColor.withOpacity(0.9),
-                                  fontWeight: FontWeight.w500,
-                                  height: 1.4,
-                                ),
+              Positioned.fill(
+                child: Center(
+                  child: ConstrainedBox(
+                    constraints: BoxConstraints(maxWidth: uiScale.tablet ? 520 : 400),
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(uiScale.radius(24)),
+                      child: BackdropFilter(
+                        filter: ui.ImageFilter.blur(sigmaX: 16, sigmaY: 16),
+                        child: Container(
+                          margin: EdgeInsets.symmetric(horizontal: uiScale.inset(20)),
+                          padding: EdgeInsets.all(uiScale.inset(24)),
+                          decoration: BoxDecoration(
+                            color: Colors.black.withOpacity(0.45),
+                            borderRadius: BorderRadius.circular(uiScale.radius(24)),
+                            border: Border.all(color: Colors.white.withOpacity(0.15), width: 1.5),
+                            boxShadow: [
+                              BoxShadow(
+                                color: Colors.black.withOpacity(0.3),
+                                blurRadius: 30,
+                                offset: const Offset(0, 10),
                               ),
                             ],
-                          ],
+                          ),
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              if (widget.title != null)
+                                Text(
+                                  widget.title!,
+                                  textAlign: TextAlign.center,
+                                  style: TextStyle(
+                                    fontSize: uiScale.font(22),
+                                    color: widget.textColor,
+                                    fontWeight: FontWeight.w900,
+                                    letterSpacing: -0.5,
+                                  ),
+                                ),
+                              if (widget.message != null) ...[
+                                SizedBox(height: uiScale.gap(12)),
+                                Text(
+                                  widget.message!,
+                                  textAlign: TextAlign.center,
+                                  style: TextStyle(
+                                    fontSize: uiScale.font(15),
+                                    color: widget.textColor.withOpacity(0.9),
+                                    fontWeight: FontWeight.w500,
+                                    height: 1.4,
+                                  ),
+                                ),
+                              ],
+                            ],
+                          ),
                         ),
                       ),
                     ),
                   ),
                 ),
               ),
-            ),
 
-            Positioned(
-              top: MediaQuery.of(context).padding.top + uiScale.inset(16),
-              right: uiScale.inset(20),
-              child: Stack(
-                alignment: Alignment.center,
-                children: [
-                  SizedBox(
-                    width: uiScale.icon(44),
-                    height: uiScale.icon(44),
-                    child: AnimatedBuilder(
-                      animation: _controller,
-                      builder: (context, child) {
-                        return CircularProgressIndicator(
-                          value: _controller.value,
-                          strokeWidth: 3.5,
-                          valueColor: const AlwaysStoppedAnimation<Color>(Colors.white),
-                          backgroundColor: Colors.white.withOpacity(0.15),
-                        );
-                      },
-                    ),
-                  ),
-                  if (_isButtonEnabled)
-                    Container(
+              Positioned(
+                top: MediaQuery.of(context).padding.top + uiScale.inset(16),
+                right: uiScale.inset(20),
+                child: Stack(
+                  alignment: Alignment.center,
+                  children: [
+                    SizedBox(
                       width: uiScale.icon(44),
                       height: uiScale.icon(44),
-                      decoration: BoxDecoration(
-                        shape: BoxShape.circle,
-                        color: Colors.white.withOpacity(0.15),
-                      ),
-                      child: IconButton(
-                        icon: Icon(Icons.close_rounded, color: Colors.white, size: uiScale.icon(22)),
-                        padding: EdgeInsets.zero,
-                        onPressed: () => Navigator.of(context).pop(),
-                        tooltip: 'Close',
+                      child: AnimatedBuilder(
+                        animation: _controller,
+                        builder: (context, child) {
+                          return CircularProgressIndicator(
+                            value: _controller.value,
+                            strokeWidth: 3.5,
+                            valueColor: const AlwaysStoppedAnimation<Color>(Colors.white),
+                            backgroundColor: Colors.white.withOpacity(0.15),
+                          );
+                        },
                       ),
                     ),
-                ],
+                    if (_isButtonEnabled)
+                      Container(
+                        width: uiScale.icon(44),
+                        height: uiScale.icon(44),
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          color: Colors.white.withOpacity(0.15),
+                        ),
+                        child: IconButton(
+                          icon: Icon(Icons.close_rounded, color: Colors.white, size: uiScale.icon(22)),
+                          padding: EdgeInsets.zero,
+                          onPressed: () => Navigator.of(context).pop(),
+                          tooltip: 'Close',
+                        ),
+                      ),
+                  ],
+                ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );

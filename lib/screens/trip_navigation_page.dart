@@ -21,7 +21,10 @@ enum TripNavigationRole { rider, driver }
 enum TripNavPhase { driverToPickup, waitingPickup, enRoute, arrivedDestination, completed, cancelled }
 enum NavigationViewMode { navigation, atAGlance }
 
-// --- PURE DART KALMAN FILTER ---
+// ---------------------------------------------------------------------------
+// HYBRID DART KALMAN FILTER (Degree-Space)
+// Tuned strictly for decimal degrees, not meters.
+// ---------------------------------------------------------------------------
 class _Kalman1D {
   final double q;
   final double r;
@@ -29,7 +32,7 @@ class _Kalman1D {
   double p;
   double k;
 
-  _Kalman1D({this.q = 0.5, this.r = 3.0, required this.x, this.p = 1.0, this.k = 0.0});
+  _Kalman1D({this.q = 0.00001, this.r = 0.0001, required this.x, this.p = 1.0, this.k = 0.0});
 
   double update(double measurement) {
     p = p + q;
@@ -65,17 +68,28 @@ class TripNavigationArgs {
   final bool showArrivedPickupButton, showArrivedDestinationButton, showCompleteTripButton;
 
   const TripNavigationArgs({
-    required this.userId, required this.driverId, required this.tripId, required this.pickup, required this.destination,
-    this.dropOffs = const [], required this.originText, required this.destinationText, this.dropOffTexts = const [],
+    required this.userId, required this.driverId, required this.tripId,
+    required this.pickup, required this.destination,
+    this.dropOffs = const [], required this.originText, required this.destinationText,
+    this.dropOffTexts = const [],
     this.rideType = 'Standard Ride', this.onSOSTap,
-    this.driverName, this.vehicleType, this.carPlate, this.rating, this.initialDriverLocation, this.initialRiderLocation,
-    this.initialPhase = TripNavPhase.driverToPickup, this.bookingUpdates, this.liveSnapshotProvider,
-    this.onStartTrip, this.onCancelTrip, this.onArrivedPickup, this.onArrivedDestination, this.onCompleteTrip,
-    this.role = TripNavigationRole.rider, this.tickEvery = const Duration(seconds: 1), this.routeMinGap = const Duration(seconds: 20),
-    this.arrivalMeters = 150.0, this.routeMoveThresholdMeters = 25.0, this.autoFollowCamera = true,
-    this.showStartTripButton = true, this.showCancelButton = true, this.showMetaCard = true, this.showDebugPanel = false,
-    this.enableLivePickupTracking = false, this.preserveStopOrder = true, this.autoCloseOnCancel = true,
-    this.showArrivedPickupButton = true, this.showArrivedDestinationButton = true, this.showCompleteTripButton = true,
+    this.driverName, this.vehicleType, this.carPlate, this.rating,
+    this.initialDriverLocation, this.initialRiderLocation,
+    this.initialPhase = TripNavPhase.driverToPickup,
+    this.bookingUpdates, this.liveSnapshotProvider,
+    this.onStartTrip, this.onCancelTrip, this.onArrivedPickup,
+    this.onArrivedDestination, this.onCompleteTrip,
+    this.role = TripNavigationRole.rider,
+    this.tickEvery = const Duration(seconds: 1),
+    this.routeMinGap = const Duration(seconds: 20),
+    this.arrivalMeters = 150.0, this.routeMoveThresholdMeters = 25.0,
+    this.autoFollowCamera = true,
+    this.showStartTripButton = true, this.showCancelButton = true,
+    this.showMetaCard = true, this.showDebugPanel = false,
+    this.enableLivePickupTracking = false, this.preserveStopOrder = true,
+    this.autoCloseOnCancel = true,
+    this.showArrivedPickupButton = true, this.showArrivedDestinationButton = true,
+    this.showCompleteTripButton = true,
   });
 }
 
@@ -87,7 +101,8 @@ class TripNavigationPage extends StatefulWidget {
   State<TripNavigationPage> createState() => _TripNavigationPageState();
 }
 
-class _TripNavigationPageState extends State<TripNavigationPage> with TickerProviderStateMixin, WidgetsBindingObserver {
+class _TripNavigationPageState extends State<TripNavigationPage>
+    with TickerProviderStateMixin, WidgetsBindingObserver {
 
   // --- ISOLATED MAP LAYER NOTIFIERS ---
   final ValueNotifier<Set<Marker>> _markersNotifier = ValueNotifier({});
@@ -111,11 +126,9 @@ class _TripNavigationPageState extends State<TripNavigationPage> with TickerProv
   LatLng? _rawDriverLL, _animStartLL, _animTargetLL, _displayDriverLL;
   LatLng? _riderLL;
 
-  // --- FILTER STATE ---
+  // --- HYBRID FILTER STATE ---
   _Kalman1D? _latKalman;
   _Kalman1D? _lngKalman;
-  final List<LatLng> _recentPositions = [];
-  LatLng? _stationaryAnchor;
   DateTime _lastLocationTime = DateTime.now();
 
   // --- SPLIT HEADING EMA ---
@@ -139,12 +152,13 @@ class _TripNavigationPageState extends State<TripNavigationPage> with TickerProv
   String? _distanceText, _durationText, _lastErrorText;
   bool _uiNeedsRebuild = false;
 
-  bool _busyRoute = false, _busyTick = false, _busyPrimaryAction = false, _busyCancel = false, _didInitialFit = false;
-  bool _canArrivePickup = false, _canStartTrip = false, _canArriveDestination = false, _canCompleteRide = false;
+  bool _busyRoute = false, _busyTick = false,
+      _busyPrimaryAction = false, _busyCancel = false, _didInitialFit = false;
+  bool _canArrivePickup = false, _canStartTrip = false,
+      _canArriveDestination = false, _canCompleteRide = false;
 
   DateTime _lastRouteAt = DateTime.fromMillisecondsSinceEpoch(0);
   LatLng? _lastDriverRouteLL;
-  List<LatLng> _latestRoutePoints = [];
 
   Duration get _tickEvery => widget.args.tickEvery;
   Duration get _routeMinGap => widget.args.routeMinGap;
@@ -199,26 +213,24 @@ class _TripNavigationPageState extends State<TripNavigationPage> with TickerProv
     _bootstrap();
   }
 
-  void _pushMapState() {
-    _markersNotifier.value = {..._staticMarkers, ..._dynamicMarkers};
-    _polylinesNotifier.value = _polylines;
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _bookingSub?.cancel();
+    _compassSub?.cancel();
+    _tickTimer?.cancel();
+    _compassThrottleTimer?.cancel();
+    _glideController?.dispose();
+    _glideCurve?.dispose();
+    _markersNotifier.dispose();
+    _polylinesNotifier.dispose();
+    _mapController?.dispose();
+    super.dispose();
   }
 
-  void _onGlideTick() {
-    if (_animStartLL != null && _animTargetLL != null) {
-      final double t = _glideCurve!.value;
-      final double lat = _animStartLL!.latitude + (_animTargetLL!.latitude - _animStartLL!.latitude) * t;
-      final double lng = _animStartLL!.longitude + (_animTargetLL!.longitude - _animStartLL!.longitude) * t;
-
-      _displayDriverLL = LatLng(lat, lng);
-
-      _updateDynamicMarkers();
-      _pushMapState();
-
-      if (_isFollowCameraEnabled && _viewMode == NavigationViewMode.navigation) {
-        _followCamera();
-      }
-    }
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) _tick(force: true);
   }
 
   Future<void> _bootstrap() async {
@@ -239,24 +251,26 @@ class _TripNavigationPageState extends State<TripNavigationPage> with TickerProv
     _tick(force: true);
   }
 
-  @override
-  void dispose() {
-    WidgetsBinding.instance.removeObserver(this);
-    _bookingSub?.cancel();
-    _compassSub?.cancel();
-    _tickTimer?.cancel();
-    _compassThrottleTimer?.cancel();
-    _glideController?.dispose();
-    _glideCurve?.dispose();
-    _markersNotifier.dispose();
-    _polylinesNotifier.dispose();
-    _mapController?.dispose();
-    super.dispose();
+  void _pushMapState() {
+    _markersNotifier.value = {..._staticMarkers, ..._dynamicMarkers};
+    _polylinesNotifier.value = _polylines;
   }
 
-  @override
-  void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed) _tick(force: true);
+  void _onGlideTick() {
+    if (_animStartLL != null && _animTargetLL != null) {
+      final double t = _glideCurve!.value;
+      final double lat = _animStartLL!.latitude + (_animTargetLL!.latitude - _animStartLL!.latitude) * t;
+      final double lng = _animStartLL!.longitude + (_animTargetLL!.longitude - _animStartLL!.longitude) * t;
+
+      _displayDriverLL = LatLng(lat, lng);
+
+      _updateDynamicMarkers();
+      _pushMapState();
+
+      if (_isFollowCameraEnabled && _viewMode == NavigationViewMode.navigation) {
+        _followCamera();
+      }
+    }
   }
 
   void _startHardwareCompass() {
@@ -321,26 +335,26 @@ class _TripNavigationPageState extends State<TripNavigationPage> with TickerProv
         Marker(markerId: const MarkerId('pickup'), position: widget.args.pickup, icon: _pickupIcon!, anchor: const Offset(0.5, 0.5), zIndex: 35),
       Marker(markerId: const MarkerId('destination'), position: widget.args.destination, icon: _dropIcon!, anchor: const Offset(0.5, 0.5), zIndex: 35),
       for (int i = 0; i < widget.args.dropOffs.length; i++)
-        Marker(markerId: MarkerId('drop_$i'), position: widget.args.dropOffs[i], icon: _waypointIcon!, anchor: const Offset(0.5, 0.5), zIndex: 34)
+        Marker(markerId: MarkerId('drop_$i'), position: widget.args.dropOffs[i], icon: _waypointIcon!, anchor: const Offset(0.5, 0.5), zIndex: 34),
     };
   }
 
   void _updateDynamicMarkers() {
     _dynamicMarkers = {
       if (_displayDriverLL != null)
-        Marker(
-            markerId: const MarkerId('driver'), position: _displayDriverLL!, icon: _driverIcon!,
-            anchor: const Offset(0.5, 0.5), flat: true, rotation: _smoothCarRotation(), zIndex: 50
-        ),
+        Marker(markerId: const MarkerId('driver'), position: _displayDriverLL!, icon: _driverIcon!, anchor: const Offset(0.5, 0.5), flat: true, rotation: _smoothCarRotation(), zIndex: 50),
       if (_riderLL != null)
-        Marker(markerId: const MarkerId('rider_live'), position: _riderLL!, icon: _riderIcon!, anchor: const Offset(0.5, 0.5), zIndex: 45)
+        Marker(markerId: const MarkerId('rider_live'), position: _riderLL!, icon: _riderIcon!, anchor: const Offset(0.5, 0.5), zIndex: 45),
     };
   }
 
   void _listenBooking() {
     if (widget.args.bookingUpdates == null) return;
     _bookingSub?.cancel();
-    _bookingSub = widget.args.bookingUpdates!.listen((event) => _applyIncoming(event, trustPhase: true), cancelOnError: false);
+    _bookingSub = widget.args.bookingUpdates!.listen((event) {
+      _applyIncoming(event, trustPhase: true);
+      if (_uiNeedsRebuild && mounted) setState(() {});
+    }, cancelOnError: false);
   }
 
   Future<void> _tick({bool force = false}) async {
@@ -372,6 +386,10 @@ class _TripNavigationPageState extends State<TripNavigationPage> with TickerProv
     } catch (_) {}
   }
 
+  // ---------------------------------------------------------------------------
+  // HYBRID KINEMATIC DEADBAND
+  // Filters out noise natively via velocity calculations instead of arrays.
+  // ---------------------------------------------------------------------------
   void _applyIncoming(dynamic event, {bool trustPhase = true}) {
     final payload = _eventMap(event);
     if (payload.isEmpty) return;
@@ -387,33 +405,34 @@ class _TripNavigationPageState extends State<TripNavigationPage> with TickerProv
     if (rawNew != null) {
       if (_rawDriverLL == null) {
         _rawDriverLL = rawNew;
+        _displayDriverLL = rawNew;
         _latKalman = _Kalman1D(x: rawNew.latitude);
         _lngKalman = _Kalman1D(x: rawNew.longitude);
       } else {
-        double distMeters = _haversine(_rawDriverLL!, rawNew);
-        double timeSecs = now.difference(_lastLocationTime).inMilliseconds / 1000.0;
-        if (timeSecs > 0 && (distMeters / timeSecs) > 70.0) {
-          // Reject impossible speeds
-        } else {
-          double fLat = _latKalman!.update(rawNew.latitude);
-          double fLng = _lngKalman!.update(rawNew.longitude);
-          LatLng filtered = LatLng(fLat, fLng);
+        final double distMeters = _haversine(_rawDriverLL!, rawNew);
+        final double timeSecs = now.difference(_lastLocationTime).inMilliseconds / 1000.0;
 
-          _recentPositions.add(filtered);
-          if (_recentPositions.length > 3) _recentPositions.removeAt(0);
+        if (timeSecs > 0) {
+          final double speedMPS = distMeters / timeSecs;
 
-          if (_recentPositions.length == 3 && _isStationary(_recentPositions, 5.0)) {
-            _stationaryAnchor ??= filtered;
-            filtered = _stationaryAnchor!;
+          if (speedMPS > 70.0) {
+            // Reject warp speed > 250 km/h
+          } else if (speedMPS < 0.5) {
+            // Kinematic Deadband: If speed is < 0.5 m/s, freeze the raw tracker.
+            // Utterly destroys rubber-banding without array logic.
           } else {
-            _stationaryAnchor = null;
-          }
+            final double fLat = _latKalman!.update(rawNew.latitude);
+            final double fLng = _lngKalman!.update(rawNew.longitude);
+            LatLng filtered = LatLng(fLat, fLng);
 
-          if (filtered != _rawDriverLL) {
-            _animStartLL = _displayDriverLL ?? _rawDriverLL;
-            _animTargetLL = filtered;
             _rawDriverLL = filtered;
-            _glideController?.forward(from: 0.0);
+
+            final LatLng glideFrom = _displayDriverLL ?? filtered;
+            if (_haversine(glideFrom, filtered) > 1.0) {
+              _animStartLL = glideFrom;
+              _animTargetLL = filtered;
+              _glideController?.forward(from: 0.0);
+            }
           }
         }
       }
@@ -421,15 +440,19 @@ class _TripNavigationPageState extends State<TripNavigationPage> with TickerProv
     }
 
     final rider = _coerceRiderLL(payload, event);
-    if (rider != null) _riderLL = rider;
+    if (rider != null) {
+      if (_riderLL == null || _haversine(_riderLL!, rider) > 2.5) {
+        _riderLL = rider;
+        _uiNeedsRebuild = true;
+      }
+    }
 
     final heading = _coerceHeading(payload, event);
     if (heading != null) _backendDriverHeading = heading;
 
     TripNavPhase? nextPhase = _coercePhase(payload, event);
     if (nextPhase != null && nextPhase != _phase) {
-      if (!trustPhase && _optimisticPhase != null && _optimisticPhaseSetAt != null &&
-          now.difference(_optimisticPhaseSetAt!) < const Duration(seconds: 4)) {
+      if (!trustPhase && _optimisticPhase != null && _optimisticPhaseSetAt != null && now.difference(_optimisticPhaseSetAt!) < const Duration(seconds: 4)) {
         nextPhase = _phase;
       } else {
         _optimisticPhase = null;
@@ -453,13 +476,6 @@ class _TripNavigationPageState extends State<TripNavigationPage> with TickerProv
     _prebuildStaticMarkers();
   }
 
-  bool _isStationary(List<LatLng> positions, double threshold) {
-    for (int i = 0; i < positions.length - 1; i++) {
-      if (_haversine(positions[i], positions[i + 1]) > threshold) return false;
-    }
-    return true;
-  }
-
   void _emitError(String message) {
     if (_lastErrorText != message) {
       _lastErrorText = message;
@@ -467,26 +483,37 @@ class _TripNavigationPageState extends State<TripNavigationPage> with TickerProv
     }
   }
 
+  // ---------------------------------------------------------------------------
+  // SMART SERVER GATES
+  // ---------------------------------------------------------------------------
   void _recomputePermissions() {
-    if (_displayDriverLL == null) return;
+    final LatLng? pos = _displayDriverLL ?? _rawDriverLL;
+    if (pos == null) return;
 
-    final safeArrival = math.max(_arrivalMeters, 150.0);
-    bool cAP = _phase == TripNavPhase.driverToPickup && _haversine(_displayDriverLL!, _effectivePickupLL) <= safeArrival;
-    bool cST = _phase == TripNavPhase.waitingPickup && _haversine(_displayDriverLL!, _effectivePickupLL) <= safeArrival;
-    bool cAD = _phase == TripNavPhase.enRoute && _haversine(_displayDriverLL!, _currentTarget) <= safeArrival;
-    bool cCR = _phase == TripNavPhase.arrivedDestination && _haversine(_displayDriverLL!, _currentTarget) <= math.max(_arrivalMeters + 50.0, 200.0);
+    final double safeArrival = math.max(_arrivalMeters, 150.0);
+
+    final bool cAP = _phase == TripNavPhase.driverToPickup && _haversine(pos, _effectivePickupLL) <= safeArrival;
+    final bool cST = _phase == TripNavPhase.waitingPickup; // Server trust gate
+    final bool cAD = _phase == TripNavPhase.enRoute && _haversine(pos, _currentTarget) <= safeArrival;
+    final bool cCR = _phase == TripNavPhase.arrivedDestination; // Server trust gate
 
     if (_canArrivePickup != cAP || _canStartTrip != cST || _canArriveDestination != cAD || _canCompleteRide != cCR) {
-      _canArrivePickup = cAP; _canStartTrip = cST; _canArriveDestination = cAD; _canCompleteRide = cCR;
+      _canArrivePickup = cAP;
+      _canStartTrip = cST;
+      _canArriveDestination = cAD;
+      _canCompleteRide = cCR;
       _uiNeedsRebuild = true;
     }
   }
 
   double _smoothCarRotation() {
     if (_displayDriverLL == null) return _carIconHeading;
-    double target = (_backendDriverHeading > 0) ? _backendDriverHeading :
-    (_animStartLL != null && _animTargetLL != null && _haversine(_animStartLL!, _animTargetLL!) > 1.5)
-        ? _bearingBetween(_animStartLL!, _animTargetLL!) : _carIconHeading;
+
+    double target = (_backendDriverHeading > 0)
+        ? _backendDriverHeading
+        : (_animStartLL != null && _animTargetLL != null && _haversine(_animStartLL!, _animTargetLL!) > 1.5)
+        ? _bearingBetween(_animStartLL!, _animTargetLL!)
+        : _carIconHeading;
 
     double diff = target - _carIconHeading;
     while (diff < -180.0) diff += 360.0;
@@ -497,6 +524,7 @@ class _TripNavigationPageState extends State<TripNavigationPage> with TickerProv
 
   Future<void> _rebuildRoute({bool force = false}) async {
     if (_busyRoute || _phase == TripNavPhase.completed || _phase == TripNavPhase.cancelled) return;
+
     final from = (_phase == TripNavPhase.enRoute || _phase == TripNavPhase.arrivedDestination) ? _enRouteOrigin : _displayDriverLL;
     final to = (_phase == TripNavPhase.enRoute || _phase == TripNavPhase.arrivedDestination) ? _currentTarget : _effectivePickupLL;
     if (from == null || to == null) return;
@@ -524,7 +552,7 @@ class _TripNavigationPageState extends State<TripNavigationPage> with TickerProv
       final isDark = Theme.of(context).brightness == Brightness.dark;
       _polylines = {
         Polyline(polylineId: const PolylineId('halo'), points: [from, ...route.points, to], color: isDark ? Colors.white.withOpacity(0.9) : Colors.black.withOpacity(0.85), width: 10, jointType: JointType.round, startCap: Cap.roundCap, endCap: Cap.roundCap),
-        Polyline(polylineId: const PolylineId('main'), points: [from, ...route.points, to], color: AppColors.primary, width: 5, jointType: JointType.round, startCap: Cap.roundCap, endCap: Cap.roundCap)
+        Polyline(polylineId: const PolylineId('main'), points: [from, ...route.points, to], color: AppColors.primary, width: 5, jointType: JointType.round, startCap: Cap.roundCap, endCap: Cap.roundCap),
       };
 
       _pushMapState();
@@ -562,11 +590,14 @@ class _TripNavigationPageState extends State<TripNavigationPage> with TickerProv
         distanceMeters: route['distanceMeters'] ?? 0,
         durationSeconds: int.tryParse(route['duration']?.replaceAll('s', '') ?? '0') ?? 0,
       );
-    } catch (_) { return null; }
+    } catch (_) {
+      return null;
+    }
   }
 
   void _followCamera() {
     if (_phase == TripNavPhase.completed || _phase == TripNavPhase.cancelled || !_isFollowCameraEnabled || _viewMode != NavigationViewMode.navigation) return;
+
     final target = (_phase == TripNavPhase.enRoute || _phase == TripNavPhase.arrivedDestination) ? _enRouteOrigin : _displayDriverLL;
     if (target == null) return;
 
@@ -577,9 +608,7 @@ class _TripNavigationPageState extends State<TripNavigationPage> with TickerProv
     _cameraBearingEMA += diff * 0.18;
 
     _isProgrammaticCameraMove = true;
-    _mapController?.moveCamera(
-        CameraUpdate.newCameraPosition(CameraPosition(target: target, zoom: (_phase == TripNavPhase.enRoute) ? 18.5 : 17.5, tilt: 75.0, bearing: _cameraBearingEMA))
-    );
+    _mapController?.moveCamera(CameraUpdate.newCameraPosition(CameraPosition(target: target, zoom: (_phase == TripNavPhase.enRoute) ? 18.5 : 17.5, tilt: 75.0, bearing: _cameraBearingEMA)));
     Future.delayed(const Duration(milliseconds: 50), () => _isProgrammaticCameraMove = false);
   }
 
@@ -600,12 +629,10 @@ class _TripNavigationPageState extends State<TripNavigationPage> with TickerProv
 
     if (_displayDriverLL != null) {
       _isProgrammaticCameraMove = true;
-      double headingToUse = _localHardwareHeading ?? _carIconHeading;
+      final double headingToUse = _localHardwareHeading ?? _carIconHeading;
       _cameraBearingEMA = headingToUse;
 
-      _mapController?.animateCamera(
-          CameraUpdate.newCameraPosition(CameraPosition(target: _displayDriverLL!, zoom: 18.5, tilt: 75.0, bearing: headingToUse))
-      );
+      _mapController?.animateCamera(CameraUpdate.newCameraPosition(CameraPosition(target: _displayDriverLL!, zoom: 18.5, tilt: 75.0, bearing: headingToUse)));
       Future.delayed(const Duration(milliseconds: 250), () => _isProgrammaticCameraMove = false);
     }
   }
@@ -623,10 +650,19 @@ class _TripNavigationPageState extends State<TripNavigationPage> with TickerProv
     TripNavPhase? nextOpt;
 
     if (widget.args.role == TripNavigationRole.driver) {
-      if (_phase == TripNavPhase.driverToPickup) { callback = widget.args.onArrivedPickup; nextOpt = TripNavPhase.waitingPickup; }
-      else if (_phase == TripNavPhase.waitingPickup) { callback = widget.args.onStartTrip; nextOpt = TripNavPhase.enRoute; }
-      else if (_phase == TripNavPhase.enRoute) { callback = widget.args.onArrivedDestination; nextOpt = TripNavPhase.arrivedDestination; }
-      else if (_phase == TripNavPhase.arrivedDestination) { callback = widget.args.onCompleteTrip; nextOpt = TripNavPhase.completed; }
+      if (_phase == TripNavPhase.driverToPickup) {
+        callback = widget.args.onArrivedPickup;
+        nextOpt = TripNavPhase.waitingPickup;
+      } else if (_phase == TripNavPhase.waitingPickup) {
+        callback = widget.args.onStartTrip;
+        nextOpt = TripNavPhase.enRoute;
+      } else if (_phase == TripNavPhase.enRoute) {
+        callback = widget.args.onArrivedDestination;
+        nextOpt = TripNavPhase.arrivedDestination;
+      } else if (_phase == TripNavPhase.arrivedDestination) {
+        callback = widget.args.onCompleteTrip;
+        nextOpt = TripNavPhase.completed;
+      }
     }
 
     if (callback == null) return;
@@ -642,6 +678,9 @@ class _TripNavigationPageState extends State<TripNavigationPage> with TickerProv
         _lastDriverRouteLL = null;
         _uiNeedsRebuild = true;
       }
+      _recomputePermissions();
+      if (mounted) setState(() {});
+
       await _tick(force: true);
       if (_phase == TripNavPhase.enRoute && widget.args.role == TripNavigationRole.driver) _recenterMap();
     } catch (e) {
@@ -653,51 +692,90 @@ class _TripNavigationPageState extends State<TripNavigationPage> with TickerProv
 
   Future<void> _cancelTripPressed() async {
     if (_busyCancel) return;
-    if (_phase == TripNavPhase.completed || _phase == TripNavPhase.cancelled) { Navigator.of(context).maybePop(); return; }
+    if (_phase == TripNavPhase.completed || _phase == TripNavPhase.cancelled) {
+      Navigator.of(context).maybePop();
+      return;
+    }
     setState(() => _busyCancel = true);
     try {
       if (widget.args.onCancelTrip != null) await widget.args.onCancelTrip!();
       if (!mounted) return;
       setState(() => _phase = TripNavPhase.cancelled);
       if (widget.args.autoCloseOnCancel) Navigator.of(context).maybePop();
-    } catch (e) { _emitError(e.toString().replaceFirst('Exception: ', '')); }
-    finally { if (mounted) setState(() => _busyCancel = false); }
+    } catch (e) {
+      _emitError(e.toString().replaceFirst('Exception: ', ''));
+    } finally {
+      if (mounted) setState(() => _busyCancel = false);
+    }
   }
 
   Map<String, dynamic> _eventMap(dynamic event) {
     if (event is BookingUpdate) return {'booking_status': event.status.toString(), ...event.data};
     if (event is Map<String, dynamic>) return event;
     if (event is Map) return event.cast<String, dynamic>();
-    try { final data = event.data; if (data is Map<String, dynamic>) return data; if (data is Map) return data.cast<String, dynamic>(); } catch (_) {}
+    try {
+      final data = event.data;
+      if (data is Map<String, dynamic>) return data;
+      if (data is Map) return data.cast<String, dynamic>();
+    } catch (_) {}
     return {};
   }
 
   TripNavPhase? _coercePhase(Map<String, dynamic> payload, dynamic rawEvent) {
     if (rawEvent is BookingUpdate) {
       switch (rawEvent.status) {
-        case BookingStatus.searching: case BookingStatus.driverAssigned: case BookingStatus.driverArriving: return TripNavPhase.driverToPickup;
-        case BookingStatus.onTrip: return TripNavPhase.enRoute;
-        case BookingStatus.completed: return TripNavPhase.completed;
-        case BookingStatus.cancelled: return TripNavPhase.cancelled;
-        case BookingStatus.failed: return null;
+        case BookingStatus.searching:
+        case BookingStatus.driverAssigned:
+        case BookingStatus.driverArriving:
+          return TripNavPhase.driverToPickup;
+        case BookingStatus.onTrip:
+          return TripNavPhase.enRoute;
+        case BookingStatus.completed:
+          return TripNavPhase.completed;
+        case BookingStatus.cancelled:
+          return TripNavPhase.cancelled;
+        case BookingStatus.failed:
+          return null;
       }
     }
     final raw = (payload['phase'] ?? payload['status'] ?? payload['state'] ?? (payload['ride'] is Map ? payload['ride']['status'] : null))?.toString().toLowerCase() ?? '';
     switch (raw) {
-      case 'searching': case 'accepted': case 'driver_assigned': case 'driver_arriving': case 'arriving': case 'enroute_pickup': return TripNavPhase.driverToPickup;
-      case 'arrived_pickup': return TripNavPhase.waitingPickup;
-      case 'in_ride': case 'on_trip': case 'in_progress': case 'started': return TripNavPhase.enRoute;
-      case 'arrived_destination': return TripNavPhase.arrivedDestination;
-      case 'completed': case 'done': case 'finished': return TripNavPhase.completed;
-      case 'cancelled': case 'canceled': return TripNavPhase.cancelled;
-      default: return null;
+      case 'searching':
+      case 'accepted':
+      case 'driver_assigned':
+      case 'driver_arriving':
+      case 'arriving':
+      case 'enroute_pickup':
+        return TripNavPhase.driverToPickup;
+      case 'arrived_pickup':
+        return TripNavPhase.waitingPickup;
+      case 'in_ride':
+      case 'on_trip':
+      case 'in_progress':
+      case 'started':
+        return TripNavPhase.enRoute;
+      case 'arrived_destination':
+        return TripNavPhase.arrivedDestination;
+      case 'completed':
+      case 'done':
+      case 'finished':
+        return TripNavPhase.completed;
+      case 'cancelled':
+      case 'canceled':
+        return TripNavPhase.cancelled;
+      default:
+        return null;
     }
   }
 
   int? _coerceStopIndex(Map<String, dynamic> payload, dynamic rawEvent) {
     final top = payload['stop_index'] ?? payload['waypoint_index'] ?? payload['active_stop_index'];
     if (top != null) return int.tryParse(top.toString());
-    try { return int.tryParse((rawEvent.stopIndex ?? rawEvent.waypointIndex ?? rawEvent.activeStopIndex).toString()); } catch (_) { return null; }
+    try {
+      return int.tryParse((rawEvent.stopIndex ?? rawEvent.waypointIndex ?? rawEvent.activeStopIndex).toString());
+    } catch (_) {
+      return null;
+    }
   }
 
   LatLng? _coerceDriverLL(Map<String, dynamic> payload, dynamic rawEvent) {
@@ -722,17 +800,31 @@ class _TripNavigationPageState extends State<TripNavigationPage> with TickerProv
   double? _coerceHeading(Map<String, dynamic> payload, dynamic rawEvent) {
     final top = double.tryParse((payload['driver_heading'] ?? payload['driverHeading'] ?? payload['heading'] ?? payload['bearing'])?.toString() ?? '');
     if (top != null) return top;
-    try { return double.tryParse((rawEvent.heading ?? rawEvent.bearing ?? rawEvent.driverHeading)?.toString() ?? ''); } catch (_) { return null; }
+    try {
+      return double.tryParse((rawEvent.heading ?? rawEvent.bearing ?? rawEvent.driverHeading)?.toString() ?? '');
+    } catch (_) {
+      return null;
+    }
   }
 
   List<LatLng> _decodePolyline(String enc) {
-    final out = <LatLng>[]; int idx = 0, lat = 0, lng = 0;
+    final out = <LatLng>[];
+    int idx = 0, lat = 0, lng = 0;
     while (idx < enc.length) {
       int b, shift = 0, result = 0;
-      do { b = enc.codeUnitAt(idx++) - 63; result |= (b & 0x1f) << shift; shift += 5; } while (b >= 0x20);
+      do {
+        b = enc.codeUnitAt(idx++) - 63;
+        result |= (b & 0x1f) << shift;
+        shift += 5;
+      } while (b >= 0x20);
       lat += (result & 1) != 0 ? ~(result >> 1) : (result >> 1);
-      shift = 0; result = 0;
-      do { b = enc.codeUnitAt(idx++) - 63; result |= (b & 0x1f) << shift; shift += 5; } while (b >= 0x20);
+      shift = 0;
+      result = 0;
+      do {
+        b = enc.codeUnitAt(idx++) - 63;
+        result |= (b & 0x1f) << shift;
+        shift += 5;
+      } while (b >= 0x20);
       lng += (result & 1) != 0 ? ~(result >> 1) : (result >> 1);
       out.add(LatLng(lat / 1e5, lng / 1e5));
     }
@@ -763,7 +855,10 @@ class _TripNavigationPageState extends State<TripNavigationPage> with TickerProv
   }
 
   String _fmtDistance(int m) => m < 1000 ? '$m m' : '${(m / 1000).toStringAsFixed(1)} km';
-  String _fmtDuration(int s) { final mins = (s / 60).round(); return mins < 60 ? '${mins}m' : '${mins ~/ 60}h ${mins % 60}m'; }
+  String _fmtDuration(int s) {
+    final mins = (s / 60).round();
+    return mins < 60 ? '${mins}m' : '${mins ~/ 60}h ${mins % 60}m';
+  }
 
   String _phaseLabel() {
     if (widget.args.role == TripNavigationRole.driver) {
@@ -845,42 +940,14 @@ class _TripNavigationPageState extends State<TripNavigationPage> with TickerProv
                 ),
               ),
             ),
-
             if (!_booting) ...[
-              Positioned(
-                top: 0, left: 0, right: 0, height: ui.gap(120),
-                child: IgnorePointer(
-                  child: Container(decoration: BoxDecoration(gradient: LinearGradient(begin: Alignment.topCenter, end: Alignment.bottomCenter, colors: [Colors.black.withOpacity(0.6), Colors.transparent]))),
-                ),
-              ),
-
-              Positioned(
-                top: mq.padding.top + ui.gap(8), left: ui.inset(10), right: ui.inset(10),
-                child: _SolidHeader(ui: ui, phaseLabel: _phaseLabel(), distanceText: _distanceText ?? '—', durationText: _durationText ?? '—', onBack: () => Navigator.of(context).maybePop()),
-              ),
-
-              Positioned(
-                top: mq.padding.top + ui.gap(60), right: ui.inset(10),
-                child: _PillActionRail(ui: ui, isFollowCameraEnabled: _isFollowCameraEnabled, onOverviewMode: _activateOverviewMode, onRecenter: _recenterMap),
-              ),
-
+              Positioned(top: 0, left: 0, right: 0, height: ui.gap(120), child: IgnorePointer(child: Container(decoration: BoxDecoration(gradient: LinearGradient(begin: Alignment.topCenter, end: Alignment.bottomCenter, colors: [Colors.black.withOpacity(0.6), Colors.transparent]))))),
+              Positioned(top: mq.padding.top + ui.gap(8), left: ui.inset(10), right: ui.inset(10), child: _SolidHeader(ui: ui, phaseLabel: _phaseLabel(), distanceText: _distanceText ?? '—', durationText: _durationText ?? '—', onBack: () => Navigator.of(context).maybePop())),
+              Positioned(top: mq.padding.top + ui.gap(60), right: ui.inset(10), child: _PillActionRail(ui: ui, isFollowCameraEnabled: _isFollowCameraEnabled, onOverviewMode: _activateOverviewMode, onRecenter: _recenterMap)),
               if (showLandscapePanel)
-                Positioned(
-                  top: mq.padding.top + ui.gap(60), left: ui.inset(10), bottom: ui.inset(10), width: landscapePanelWidth,
-                  child: SafeArea(top: false, child: _SolidPanelContainer(ui: ui, child: _buildSheetContent(ui, primaryLabel))),
-                )
+                Positioned(top: mq.padding.top + ui.gap(60), left: ui.inset(10), bottom: ui.inset(10), width: landscapePanelWidth, child: SafeArea(top: false, child: _SolidPanelContainer(ui: ui, child: _buildSheetContent(ui, primaryLabel))))
               else
-                Positioned(
-                  left: ui.inset(10), right: ui.inset(10), bottom: ui.inset(10),
-                  height: math.min(mq.size.height * 0.70, mq.size.height - (mq.padding.top + ui.gap(80))),
-                  child: SafeArea(
-                    top: false,
-                    child: DraggableScrollableSheet(
-                      expand: true, initialChildSize: sheetInitialSize, minChildSize: 0.15, maxChildSize: sheetMaxSize,
-                      builder: (ctx, controller) => _SolidPanelContainer(ui: ui, child: _buildSheetContent(ui, primaryLabel, controller: controller)),
-                    ),
-                  ),
-                ),
+                Positioned(left: ui.inset(10), right: ui.inset(10), bottom: ui.inset(10), height: math.min(mq.size.height * 0.70, mq.size.height - (mq.padding.top + ui.gap(80))), child: SafeArea(top: false, child: DraggableScrollableSheet(expand: true, initialChildSize: sheetInitialSize, minChildSize: 0.15, maxChildSize: sheetMaxSize, builder: (ctx, controller) => _SolidPanelContainer(ui: ui, child: _buildSheetContent(ui, primaryLabel, controller: controller))))),
             ],
           ],
         ),
@@ -890,210 +957,33 @@ class _TripNavigationPageState extends State<TripNavigationPage> with TickerProv
 
   Widget _buildSheetContent(UIScale ui, String? primaryLabel, {ScrollController? controller}) {
     return _PremiumDashboardSheet(
-      controller: controller, ui: ui, role: widget.args.role, phaseLabel: _phaseLabel(),
-      rideType: widget.args.rideType, onSOSTap: widget.args.onSOSTap,
-      driverName: widget.args.driverName ?? 'Driver', vehicleType: widget.args.vehicleType ?? 'Car', carPlate: widget.args.carPlate ?? '',
-      rating: widget.args.rating ?? 0.0, from: widget.args.originText, to: widget.args.destinationText, currentTarget: _currentTargetText,
-      distanceText: _distanceText ?? '--', durationText: _durationText ?? '--',
-      activeStopIndex: _activeStopIndex, showPrimaryAction: primaryLabel != null, primaryLabel: primaryLabel,
-      showCancelButton: widget.args.showCancelButton && (widget.args.role == TripNavigationRole.driver || (_phase == TripNavPhase.driverToPickup || _phase == TripNavPhase.waitingPickup)),
-      busyPrimary: _busyPrimaryAction, busyCancel: _busyCancel,
-      primaryEnabled: (_phase == TripNavPhase.driverToPickup && _canArrivePickup) || (_phase == TripNavPhase.waitingPickup && _canStartTrip) || (_phase == TripNavPhase.enRoute && _canArriveDestination) || (_phase == TripNavPhase.arrivedDestination && _canCompleteRide),
-      onPrimaryAction: _handlePrimaryAction, onCancelTrip: _cancelTripPressed, errorText: _lastErrorText,
+      controller: controller, ui: ui, role: widget.args.role, phaseLabel: _phaseLabel(), rideType: widget.args.rideType, onSOSTap: widget.args.onSOSTap, driverName: widget.args.driverName ?? 'Driver', vehicleType: widget.args.vehicleType ?? 'Car', carPlate: widget.args.carPlate ?? '', rating: widget.args.rating ?? 0.0, from: widget.args.originText, to: widget.args.destinationText, currentTarget: _currentTargetText, distanceText: _distanceText ?? '--', durationText: _durationText ?? '--', activeStopIndex: _activeStopIndex, showPrimaryAction: primaryLabel != null, primaryLabel: primaryLabel, showCancelButton: widget.args.showCancelButton && (widget.args.role == TripNavigationRole.driver || (_phase == TripNavPhase.driverToPickup || _phase == TripNavPhase.waitingPickup)), busyPrimary: _busyPrimaryAction, busyCancel: _busyCancel, primaryEnabled: (_phase == TripNavPhase.driverToPickup && _canArrivePickup) || (_phase == TripNavPhase.waitingPickup && _canStartTrip) || (_phase == TripNavPhase.enRoute && _canArriveDestination) || (_phase == TripNavPhase.arrivedDestination && _canCompleteRide), onPrimaryAction: _handlePrimaryAction, onCancelTrip: _cancelTripPressed, errorText: _lastErrorText,
     );
   }
 }
 
-// --- ISOLATED MAP LAYER WIDGET (Using ValueNotifier) ---
 class _OptimizedMapLayer extends StatelessWidget {
-  final ValueNotifier<Set<Marker>> markersNotifier;
-  final ValueNotifier<Set<Polyline>> polylinesNotifier;
-  final LatLng initialTarget;
-  final bool isDark;
-  final EdgeInsets padding;
-  final VoidCallback onCameraMoveStarted;
-  final void Function(GoogleMapController) onMapCreated;
-
-  const _OptimizedMapLayer({
-    required this.markersNotifier, required this.polylinesNotifier, required this.initialTarget,
-    required this.isDark, required this.padding, required this.onCameraMoveStarted, required this.onMapCreated,
-  });
-
-  String? _getMapStyle() {
-    if (!isDark) return null;
-    return '''[{"elementType":"geometry","stylers":[{"color":"#212121"}]},{"elementType":"labels.icon","stylers":[{"visibility":"off"}]},{"elementType":"labels.text.fill","stylers":[{"color":"#757575"}]},{"elementType":"labels.text.stroke","stylers":[{"color":"#212121"}]},{"featureType":"administrative","elementType":"geometry","stylers":[{"color":"#757575"}]},{"featureType":"administrative.country","elementType":"labels.text.fill","stylers":[{"color":"#9e9e9e"}]},{"featureType":"administrative.land_parcel","stylers":[{"visibility":"off"}]},{"featureType":"administrative.locality","elementType":"labels.text.fill","stylers":[{"color":"#bdbdbd"}]},{"featureType":"poi","elementType":"labels.text.fill","stylers":[{"color":"#757575"}]},{"featureType":"poi.park","elementType":"geometry","stylers":[{"color":"#181818"}]},{"featureType":"poi.park","elementType":"labels.text.fill","stylers":[{"color":"#616161"}]},{"featureType":"poi.park","elementType":"labels.text.stroke","stylers":[{"color":"#1b1b1b"}]},{"featureType":"road","elementType":"geometry.fill","stylers":[{"color":"#2c2c2c"}]},{"featureType":"road","elementType":"labels.text.fill","stylers":[{"color":"#8a8a8a"}]},{"featureType":"road.arterial","elementType":"geometry","stylers":[{"color":"#373737"}]},{"featureType":"road.highway","elementType":"geometry","stylers":[{"color":"#3c3c3c"}]},{"featureType":"road.highway.controlled_access","elementType":"geometry","stylers":[{"color":"#4e4e4e"}]},{"featureType":"road.local","elementType":"labels.text.fill","stylers":[{"color":"#616161"}]},{"featureType":"transit","elementType":"labels.text.fill","stylers":[{"color":"#757575"}]},{"featureType":"water","elementType":"geometry","stylers":[{"color":"#000000"}]},{"featureType":"water","elementType":"labels.text.fill","stylers":[{"color":"#3d3d3d"}]}]''';
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return RepaintBoundary(
-      child: ValueListenableBuilder<Set<Marker>>(
-        valueListenable: markersNotifier,
-        builder: (context, markers, _) {
-          return ValueListenableBuilder<Set<Polyline>>(
-            valueListenable: polylinesNotifier,
-            builder: (context, polylines, _) {
-              return GoogleMap(
-                initialCameraPosition: CameraPosition(target: initialTarget, zoom: 17.5, tilt: 65),
-                myLocationEnabled: false, myLocationButtonEnabled: false, zoomControlsEnabled: false,
-                compassEnabled: false, mapToolbarEnabled: false, buildingsEnabled: false,
-                indoorViewEnabled: false, trafficEnabled: false, rotateGesturesEnabled: true,
-                tiltGesturesEnabled: true, padding: padding, markers: markers, polylines: polylines,
-                onCameraMoveStarted: onCameraMoveStarted,
-                onMapCreated: (c) {
-                  if (isDark) c.setMapStyle(_getMapStyle());
-                  onMapCreated(c);
-                },
-              );
-            },
-          );
-        },
-      ),
-    );
-  }
+  final ValueNotifier<Set<Marker>> markersNotifier; final ValueNotifier<Set<Polyline>> polylinesNotifier; final LatLng initialTarget; final bool isDark; final EdgeInsets padding; final VoidCallback onCameraMoveStarted; final void Function(GoogleMapController) onMapCreated;
+  const _OptimizedMapLayer({required this.markersNotifier, required this.polylinesNotifier, required this.initialTarget, required this.isDark, required this.padding, required this.onCameraMoveStarted, required this.onMapCreated});
+  String? _getMapStyle() { if (!isDark) return null; return '''[{"elementType":"geometry","stylers":[{"color":"#212121"}]},{"elementType":"labels.icon","stylers":[{"visibility":"off"}]},{"elementType":"labels.text.fill","stylers":[{"color":"#757575"}]},{"elementType":"labels.text.stroke","stylers":[{"color":"#212121"}]},{"featureType":"administrative","elementType":"geometry","stylers":[{"color":"#757575"}]},{"featureType":"administrative.country","elementType":"labels.text.fill","stylers":[{"color":"#9e9e9e"}]},{"featureType":"administrative.land_parcel","stylers":[{"visibility":"off"}]},{"featureType":"administrative.locality","elementType":"labels.text.fill","stylers":[{"color":"#bdbdbd"}]},{"featureType":"poi","elementType":"labels.text.fill","stylers":[{"color":"#757575"}]},{"featureType":"poi.park","elementType":"geometry","stylers":[{"color":"#181818"}]},{"featureType":"poi.park","elementType":"labels.text.fill","stylers":[{"color":"#616161"}]},{"featureType":"poi.park","elementType":"labels.text.stroke","stylers":[{"color":"#1b1b1b"}]},{"featureType":"road","elementType":"geometry.fill","stylers":[{"color":"#2c2c2c"}]},{"featureType":"road","elementType":"labels.text.fill","stylers":[{"color":"#8a8a8a"}]},{"featureType":"road.arterial","elementType":"geometry","stylers":[{"color":"#373737"}]},{"featureType":"road.highway","elementType":"geometry","stylers":[{"color":"#3c3c3c"}]},{"featureType":"road.highway.controlled_access","elementType":"geometry","stylers":[{"color":"#4e4e4e"}]},{"featureType":"road.local","elementType":"labels.text.fill","stylers":[{"color":"#616161"}]},{"featureType":"transit","elementType":"labels.text.fill","stylers":[{"color":"#757575"}]},{"featureType":"water","elementType":"geometry","stylers":[{"color":"#000000"}]},{"featureType":"water","elementType":"labels.text.fill","stylers":[{"color":"#3d3d3d"}]}]'''; }
+  @override Widget build(BuildContext context) { return RepaintBoundary(child: ValueListenableBuilder<Set<Marker>>(valueListenable: markersNotifier, builder: (context, markers, _) { return ValueListenableBuilder<Set<Polyline>>(valueListenable: polylinesNotifier, builder: (context, polylines, _) { return GoogleMap(initialCameraPosition: CameraPosition(target: initialTarget, zoom: 17.5, tilt: 65), myLocationEnabled: false, myLocationButtonEnabled: false, zoomControlsEnabled: false, compassEnabled: false, mapToolbarEnabled: false, buildingsEnabled: false, indoorViewEnabled: false, trafficEnabled: false, rotateGesturesEnabled: true, tiltGesturesEnabled: true, padding: padding, markers: markers, polylines: polylines, onCameraMoveStarted: onCameraMoveStarted, onMapCreated: (c) { if (isDark) c.setMapStyle(_getMapStyle()); onMapCreated(c); }); }); })); }
 }
 
-// --- PREMIUM UI WIDGETS ---
 class _PremiumDashboardSheet extends StatelessWidget {
-  final ScrollController? controller; final UIScale ui; final TripNavigationRole role; final String phaseLabel;
-  final String rideType; final VoidCallback? onSOSTap;
-  final String driverName, vehicleType, carPlate; final double rating; final String from, to, currentTarget;
-  final String distanceText, durationText;
-  final int activeStopIndex; final bool showPrimaryAction; final String? primaryLabel;
-  final bool showCancelButton, busyPrimary, busyCancel, primaryEnabled;
-  final VoidCallback onPrimaryAction, onCancelTrip; final String? errorText;
-
-  const _PremiumDashboardSheet({
-    required this.controller, required this.ui, required this.role, required this.phaseLabel,
-    required this.rideType, this.onSOSTap,
-    required this.driverName, required this.vehicleType, required this.carPlate, required this.rating, required this.from, required this.to, required this.currentTarget, required this.distanceText, required this.durationText, required this.activeStopIndex, required this.showPrimaryAction, required this.primaryLabel, required this.showCancelButton, required this.busyPrimary, required this.busyCancel, required this.primaryEnabled, required this.onPrimaryAction, required this.onCancelTrip, required this.errorText
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final Color os = Theme.of(context).colorScheme.onSurface;
-    final String modeLabel = role == TripNavigationRole.driver ? "DRIVER COMMAND" : "RIDER MODE";
-    final String profileTitle = role == TripNavigationRole.driver ? "YOUR RIDER" : "YOUR DRIVER";
-
+  final ScrollController? controller; final UIScale ui; final TripNavigationRole role; final String phaseLabel; final String rideType; final VoidCallback? onSOSTap; final String driverName, vehicleType, carPlate; final double rating; final String from, to, currentTarget; final String distanceText, durationText; final int activeStopIndex; final bool showPrimaryAction; final String? primaryLabel; final bool showCancelButton, busyPrimary, busyCancel, primaryEnabled; final VoidCallback onPrimaryAction, onCancelTrip; final String? errorText;
+  const _PremiumDashboardSheet({required this.controller, required this.ui, required this.role, required this.phaseLabel, required this.rideType, this.onSOSTap, required this.driverName, required this.vehicleType, required this.carPlate, required this.rating, required this.from, required this.to, required this.currentTarget, required this.distanceText, required this.durationText, required this.activeStopIndex, required this.showPrimaryAction, required this.primaryLabel, required this.showCancelButton, required this.busyPrimary, required this.busyCancel, required this.primaryEnabled, required this.onPrimaryAction, required this.onCancelTrip, required this.errorText});
+  @override Widget build(BuildContext context) {
+    final Color os = Theme.of(context).colorScheme.onSurface; final String modeLabel = role == TripNavigationRole.driver ? "DRIVER COMMAND" : "RIDER MODE"; final String profileTitle = role == TripNavigationRole.driver ? "YOUR RIDER" : "YOUR DRIVER";
     final List<Widget> content = [
       if (controller != null) ...[SizedBox(height: ui.gap(10)), Center(child: Container(width: 36, height: 4, decoration: BoxDecoration(color: os.withOpacity(0.2), borderRadius: BorderRadius.circular(2)))), SizedBox(height: ui.gap(12))] else SizedBox(height: ui.gap(12)),
-
-      // Dynamic Context Header + SOS Button
-      Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Container(
-            padding: EdgeInsets.symmetric(horizontal: ui.inset(8), vertical: ui.inset(4)),
-            decoration: BoxDecoration(color: AppColors.primary.withOpacity(0.15), borderRadius: BorderRadius.circular(6)),
-            child: Text("$modeLabel • ${rideType.toUpperCase()}", style: TextStyle(color: AppColors.primary, fontSize: ui.font(8.5), fontWeight: FontWeight.w900, letterSpacing: 0.5)),
-          ),
-
-          GestureDetector(
-            onTap: onSOSTap ?? () {},
-            child: Container(
-              padding: EdgeInsets.symmetric(horizontal: ui.inset(10), vertical: ui.inset(4)),
-              decoration: BoxDecoration(color: Colors.red.withOpacity(0.1), border: Border.all(color: Colors.red.withOpacity(0.5), width: 1.0), borderRadius: BorderRadius.circular(16)),
-              child: Row(
-                children: [
-                  Icon(Icons.emergency_share_rounded, color: Colors.red, size: ui.icon(14)),
-                  SizedBox(width: ui.gap(4)),
-                  Text("SOS", style: TextStyle(color: Colors.red, fontSize: ui.font(10), fontWeight: FontWeight.w900, letterSpacing: 0.5)),
-                ],
-              ),
-            ),
-          )
-        ],
-      ),
-      SizedBox(height: ui.gap(12)),
-
-      Text(profileTitle, style: TextStyle(color: os.withOpacity(0.5), fontSize: ui.font(8.5), fontWeight: FontWeight.w800, letterSpacing: 0.5)),
-      SizedBox(height: ui.gap(6)),
-
-      // Driver/Rider Profile Row
-      Row(
-        crossAxisAlignment: CrossAxisAlignment.center,
-        children: [
-          CircleAvatar(radius: ui.font(18), backgroundColor: AppColors.primary.withOpacity(0.15), child: Icon(Icons.person, color: AppColors.primary, size: ui.icon(18))),
-          SizedBox(width: ui.gap(10)),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(driverName.toUpperCase(), style: TextStyle(color: os, fontSize: ui.font(14), fontWeight: FontWeight.w900, letterSpacing: 0.2)),
-                SizedBox(height: ui.gap(2)),
-                Text(vehicleType, style: TextStyle(color: os.withOpacity(0.6), fontSize: ui.font(10), fontWeight: FontWeight.w600)),
-              ],
-            ),
-          ),
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.end,
-            children: [
-              if (rating > 0) Container(padding: EdgeInsets.symmetric(horizontal: ui.inset(6), vertical: ui.inset(3)), decoration: BoxDecoration(color: Colors.amber.withOpacity(0.15), borderRadius: BorderRadius.circular(8)), child: Row(children: [Icon(Icons.star_rounded, color: Colors.amber, size: ui.icon(12)), SizedBox(width: ui.gap(2)), Text(rating.toStringAsFixed(1), style: TextStyle(color: Colors.amber, fontWeight: FontWeight.w800, fontSize: ui.font(10)))])),
-              if (rating > 0) SizedBox(height: ui.gap(6)),
-              if (carPlate.isNotEmpty) Container(padding: EdgeInsets.symmetric(horizontal: ui.inset(6), vertical: ui.inset(3)), decoration: BoxDecoration(color: const Color(0xFFFACC15), borderRadius: BorderRadius.circular(4), border: Border.all(color: Colors.black87, width: 1.0)), child: Text(carPlate.toUpperCase(), style: TextStyle(color: Colors.black, fontWeight: FontWeight.w900, fontSize: ui.font(10), letterSpacing: 1.0))),
-            ],
-          )
-        ],
-      ),
-
-      SizedBox(height: ui.gap(16)),
-
-      // The "Meta" Status Card
-      Container(
-        padding: EdgeInsets.all(ui.inset(12)),
-        decoration: BoxDecoration(gradient: LinearGradient(colors: [AppColors.primary, AppColors.primary.withOpacity(0.8)], begin: Alignment.topLeft, end: Alignment.bottomRight), borderRadius: BorderRadius.circular(ui.radius(14))),
-        child: Row(
-          children: [
-            Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text('CURRENT TARGET', style: TextStyle(color: Colors.white.withOpacity(0.8), fontSize: ui.font(8.5), fontWeight: FontWeight.w800, letterSpacing: 0.5)), SizedBox(height: ui.gap(4)), Text(currentTarget, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(color: Colors.white, fontSize: ui.font(13), fontWeight: FontWeight.w800))])),
-            Container(width: 1, height: 24, color: Colors.white.withOpacity(0.3), margin: EdgeInsets.symmetric(horizontal: ui.inset(10))),
-            Column(crossAxisAlignment: CrossAxisAlignment.end, children: [Text(durationText, style: TextStyle(color: Colors.white, fontSize: ui.font(16), fontWeight: FontWeight.w900, height: 1.0)), Text(distanceText, style: TextStyle(color: Colors.white.withOpacity(0.8), fontSize: ui.font(9.5), fontWeight: FontWeight.w700))]),
-          ],
-        ),
-      ),
-
-      SizedBox(height: ui.gap(16)),
-
-      // Visual Timeline Tracker
-      Text('TRIP ROUTE', style: TextStyle(color: os.withOpacity(0.5), fontSize: ui.font(8.5), fontWeight: FontWeight.w800, letterSpacing: 0.5)),
-      SizedBox(height: ui.gap(8)),
-      Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Column(
-            children: [
-              Icon(Icons.radio_button_checked, color: AppColors.primary, size: ui.icon(14)),
-              Container(width: 1.5, height: ui.gap(18), color: os.withOpacity(0.15)),
-              Icon(Icons.location_on, color: Colors.green, size: ui.icon(14)),
-            ],
-          ),
-          SizedBox(width: ui.gap(10)),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(from, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(color: os, fontSize: ui.font(11.5), fontWeight: FontWeight.w700)),
-                SizedBox(height: ui.gap(16)),
-                Text(to, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(color: os, fontSize: ui.font(11.5), fontWeight: FontWeight.w700)),
-              ],
-            ),
-          )
-        ],
-      ),
-
-      if (errorText != null && errorText!.trim().isNotEmpty) ...[SizedBox(height: ui.gap(16)), Container(padding: EdgeInsets.all(ui.inset(10)), decoration: BoxDecoration(color: AppColors.error.withOpacity(0.1), borderRadius: BorderRadius.circular(ui.radius(10)), border: Border.all(color: AppColors.error.withOpacity(0.3))), child: Row(children: [Icon(Icons.error_outline_rounded, color: AppColors.error, size: ui.icon(14)), SizedBox(width: ui.gap(6)), Expanded(child: Text(errorText!, style: TextStyle(color: AppColors.error, fontWeight: FontWeight.w800, fontSize: ui.font(10))))]))],
-
-      SizedBox(height: ui.gap(20)),
-
-      // Action Buttons
-      Row(
-        children: [
-          if (showPrimaryAction) Expanded(flex: 2, child: _PremiumButton(label: primaryLabel ?? 'ACTION', isLoading: busyPrimary, isDisabled: !primaryEnabled, isPrimary: true, onTap: onPrimaryAction, ui: ui)),
-          if (showPrimaryAction && showCancelButton) SizedBox(width: ui.gap(10)),
-          if (showCancelButton) Expanded(flex: 1, child: _PremiumButton(label: 'CANCEL', isLoading: busyCancel, isDisabled: false, isPrimary: false, onTap: onCancelTrip, ui: ui))
-        ],
-      ),
-      SizedBox(height: ui.gap(16)),
+      Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, crossAxisAlignment: CrossAxisAlignment.start, children: [Container(padding: EdgeInsets.symmetric(horizontal: ui.inset(8), vertical: ui.inset(4)), decoration: BoxDecoration(color: AppColors.primary.withOpacity(0.15), borderRadius: BorderRadius.circular(6)), child: Text("$modeLabel • ${rideType.toUpperCase()}", style: TextStyle(color: AppColors.primary, fontSize: ui.font(8.5), fontWeight: FontWeight.w900, letterSpacing: 0.5))), GestureDetector(onTap: onSOSTap ?? () {}, child: Container(padding: EdgeInsets.symmetric(horizontal: ui.inset(10), vertical: ui.inset(4)), decoration: BoxDecoration(color: Colors.red.withOpacity(0.1), border: Border.all(color: Colors.red.withOpacity(0.5), width: 1.0), borderRadius: BorderRadius.circular(16)), child: Row(children: [Icon(Icons.emergency_share_rounded, color: Colors.red, size: ui.icon(14)), SizedBox(width: ui.gap(4)), Text("SOS", style: TextStyle(color: Colors.red, fontSize: ui.font(10), fontWeight: FontWeight.w900, letterSpacing: 0.5))])))]), SizedBox(height: ui.gap(12)),
+      Text(profileTitle, style: TextStyle(color: os.withOpacity(0.5), fontSize: ui.font(8.5), fontWeight: FontWeight.w800, letterSpacing: 0.5)), SizedBox(height: ui.gap(6)),
+      Row(crossAxisAlignment: CrossAxisAlignment.center, children: [CircleAvatar(radius: ui.font(18), backgroundColor: AppColors.primary.withOpacity(0.15), child: Icon(Icons.person, color: AppColors.primary, size: ui.icon(18))), SizedBox(width: ui.gap(10)), Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text(driverName.toUpperCase(), style: TextStyle(color: os, fontSize: ui.font(14), fontWeight: FontWeight.w900, letterSpacing: 0.2)), SizedBox(height: ui.gap(2)), Text(vehicleType, style: TextStyle(color: os.withOpacity(0.6), fontSize: ui.font(10), fontWeight: FontWeight.w600))])), Column(crossAxisAlignment: CrossAxisAlignment.end, children: [if (rating > 0) Container(padding: EdgeInsets.symmetric(horizontal: ui.inset(6), vertical: ui.inset(3)), decoration: BoxDecoration(color: Colors.amber.withOpacity(0.15), borderRadius: BorderRadius.circular(8)), child: Row(children: [Icon(Icons.star_rounded, color: Colors.amber, size: ui.icon(12)), SizedBox(width: ui.gap(2)), Text(rating.toStringAsFixed(1), style: TextStyle(color: Colors.amber, fontWeight: FontWeight.w800, fontSize: ui.font(10)))])), if (rating > 0) SizedBox(height: ui.gap(6)), if (carPlate.isNotEmpty) Container(padding: EdgeInsets.symmetric(horizontal: ui.inset(6), vertical: ui.inset(3)), decoration: BoxDecoration(color: const Color(0xFFFACC15), borderRadius: BorderRadius.circular(4), border: Border.all(color: Colors.black87, width: 1.0)), child: Text(carPlate.toUpperCase(), style: TextStyle(color: Colors.black, fontWeight: FontWeight.w900, fontSize: ui.font(10), letterSpacing: 1.0)))])]), SizedBox(height: ui.gap(16)),
+      Container(padding: EdgeInsets.all(ui.inset(12)), decoration: BoxDecoration(gradient: LinearGradient(colors: [AppColors.primary, AppColors.primary.withOpacity(0.8)], begin: Alignment.topLeft, end: Alignment.bottomRight), borderRadius: BorderRadius.circular(ui.radius(14))), child: Row(children: [Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text('CURRENT TARGET', style: TextStyle(color: Colors.white.withOpacity(0.8), fontSize: ui.font(8.5), fontWeight: FontWeight.w800, letterSpacing: 0.5)), SizedBox(height: ui.gap(4)), Text(currentTarget, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(color: Colors.white, fontSize: ui.font(13), fontWeight: FontWeight.w800))])), Container(width: 1, height: 24, color: Colors.white.withOpacity(0.3), margin: EdgeInsets.symmetric(horizontal: ui.inset(10))), Column(crossAxisAlignment: CrossAxisAlignment.end, children: [Text(durationText, style: TextStyle(color: Colors.white, fontSize: ui.font(16), fontWeight: FontWeight.w900, height: 1.0)), Text(distanceText, style: TextStyle(color: Colors.white.withOpacity(0.8), fontSize: ui.font(9.5), fontWeight: FontWeight.w700))])])), SizedBox(height: ui.gap(16)),
+      Text('TRIP ROUTE', style: TextStyle(color: os.withOpacity(0.5), fontSize: ui.font(8.5), fontWeight: FontWeight.w800, letterSpacing: 0.5)), SizedBox(height: ui.gap(8)),
+      Row(crossAxisAlignment: CrossAxisAlignment.start, children: [Column(children: [Icon(Icons.radio_button_checked, color: AppColors.primary, size: ui.icon(14)), Container(width: 1.5, height: ui.gap(18), color: os.withOpacity(0.15)), Icon(Icons.location_on, color: Colors.green, size: ui.icon(14))]), SizedBox(width: ui.gap(10)), Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text(from, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(color: os, fontSize: ui.font(11.5), fontWeight: FontWeight.w700)), SizedBox(height: ui.gap(16)), Text(to, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(color: os, fontSize: ui.font(11.5), fontWeight: FontWeight.w700))]))]),
+      if (errorText != null && errorText!.trim().isNotEmpty) ...[SizedBox(height: ui.gap(16)), Container(padding: EdgeInsets.all(ui.inset(10)), decoration: BoxDecoration(color: AppColors.error.withOpacity(0.1), borderRadius: BorderRadius.circular(ui.radius(10)), border: Border.all(color: AppColors.error.withOpacity(0.3))), child: Row(children: [Icon(Icons.error_outline_rounded, color: AppColors.error, size: ui.icon(14)), SizedBox(width: ui.gap(6)), Expanded(child: Text(errorText!, style: TextStyle(color: AppColors.error, fontWeight: FontWeight.w800, fontSize: ui.font(10))))]))], SizedBox(height: ui.gap(20)),
+      Row(children: [if (showPrimaryAction) Expanded(flex: 2, child: _PremiumButton(label: primaryLabel ?? 'ACTION', isLoading: busyPrimary, isDisabled: !primaryEnabled, isPrimary: true, onTap: onPrimaryAction, ui: ui)), if (showPrimaryAction && showCancelButton) SizedBox(width: ui.gap(10)), if (showCancelButton) Expanded(flex: 1, child: _PremiumButton(label: 'CANCEL', isLoading: busyCancel, isDisabled: false, isPrimary: false, onTap: onCancelTrip, ui: ui))]), SizedBox(height: ui.gap(16)),
     ];
     return controller != null ? ListView(controller: controller, padding: EdgeInsets.symmetric(horizontal: ui.inset(16)), children: content) : SingleChildScrollView(padding: EdgeInsets.symmetric(horizontal: ui.inset(16)), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: content));
   }
@@ -1102,92 +992,34 @@ class _PremiumDashboardSheet extends StatelessWidget {
 class _PremiumButton extends StatelessWidget {
   final String label; final bool isLoading, isDisabled, isPrimary; final VoidCallback onTap; final UIScale ui;
   const _PremiumButton({required this.label, required this.isLoading, this.isDisabled = false, required this.isPrimary, required this.onTap, required this.ui});
-  @override
-  Widget build(BuildContext context) {
+  @override Widget build(BuildContext context) {
     final os = Theme.of(context).colorScheme.onSurface; final bool disabled = isLoading || isDisabled;
-    return GestureDetector(
-      onTap: disabled ? null : onTap,
-      child: Container(
-        height: ui.gap(44), alignment: Alignment.center,
-        decoration: BoxDecoration(
-          gradient: isPrimary ? LinearGradient(colors: [disabled ? AppColors.primary.withOpacity(0.4) : AppColors.primary, disabled ? AppColors.primary.withOpacity(0.4) : AppColors.primary.withRed(100)]) : null,
-          color: !isPrimary ? Colors.transparent : null,
-          borderRadius: BorderRadius.circular(ui.radius(12)),
-          border: Border.all(color: isPrimary ? Colors.transparent : os.withOpacity(0.2), width: 1.0),
-        ),
-        child: isLoading ? SizedBox(width: ui.gap(16), height: ui.gap(16), child: CircularProgressIndicator(strokeWidth: 2.0, color: isPrimary ? Colors.white : os)) : Text(label, style: TextStyle(color: isPrimary ? Colors.white.withOpacity(disabled ? 0.7 : 1.0) : os.withOpacity(disabled ? 0.5 : 0.9), fontSize: ui.font(12.5), fontWeight: FontWeight.w900, letterSpacing: 0.5)),
-      ),
-    );
+    return GestureDetector(onTap: disabled ? null : onTap, child: Container(height: ui.gap(44), alignment: Alignment.center, decoration: BoxDecoration(gradient: isPrimary ? LinearGradient(colors: [disabled ? AppColors.primary.withOpacity(0.4) : AppColors.primary, disabled ? AppColors.primary.withOpacity(0.4) : AppColors.primary.withRed(100)]) : null, color: !isPrimary ? Colors.transparent : null, borderRadius: BorderRadius.circular(ui.radius(12)), border: Border.all(color: isPrimary ? Colors.transparent : os.withOpacity(0.2), width: 1.0)), child: isLoading ? SizedBox(width: ui.gap(16), height: ui.gap(16), child: CircularProgressIndicator(strokeWidth: 2.0, color: isPrimary ? Colors.white : os)) : Text(label, style: TextStyle(color: isPrimary ? Colors.white.withOpacity(disabled ? 0.7 : 1.0) : os.withOpacity(disabled ? 0.5 : 0.9), fontSize: ui.font(12.5), fontWeight: FontWeight.w900, letterSpacing: 0.5))));
   }
 }
 
 class _SolidPanelContainer extends StatelessWidget {
   final Widget child; final UIScale ui;
   const _SolidPanelContainer({required this.child, required this.ui});
-  @override
-  Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    return Container(
-      decoration: BoxDecoration(
-        color: Theme.of(context).brightness == Brightness.dark ? cs.surface : Colors.white,
-        borderRadius: BorderRadius.circular(ui.radius(20)), border: Border.all(color: cs.outlineVariant.withOpacity(0.3), width: 1.0),
-      ),
-      child: ClipRRect(borderRadius: BorderRadius.circular(ui.radius(20)), child: child),
-    );
-  }
+  @override Widget build(BuildContext context) { final cs = Theme.of(context).colorScheme; return Container(decoration: BoxDecoration(color: Theme.of(context).brightness == Brightness.dark ? cs.surface : Colors.white, borderRadius: BorderRadius.circular(ui.radius(20)), border: Border.all(color: cs.outlineVariant.withOpacity(0.3), width: 1.0)), child: ClipRRect(borderRadius: BorderRadius.circular(ui.radius(20)), child: child)); }
 }
 
 class _SolidHeader extends StatelessWidget {
   final UIScale ui; final String phaseLabel, distanceText, durationText; final VoidCallback onBack;
   const _SolidHeader({required this.ui, required this.phaseLabel, required this.distanceText, required this.durationText, required this.onBack});
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      height: ui.gap(44), padding: EdgeInsets.symmetric(horizontal: ui.inset(8)),
-      decoration: BoxDecoration(color: Colors.black.withOpacity(0.85), borderRadius: BorderRadius.circular(ui.radius(16)), border: Border.all(color: Colors.white.withOpacity(0.15), width: 1.0)),
-      child: Row(
-        children: [
-          IconButton(onPressed: onBack, padding: EdgeInsets.zero, constraints: const BoxConstraints(), icon: Icon(Icons.close_rounded, color: Colors.white, size: ui.icon(16))),
-          SizedBox(width: ui.gap(10)), Container(width: 1, height: ui.gap(20), color: Colors.white.withOpacity(0.2)), SizedBox(width: ui.gap(10)),
-          Icon(Icons.directions_car_rounded, color: AppColors.primary, size: ui.icon(14)), SizedBox(width: ui.gap(6)),
-          Expanded(child: Text(phaseLabel, style: TextStyle(color: Colors.white, fontWeight: FontWeight.w900, fontSize: ui.font(11.5), letterSpacing: 0.2))),
-          Container(width: 1, height: ui.gap(20), color: Colors.white.withOpacity(0.2)), SizedBox(width: ui.gap(10)),
-          Column(mainAxisAlignment: MainAxisAlignment.center, crossAxisAlignment: CrossAxisAlignment.end, children: [Text(durationText, style: TextStyle(color: AppColors.primary, fontWeight: FontWeight.w900, fontSize: ui.font(14), height: 1.1)), Text(distanceText, style: TextStyle(color: Colors.white70, fontWeight: FontWeight.w700, fontSize: ui.font(9.5), height: 1.1))]),
-        ],
-      ),
-    );
-  }
+  @override Widget build(BuildContext context) { return Container(height: ui.gap(44), padding: EdgeInsets.symmetric(horizontal: ui.inset(8)), decoration: BoxDecoration(color: Colors.black.withOpacity(0.85), borderRadius: BorderRadius.circular(ui.radius(16)), border: Border.all(color: Colors.white.withOpacity(0.15), width: 1.0)), child: Row(children: [IconButton(onPressed: onBack, padding: EdgeInsets.zero, constraints: const BoxConstraints(), icon: Icon(Icons.close_rounded, color: Colors.white, size: ui.icon(16))), SizedBox(width: ui.gap(10)), Container(width: 1, height: ui.gap(20), color: Colors.white.withOpacity(0.2)), SizedBox(width: ui.gap(10)), Icon(Icons.directions_car_rounded, color: AppColors.primary, size: ui.icon(14)), SizedBox(width: ui.gap(6)), Expanded(child: Text(phaseLabel, style: TextStyle(color: Colors.white, fontWeight: FontWeight.w900, fontSize: ui.font(11.5), letterSpacing: 0.2))), Container(width: 1, height: ui.gap(20), color: Colors.white.withOpacity(0.2)), SizedBox(width: ui.gap(10)), Column(mainAxisAlignment: MainAxisAlignment.center, crossAxisAlignment: CrossAxisAlignment.end, children: [Text(durationText, style: TextStyle(color: AppColors.primary, fontWeight: FontWeight.w900, fontSize: ui.font(14), height: 1.1)), Text(distanceText, style: TextStyle(color: Colors.white70, fontWeight: FontWeight.w700, fontSize: ui.font(9.5), height: 1.1))])])); }
 }
 
 class _PillActionRail extends StatelessWidget {
   final bool isFollowCameraEnabled; final VoidCallback onOverviewMode, onRecenter; final UIScale ui;
   const _PillActionRail({required this.isFollowCameraEnabled, required this.onOverviewMode, required this.onRecenter, required this.ui});
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.end,
-      children: [
-        _ActionPill(icon: Icons.map_rounded, label: 'Overview', isActive: !isFollowCameraEnabled, onTap: onOverviewMode, ui: ui),
-        if (!isFollowCameraEnabled) ...[SizedBox(height: ui.gap(8)), _ActionPill(icon: Icons.my_location_rounded, label: 'Re-center', isActive: true, onTap: onRecenter, ui: ui)]
-      ],
-    );
-  }
+  @override Widget build(BuildContext context) { return Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.end, children: [_ActionPill(icon: Icons.map_rounded, label: 'Overview', isActive: !isFollowCameraEnabled, onTap: onOverviewMode, ui: ui), if (!isFollowCameraEnabled) ...[SizedBox(height: ui.gap(8)), _ActionPill(icon: Icons.my_location_rounded, label: 'Re-center', isActive: true, onTap: onRecenter, ui: ui)]]); }
 }
 
 class _ActionPill extends StatelessWidget {
   final IconData icon; final String label; final bool isActive; final VoidCallback onTap; final UIScale ui;
   const _ActionPill({required this.icon, required this.label, required this.isActive, required this.onTap, required this.ui});
-  @override
-  Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        padding: EdgeInsets.symmetric(horizontal: ui.inset(12), vertical: ui.inset(8)),
-        decoration: BoxDecoration(color: Colors.black.withOpacity(0.85), borderRadius: BorderRadius.circular(ui.radius(16)), border: Border.all(color: isActive ? AppColors.primary.withOpacity(0.8) : Colors.white.withOpacity(0.15), width: 1.0)),
-        child: Row(mainAxisSize: MainAxisSize.min, children: [Icon(icon, color: isActive ? AppColors.primary : Colors.white70, size: ui.icon(14)), SizedBox(width: ui.gap(8)), Text(label, style: TextStyle(color: isActive ? Colors.white : Colors.white70, fontSize: ui.font(11.5), fontWeight: FontWeight.w900, letterSpacing: 0.2))]),
-      ),
-    );
-  }
+  @override Widget build(BuildContext context) { return GestureDetector(onTap: onTap, child: Container(padding: EdgeInsets.symmetric(horizontal: ui.inset(12), vertical: ui.inset(8)), decoration: BoxDecoration(color: Colors.black.withOpacity(0.85), borderRadius: BorderRadius.circular(ui.radius(16)), border: Border.all(color: isActive ? AppColors.primary.withOpacity(0.8) : Colors.white.withOpacity(0.15), width: 1.0)), child: Row(mainAxisSize: MainAxisSize.min, children: [Icon(icon, color: isActive ? AppColors.primary : Colors.white70, size: ui.icon(14)), SizedBox(width: ui.gap(8)), Text(label, style: TextStyle(color: isActive ? Colors.white : Colors.white70, fontSize: ui.font(11.5), fontWeight: FontWeight.w900, letterSpacing: 0.2))]))); }
 }
 
 class _RouteResult { final List<LatLng> points; final int distanceMeters, durationSeconds; const _RouteResult({required this.points, required this.distanceMeters, required this.durationSeconds}); }

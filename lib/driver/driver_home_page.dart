@@ -12,6 +12,7 @@ import 'package:geolocator/geolocator.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:url_launcher/url_launcher.dart'; // REQUIRED FOR CALL BUTTONS
 
 import '../api/api_client.dart';
 import '../api/url.dart';
@@ -29,7 +30,7 @@ import '../screens/state/map_graphics_engine.dart';
 import '../screens/state/location_permission_modal.dart';
 import 'state/driver_models.dart';
 import 'state/driver_command_center.dart';
-import 'widgets/delivery_otp_sheet.dart'; // Implemented properly
+import 'widgets/delivery_otp_sheet.dart';
 
 class _Kalman1D {
   final double q;
@@ -920,6 +921,14 @@ class _DriverHomePageState extends State<DriverHomePage> with WidgetsBindingObse
             padding: EdgeInsets.symmetric(horizontal: uiScale.inset(12)),
             child: _booting
                 ? Container(height: 150, decoration: BoxDecoration(color: cs.surface.withOpacity(0.95), borderRadius: BorderRadius.circular(uiScale.radius(28))), child: const Center(child: CircularProgressIndicator()))
+                : (_activeRide != null)
+            // 🚀 HIGH-END ACTIVE RIDE UI (REPLACES COMMAND CENTER WHEN RIDE IS ACTIVE)
+                ? _AdvancedActiveRideCard(
+              ride: _activeRide!,
+              uiScale: uiScale,
+              onNavigate: _openTripNavigation,
+            )
+            // 🛑 STANDARD COMMAND CENTER FOR IDLE/QUEUE STATE
                 : DriverCommandCenter(
               uiScale: uiScale,
               height: panelExpandedHeight,
@@ -1027,6 +1036,271 @@ class _IsolatedDriverMapLayer extends StatelessWidget {
             },
           );
         },
+      ),
+    );
+  }
+}
+
+
+// ============================================================================
+// 🚀 ADVANCED ACTIVE RIDE CARD (TREE LAYOUT, IMAGE VIEWER & CALL ACTIONS)
+// ============================================================================
+
+class _AdvancedActiveRideCard extends StatelessWidget {
+  final RideJob ride;
+  final UIScale uiScale;
+  final VoidCallback onNavigate;
+
+  const _AdvancedActiveRideCard({
+    required this.ride,
+    required this.uiScale,
+    required this.onNavigate,
+  });
+
+  Future<void> _makePhoneCall(String phoneNumber) async {
+    final Uri launchUri = Uri(scheme: 'tel', path: phoneNumber);
+    if (await canLaunchUrl(launchUri)) {
+      await launchUrl(launchUri);
+    }
+  }
+
+  void _showFullImage(BuildContext context, String imageUrl) {
+    showDialog(
+      context: context,
+      builder: (ctx) => Dialog(
+        backgroundColor: Colors.transparent,
+        insetPadding: EdgeInsets.all(uiScale.inset(12)),
+        child: Stack(
+          alignment: Alignment.center,
+          children: [
+            InteractiveViewer(
+              panEnabled: true,
+              boundaryMargin: EdgeInsets.zero,
+              minScale: 1.0,
+              maxScale: 4.0,
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(uiScale.radius(16)),
+                child: Image.network(imageUrl, fit: BoxFit.contain),
+              ),
+            ),
+            Positioned(
+              top: 16,
+              right: 16,
+              child: IconButton(
+                icon: const Icon(Icons.close_rounded, color: Colors.white, size: 32),
+                onPressed: () => Navigator.pop(ctx),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final cs = theme.colorScheme;
+    final os = cs.onSurface; // <-- Add this line right here
+    final isDark = theme.brightness == Brightness.dark;
+
+    // Determine ride type string
+    String displayType = ride.rideType.replaceAll('_', ' ').toUpperCase();
+    bool isDelivery = ride.rideType == 'send_me' || ride.rideType == 'dispatch';
+
+    // Determine the phone numbers
+    final String senderPhone = ride.riderPhone ?? '';
+    final String receiverPhone = ride.recipientPhone ?? '';
+
+    return Container(
+      width: double.infinity,
+      padding: EdgeInsets.all(uiScale.inset(16)),
+      decoration: BoxDecoration(
+        color: isDark ? cs.surface : Colors.white,
+        borderRadius: BorderRadius.circular(uiScale.radius(24)),
+        boxShadow: [
+          BoxShadow(color: Colors.black.withOpacity(0.08), blurRadius: 20, offset: const Offset(0, 8)),
+        ],
+        border: Border.all(color: cs.outlineVariant.withOpacity(0.3), width: 1.0),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+
+          // HEADER (Type & Status)
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(
+                'Active $displayType',
+                style: TextStyle(color: cs.onSurface, fontSize: uiScale.font(14), fontWeight: FontWeight.w900, letterSpacing: 0.3),
+              ),
+              Container(
+                padding: EdgeInsets.symmetric(horizontal: uiScale.inset(10), vertical: uiScale.inset(4)),
+                decoration: BoxDecoration(
+                  color: AppColors.primary.withOpacity(0.15),
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                child: Row(
+                  children: [
+                    Container(width: 6, height: 6, decoration: const BoxDecoration(color: AppColors.primary, shape: BoxShape.circle)),
+                    SizedBox(width: uiScale.gap(6)),
+                    Text('Live', style: TextStyle(color: AppColors.primary, fontSize: uiScale.font(10), fontWeight: FontWeight.w800)),
+                  ],
+                ),
+              ),
+            ],
+          ),
+
+          // SECURE OTP WARNING
+          if (ride.deliveryOtp != null && ride.deliveryOtp!.isNotEmpty) ...[
+            SizedBox(height: uiScale.gap(12)),
+            Container(
+              padding: EdgeInsets.all(uiScale.inset(8)),
+              decoration: BoxDecoration(color: Colors.orange.withOpacity(0.15), borderRadius: BorderRadius.circular(uiScale.radius(8))),
+              child: Row(
+                children: [
+                  Icon(Icons.shield_rounded, color: Colors.orange.shade700, size: uiScale.icon(14)),
+                  SizedBox(width: uiScale.gap(8)),
+                  Expanded(child: Text('Secure OTP required at destination to complete dropoff.', style: TextStyle(color: Colors.orange.shade800, fontSize: uiScale.font(10), fontWeight: FontWeight.w700))),
+                ],
+              ),
+            ),
+          ],
+
+          SizedBox(height: uiScale.gap(16)),
+
+          // FULL IMAGE VIEWER (FOR DELIVERIES)
+          if (isDelivery && ride.packageImage != null && ride.packageImage!.isNotEmpty) ...[
+            GestureDetector(
+              onTap: () => _showFullImage(context, ride.packageImage!),
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(uiScale.radius(12)),
+                child: Stack(
+                  alignment: Alignment.center,
+                  children: [
+                    Image.network(
+                      ride.packageImage!,
+                      width: double.infinity,
+                      height: uiScale.gap(120),
+                      fit: BoxFit.cover,
+                      errorBuilder: (_, __, ___) => Container(height: uiScale.gap(120), color: cs.surfaceVariant, child: const Icon(Icons.inventory_2_rounded)),
+                    ),
+                    Container(
+                      padding: const EdgeInsets.all(8),
+                      decoration: BoxDecoration(color: Colors.black54, shape: BoxShape.circle),
+                      child: const Icon(Icons.fullscreen_rounded, color: Colors.white, size: 24),
+                    )
+                  ],
+                ),
+              ),
+            ),
+            SizedBox(height: uiScale.gap(8)),
+            Text(
+              "${(ride.packageSize ?? 'PACKAGE').toUpperCase()} • ${ride.packageWeight.toStringAsFixed(1)}kg",
+              style: TextStyle(color: cs.onSurface.withOpacity(0.6), fontSize: uiScale.font(10), fontWeight: FontWeight.w800, letterSpacing: 0.5),
+            ),
+            SizedBox(height: uiScale.gap(16)),
+          ],
+
+          // TREE LAYOUT FOR LOCATIONS & CALL BUTTONS
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // Tree Graphics Column
+              Column(
+                children: [
+                  Icon(Icons.radio_button_checked, color: AppColors.primary, size: uiScale.icon(16)),
+                  Container(width: 2, height: uiScale.gap(45), color: cs.onSurface.withOpacity(0.15)),
+                  Icon(Icons.location_on, color: Colors.green, size: uiScale.icon(16)),
+                ],
+              ),
+              SizedBox(width: uiScale.gap(12)),
+
+              // Locations Data Column
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+
+                    // FROM (PICKUP)
+                    Text('FROM', style: TextStyle(color: cs.onSurface.withOpacity(0.5), fontSize: uiScale.font(8), fontWeight: FontWeight.w800, letterSpacing: 0.5)),
+                    Text(ride.pickupText, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(color: cs.onSurface, fontSize: uiScale.font(13), fontWeight: FontWeight.w800)),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Text(ride.riderName.isNotEmpty ? ride.riderName : 'Sender', style: TextStyle(color: cs.onSurface.withOpacity(0.6), fontSize: uiScale.font(11), fontWeight: FontWeight.w600)),
+                        if (senderPhone.isNotEmpty)
+                          GestureDetector(
+                            onTap: () => _makePhoneCall(senderPhone),
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                              decoration: BoxDecoration(color: Colors.green.withOpacity(0.1), borderRadius: BorderRadius.circular(12)),
+                              child: Row(
+                                children: [
+                                  Icon(Icons.call, color: Colors.green, size: uiScale.icon(12)),
+                                  SizedBox(width: 4),
+                                  Text("Call Sender", style: TextStyle(color: Colors.green, fontWeight: FontWeight.w700, fontSize: uiScale.font(10))),
+                                ],
+                              ),
+                            ),
+                          )
+                      ],
+                    ),
+
+                    SizedBox(height: uiScale.gap(16)),
+
+                    // TO (DESTINATION)
+                    Text('TO', style: TextStyle(color: cs.onSurface.withOpacity(0.5), fontSize: uiScale.font(8), fontWeight: FontWeight.w800, letterSpacing: 0.5)),
+                    Text(ride.destText, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(color: cs.onSurface, fontSize: uiScale.font(13), fontWeight: FontWeight.w800)),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Text(isDelivery ? 'Receiver' : 'Dropoff Point', style: TextStyle(color: cs.onSurface.withOpacity(0.6), fontSize: uiScale.font(11), fontWeight: FontWeight.w600)),
+                        if (isDelivery && receiverPhone.isNotEmpty)
+                          GestureDetector(
+                            onTap: () => _makePhoneCall(receiverPhone),
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                              decoration: BoxDecoration(color: Colors.blue.withOpacity(0.1), borderRadius: BorderRadius.circular(12)),
+                              child: Row(
+                                children: [
+                                  Icon(Icons.call, color: Colors.blue, size: uiScale.icon(12)),
+                                  SizedBox(width: 4),
+                                  Text("Call Receiver", style: TextStyle(color: Colors.blue, fontWeight: FontWeight.w700, fontSize: uiScale.font(10))),
+                                ],
+                              ),
+                            ),
+                          )
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+
+          SizedBox(height: uiScale.gap(20)),
+
+          // MAIN ACTION BUTTON
+          GestureDetector(
+            onTap: onNavigate,
+            child: Container(
+              height: uiScale.gap(48),
+              alignment: Alignment.center,
+              decoration: BoxDecoration(color: AppColors.primary, borderRadius: BorderRadius.circular(uiScale.radius(14))),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(Icons.navigation_rounded, color: Colors.white, size: uiScale.icon(16)),
+                  SizedBox(width: uiScale.gap(8)),
+                  Text('Open Navigation', style: TextStyle(color: Colors.white, fontSize: uiScale.font(13), fontWeight: FontWeight.w900, letterSpacing: 0.5)),
+                ],
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }

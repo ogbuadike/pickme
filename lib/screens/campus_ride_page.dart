@@ -2001,6 +2001,8 @@ class _CampusRidePageState extends State<CampusRidePage> with WidgetsBindingObse
             ),
         ],
       ),
+
+      /*
       bottomNavigationBar: (!_marketOpen && _tripPhase == TripPhase.browsing)
           ? CustomBottomNavBar(
         currentIndex: _currentIndex,
@@ -2017,6 +2019,8 @@ class _CampusRidePageState extends State<CampusRidePage> with WidgetsBindingObse
         },
       )
           : null,
+
+       */
     );
   }
 }

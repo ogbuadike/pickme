@@ -312,6 +312,7 @@ class _ProfileScreenState extends State<ProfileScreen> with SingleTickerProvider
       ),
 
       // Added CustomBottomNavBar
+      /*
       bottomNavigationBar: CustomBottomNavBar(
         currentIndex: _currentIndex,
         onTap: (i) {
@@ -339,6 +340,8 @@ class _ProfileScreenState extends State<ProfileScreen> with SingleTickerProvider
           }
         },
       ),
+
+       */
 
     );
   }

@@ -71,7 +71,8 @@ class _DriverHomePageState extends State<DriverHomePage> with WidgetsBindingObse
   static const double _destinationArrivalRadiusM = 150.0;
   static const double _rideCompleteRadiusM = 200.0;
 
-  final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
+  final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>(debugLabel: 'DriverHomeScaffold');
+  final GlobalKey _sheetKey = GlobalKey(); // Keys the terminal panel for height measurements
 
   late SharedPreferences _prefs;
   late ApiClient _api;
@@ -82,7 +83,7 @@ class _DriverHomePageState extends State<DriverHomePage> with WidgetsBindingObse
   bool _busyRideAction = false;
   bool _dashboardConnected = true;
   bool _panelExpanded = false;
-  int _currentIndex = 2;
+  int _currentIndex = 2; // Driver Home Tab
 
   GoogleMapController? _mapController;
   final ValueNotifier<Set<Marker>> _markersNotifier = ValueNotifier({});
@@ -126,6 +127,60 @@ class _DriverHomePageState extends State<DriverHomePage> with WidgetsBindingObse
 
   final Set<Marker> _markers = <Marker>{};
   final Set<Polyline> _polylines = <Polyline>{};
+
+  // --- Map Padding Safe Architecture ---
+  double _sheetHeight = 0;
+  EdgeInsets _mapPadding = EdgeInsets.zero;
+
+  MediaQueryData _safeMediaQuery() {
+    if (mounted) {
+      final mq = MediaQuery.maybeOf(context);
+      if (mq != null) return mq;
+    }
+    final views = WidgetsBinding.instance.platformDispatcher.views;
+    if (views.isNotEmpty) return MediaQueryData.fromView(views.first);
+    return const MediaQueryData(size: Size(390, 844));
+  }
+
+  double _scaleFromUi(UIScale uiScale) {
+    double scale = (uiScale.shortest / 390.0).clamp(0.58, 1.12);
+    if (uiScale.tiny) scale *= 0.88;
+    if (uiScale.compact) scale *= 0.94;
+    return scale.clamp(0.56, 1.12);
+  }
+
+  void _scheduleMapPaddingUpdate() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final ctx = _sheetKey.currentContext;
+      double newHeight = 0;
+      if (ctx != null) {
+        final box = ctx.findRenderObject() as RenderBox?;
+        if (box != null && box.hasSize) newHeight = box.size.height;
+      }
+      if (_sheetHeight != newHeight) {
+        _sheetHeight = newHeight;
+        _applyMapPadding();
+      }
+    });
+  }
+
+  void _applyMapPadding() {
+    if (!mounted) return;
+    final mq = _safeMediaQuery();
+    final uiScale = UIScale.of(context);
+    final topPad = mq.padding.top + (_headerVisualH * _scaleFromUi(uiScale));
+
+    final globalBottomNavH = uiScale.compact ? 110.0 : uiScale.inset(116.0);
+    final totalBottom = _sheetHeight + globalBottomNavH + mq.padding.bottom;
+
+    // CRITICAL FIX: Clamp the bottom padding so it NEVER exceeds 60% of the screen.
+    // This entirely prevents the silent Android gralloc4 memory crash!
+    final safeBottomPad = totalBottom.clamp(0.0, mq.size.height * 0.60);
+
+    setState(() => _mapPadding = EdgeInsets.fromLTRB(8.0, topPad, 8.0, safeBottomPad));
+  }
+  // ----------------------------------------
 
   @override
   void initState() {
@@ -206,6 +261,7 @@ class _DriverHomePageState extends State<DriverHomePage> with WidgetsBindingObse
       if (mounted) {
         setState(() => _booting = false);
         _pushMapState();
+        _scheduleMapPaddingUpdate(); // Ensure layout calculates perfectly on boot
       }
     }
   }
@@ -268,15 +324,19 @@ class _DriverHomePageState extends State<DriverHomePage> with WidgetsBindingObse
     final cs = theme.colorScheme;
     final isDark = theme.brightness == Brightness.dark;
 
-    final results = await Future.wait<BitmapDescriptor>([
-      MapGraphicsEngine.createPremiumAvatarPin(avatarImage: null, isDark: isDark, cs: cs),
-      MapGraphicsEngine.createRingDotMarker(const Color(0xFF1A73E8)),
-      MapGraphicsEngine.createRingDotMarker(const Color(0xFF00A651)),
-    ]);
+    try {
+      final results = await Future.wait<BitmapDescriptor>([
+        MapGraphicsEngine.createPremiumAvatarPin(avatarImage: null, isDark: isDark, cs: cs),
+        MapGraphicsEngine.createRingDotMarker(const Color(0xFF1A73E8)),
+        MapGraphicsEngine.createRingDotMarker(const Color(0xFF00A651)),
+      ]);
 
-    _userPinIcon = results[0];
-    _pickupIcon = results[1];
-    _dropIcon = results[2];
+      _userPinIcon = results[0];
+      _pickupIcon = results[1];
+      _dropIcon = results[2];
+    } catch (e) {
+      debugPrint('Error preloading icons: $e');
+    }
   }
 
   Future<void> _fetchUser() async {
@@ -297,7 +357,7 @@ class _DriverHomePageState extends State<DriverHomePage> with WidgetsBindingObse
           setState(() { _user = raw.map((k, v) => MapEntry<String, dynamic>(k.toString(), v)); });
         }
       }
-    } catch (_) {
+    } catch (e) {
       _dashboardConnected = false;
     } finally {
       if (mounted) setState(() => _busyProfile = false);
@@ -305,38 +365,43 @@ class _DriverHomePageState extends State<DriverHomePage> with WidgetsBindingObse
   }
 
   Future<void> _fetchDashboard({bool initial = false}) async {
-    final uid = _prefs.getString('user_id')?.trim() ?? '';
-    if (uid.isEmpty) throw Exception('User ID missing');
+    try {
+      final uid = _prefs.getString('user_id')?.trim() ?? '';
+      if (uid.isEmpty) throw Exception('User ID missing');
 
-    final res = await _api.request(_driverHubEndpoint, method: 'POST', data: {'action': 'dashboard', 'user': uid}).timeout(const Duration(seconds: 10));
-    final body = jsonDecode(res.body);
+      final res = await _api.request(_driverHubEndpoint, method: 'POST', data: {'action': 'dashboard', 'user': uid}).timeout(const Duration(seconds: 10));
+      final body = jsonDecode(res.body);
 
-    if (res.statusCode != 200 || body is! Map || body['error'] == true) {
-      throw Exception(body is Map ? ((body['message'] ?? body['error_msg'])?.toString()) : 'Unable to load dashboard');
+      if (res.statusCode != 200 || body is! Map || body['error'] == true) {
+        throw Exception(body is Map ? ((body['message'] ?? body['error_msg'])?.toString()) : 'Unable to load dashboard');
+      }
+
+      final data = body['data'];
+      if (data is! Map) throw Exception('Dashboard payload missing');
+
+      final driver = DriverProfile.fromJson(data['driver'] as Map? ?? const {});
+      final activeRide = data['active_ride'] is Map ? RideJob.fromJson(data['active_ride'] as Map) : null;
+      final queue = (data['queue'] is List) ? (data['queue'] as List).whereType<Map>().map(RideJob.fromJson).toList(growable: false) : const <RideJob>[];
+
+      if (!mounted) return;
+
+      setState(() {
+        _driver = driver;
+        _activeRide = activeRide;
+        _queue = queue;
+        _dashboardConnected = true;
+        _statusMessage = (data['message'] ?? body['message'])?.toString();
+        _lastDashboardSyncAt = DateTime.now();
+        if (_activeRide != null) _panelExpanded = true;
+      });
+
+      _scheduleMapPaddingUpdate(); // Update map padding after fetching Data
+      await _primeCurrentLocation(initial: initial);
+      _fetchOverviewRoute();
+      _pushMapState();
+    } catch (e) {
+      rethrow;
     }
-
-    final data = body['data'];
-    if (data is! Map) throw Exception('Dashboard payload missing');
-
-    final driver = DriverProfile.fromJson(data['driver'] as Map? ?? const {});
-    final activeRide = data['active_ride'] is Map ? RideJob.fromJson(data['active_ride'] as Map) : null;
-    final queue = (data['queue'] is List) ? (data['queue'] as List).whereType<Map>().map(RideJob.fromJson).toList(growable: false) : const <RideJob>[];
-
-    if (!mounted) return;
-
-    setState(() {
-      _driver = driver;
-      _activeRide = activeRide;
-      _queue = queue;
-      _dashboardConnected = true;
-      _statusMessage = (data['message'] ?? body['message'])?.toString();
-      _lastDashboardSyncAt = DateTime.now();
-      if (_activeRide != null) _panelExpanded = true;
-    });
-
-    await _primeCurrentLocation(initial: initial);
-    _fetchOverviewRoute();
-    _pushMapState();
   }
 
   Future<void> _fetchOverviewRoute() async {
@@ -845,6 +910,7 @@ class _DriverHomePageState extends State<DriverHomePage> with WidgetsBindingObse
     final headerHeight = safeTop + _headerVisualH;
 
     final panelExpandedHeight = uiScale.landscape ? (mq.size.height * 0.45).clamp(250.0, 320.0) : (mq.size.height * 0.45).clamp(300.0, 420.0);
+    final globalBottomNavH = uiScale.compact ? 110.0 : uiScale.inset(116.0);
 
     return Scaffold(
       key: _scaffoldKey,
@@ -852,8 +918,10 @@ class _DriverHomePageState extends State<DriverHomePage> with WidgetsBindingObse
       drawer: AppMenuDrawer(user: _user),
       extendBody: true,
       extendBodyBehindAppBar: true,
+
       body: Stack(
         children: [
+          // ── 1. MAP LAYER ─────────────────────────────────
           Positioned.fill(
             child: _booting
                 ? Container(color: theme.scaffoldBackgroundColor)
@@ -862,6 +930,7 @@ class _DriverHomePageState extends State<DriverHomePage> with WidgetsBindingObse
               polylinesNotifier: _polylinesNotifier,
               circlesNotifier: _circlesNotifier,
               initialCameraPosition: _initialCamera,
+              padding: _mapPadding,
               isDark: theme.brightness == Brightness.dark,
               onMapCreated: (controller) {
                 _mapController = controller;
@@ -870,115 +939,177 @@ class _DriverHomePageState extends State<DriverHomePage> with WidgetsBindingObse
             ),
           ),
 
-          if (!_booting)
-            Stack(
-              children: [
-                Positioned(
-                  top: 0, left: 0, right: 0,
-                  child: IgnorePointer(
-                    child: Container(
-                      height: headerHeight + 18,
-                      decoration: BoxDecoration(gradient: LinearGradient(begin: Alignment.topCenter, end: Alignment.bottomCenter, colors: [Colors.black.withOpacity(.64), Colors.transparent])),
+          // ── 2. OVERLAYS (header, banner, FAB) ────────────
+          if (!_booting) ...[
+            // Top gradient fade
+            Positioned(
+              top: 0, left: 0, right: 0,
+              child: IgnorePointer(
+                child: Container(
+                  height: headerHeight + 18,
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      begin: Alignment.topCenter, end: Alignment.bottomCenter,
+                      colors: [Colors.black.withOpacity(.64), Colors.transparent],
                     ),
                   ),
                 ),
-                Positioned(
-                  top: safeTop, left: 0, right: 0,
-                  child: HeaderBar(user: _user, busyProfile: _busyProfile, onMenu: () => _scaffoldKey.currentState?.openDrawer(), onWallet: _openWallet, onNotifications: () => Navigator.pushNamed(context, AppRoutes.notifications)),
-                ),
-                if (!_dashboardConnected)
-                  Positioned(
-                    top: headerHeight + 8, left: uiScale.inset(14), right: uiScale.inset(14),
-                    child: Material(
-                      color: Colors.orange.shade700, borderRadius: BorderRadius.circular(uiScale.radius(12)),
-                      child: Padding(
-                        padding: EdgeInsets.all(uiScale.inset(10)),
-                        child: Row(children: [Icon(Icons.wifi_off_rounded, size: uiScale.icon(18), color: Colors.white), SizedBox(width: uiScale.gap(8)), Expanded(child: Text('Connection issue. Dashboard will retry automatically.', style: TextStyle(color: Colors.white, fontSize: uiScale.font(12), fontWeight: FontWeight.w700)))]),
-                      ),
-                    ),
-                  ),
-                Positioned(
-                  right: uiScale.inset(14), bottom: 12,
-                  child: FloatingActionButton.small(
-                    heroTag: 'driver_locate_fab',
-                    backgroundColor: cs.surface.withOpacity(0.96),
-                    onPressed: () {
-                      if (_mapController != null && _currentPosition != null) _mapController!.animateCamera(CameraUpdate.newLatLngZoom(LatLng(_currentPosition!.latitude, _currentPosition!.longitude), 16.4));
-                    },
-                    child: const Icon(Icons.my_location_rounded),
-                  ),
-                ),
-              ],
+              ),
             ),
+
+            // Header bar
+            Positioned(
+              top: safeTop, left: 0, right: 0,
+              child: HeaderBar(
+                user: _user,
+                busyProfile: _busyProfile,
+                onMenu: () => _scaffoldKey.currentState?.openDrawer(),
+                onWallet: _openWallet,
+                onNotifications: () => Navigator.pushNamed(context, AppRoutes.notifications),
+              ),
+            ),
+
+            // Offline / connection banner
+            if (!_dashboardConnected)
+              Positioned(
+                top: headerHeight + 8, left: uiScale.inset(14), right: uiScale.inset(14),
+                child: Material(
+                  color: Colors.orange.shade700,
+                  borderRadius: BorderRadius.circular(uiScale.radius(12)),
+                  child: Padding(
+                    padding: EdgeInsets.all(uiScale.inset(10)),
+                    child: Row(children: [
+                      Icon(Icons.wifi_off_rounded, size: uiScale.icon(18), color: Colors.white),
+                      SizedBox(width: uiScale.gap(8)),
+                      Expanded(
+                        child: Text(
+                          'Connection issue. Dashboard will retry automatically.',
+                          style: TextStyle(color: Colors.white, fontSize: uiScale.font(12), fontWeight: FontWeight.w700),
+                        ),
+                      ),
+                    ]),
+                  ),
+                ),
+              ),
+
+            // Locate FAB — floats above the terminal
+            Positioned(
+              right: uiScale.inset(14),
+              bottom: globalBottomNavH + mq.padding.bottom + (_sheetHeight > 0 ? _sheetHeight : 150.0) + uiScale.gap(16),
+              child: FloatingActionButton.small(
+                heroTag: 'driver_locate_fab',
+                onPressed: () {
+                  if (_mapController != null && _currentPosition != null) {
+                    _mapController!.animateCamera(
+                      CameraUpdate.newLatLngZoom(LatLng(_currentPosition!.latitude, _currentPosition!.longitude), 16.4),
+                    );
+                  }
+                },
+                child: const Icon(Icons.my_location_rounded),
+              ),
+            ),
+
+            // ── 3. DRIVER TERMINAL PANEL ──────────────────────
+            Positioned(
+              left: 0,
+              right: 0,
+              // Sits exactly on top of the bottom nav bar
+              bottom: globalBottomNavH + mq.padding.bottom,
+              child: KeyedSubtree(
+                key: _sheetKey,
+                child: Padding(
+                  padding: EdgeInsets.symmetric(horizontal: uiScale.inset(12)),
+                  child: _booting
+                      ? _BootingPanel(uiScale: uiScale, cs: cs)
+                      : (_activeRide != null)
+                  // ── Active ride card ──────────────
+                      ? _AdvancedActiveRideCard(
+                    ride: _activeRide!,
+                    uiScale: uiScale,
+                    onNavigate: _openTripNavigation,
+                  )
+                  // ── Command centre ────────────────
+                      : DriverCommandCenter(
+                    uiScale: uiScale,
+                    height: panelExpandedHeight,
+                    expanded: _panelExpanded,
+                    driver: _driver,
+                    activeRide: _activeRide,
+                    queue: _queue,
+                    statusMessage: _statusMessage,
+                    lastSyncAt: _lastDashboardSyncAt,
+                    lastHeartbeatAt: _lastHeartbeatAt,
+                    busyOnlineToggle: _busyOnlineToggle,
+                    busyRideAction: _busyRideAction,
+                    onExpandToggle: () {
+                      setState(() => _panelExpanded = !_panelExpanded);
+                      _scheduleMapPaddingUpdate(); // Recalculate layout
+                    },
+                    onOnlineToggle: _toggleOnline,
+                    onWallet: _openWallet,
+                    onHistory: () => Navigator.pushNamed(context, AppRoutes.rideHistory),
+                    onProfile: () => Navigator.pushNamed(context, AppRoutes.profile),
+                    onRefresh: () => unawaited(_safeDashboardRefresh()),
+                    onAccept: _acceptRide,
+                    onRideAction: (action) => unawaited(_performRideAction(action)),
+                    onNavigate: _openTripNavigation,
+                  ),
+                ),
+              ),
+            ),
+          ],
         ],
       ),
-      bottomNavigationBar: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Padding(
-            padding: EdgeInsets.symmetric(horizontal: uiScale.inset(12)),
-            child: _booting
-                ? Container(height: 150, decoration: BoxDecoration(color: cs.surface.withOpacity(0.95), borderRadius: BorderRadius.circular(uiScale.radius(28))), child: const Center(child: CircularProgressIndicator()))
-                : (_activeRide != null)
-            // 🚀 HIGH-END ACTIVE RIDE UI
-                ? _AdvancedActiveRideCard(
-              ride: _activeRide!,
-              uiScale: uiScale,
-              onNavigate: _openTripNavigation,
-            )
-            // 🛑 STANDARD COMMAND CENTER
-                : DriverCommandCenter(
-              uiScale: uiScale,
-              height: panelExpandedHeight,
-              expanded: _panelExpanded,
-              driver: _driver,
-              activeRide: _activeRide,
-              queue: _queue,
-              statusMessage: _statusMessage,
-              lastSyncAt: _lastDashboardSyncAt,
-              lastHeartbeatAt: _lastHeartbeatAt,
-              busyOnlineToggle: _busyOnlineToggle,
-              busyRideAction: _busyRideAction,
-              onExpandToggle: () => setState(() => _panelExpanded = !_panelExpanded),
-              onOnlineToggle: _toggleOnline,
-              onWallet: _openWallet,
-              onHistory: () => Navigator.pushNamed(context, AppRoutes.rideHistory),
-              onProfile: () => Navigator.pushNamed(context, AppRoutes.profile),
-              onRefresh: () => unawaited(_safeDashboardRefresh()),
-              onAccept: _acceptRide,
-              onRideAction: (action) => unawaited(_performRideAction(action)),
-              onNavigate: _openTripNavigation,
-            ),
-          ),
-          Transform.translate(
-            offset: const Offset(0, -1),
-            child: CustomBottomNavBar(
-              currentIndex: _currentIndex,
-              onTap: (i) {
-                HapticFeedback.selectionClick();
-                setState(() => _currentIndex = i);
-                switch (i) {
-                  case 0: Navigator.pushNamed(context, AppRoutes.rideHistory); break;
-                  case 1: Navigator.pushNamed(context, AppRoutes.transactions); break;
-                  case 2: break;
-                  case 3: Navigator.pushNamed(context, AppRoutes.settings); break;
-                  case 4: Navigator.pushNamed(context, AppRoutes.profile); break;
-                }
-              },
-            ),
-          ),
-        ],
+
+      // ── 4. CUSTOM BOTTOM NAV BAR ──────────────────────
+      bottomNavigationBar: CustomBottomNavBar(
+        currentIndex: _currentIndex,
+        onTap: (i) {
+          HapticFeedback.selectionClick();
+          if (i == _currentIndex) return;
+          switch (i) {
+            case 0: Navigator.pushNamed(context, AppRoutes.rideHistory); break;
+            case 1: Navigator.pushNamed(context, AppRoutes.transactions); break;
+            case 2: break; // Already on map
+            case 3: Navigator.pushNamed(context, AppRoutes.settings); break;
+            case 4: Navigator.pushNamed(context, AppRoutes.profile); break;
+          }
+        },
       ),
     );
   }
 }
 
+// ─────────────────────────────────────────────
+// Booting placeholder panel
+// ─────────────────────────────────────────────
+class _BootingPanel extends StatelessWidget {
+  final UIScale uiScale;
+  final ColorScheme cs;
+  const _BootingPanel({required this.uiScale, required this.cs});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      height: 150,
+      decoration: BoxDecoration(
+        color: cs.surface.withOpacity(0.95),
+        borderRadius: BorderRadius.circular(uiScale.radius(28)),
+      ),
+      child: const Center(child: CircularProgressIndicator()),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────
+// Isolated map layer (RepaintBoundary + ValueListenableBuilder)
+// ─────────────────────────────────────────────
 class _IsolatedDriverMapLayer extends StatelessWidget {
   final ValueNotifier<Set<Marker>> markersNotifier;
   final ValueNotifier<Set<Polyline>> polylinesNotifier;
   final ValueNotifier<Set<Circle>> circlesNotifier;
-
   final CameraPosition initialCameraPosition;
+  final EdgeInsets padding;
   final bool isDark;
   final void Function(GoogleMapController) onMapCreated;
 
@@ -988,11 +1119,12 @@ class _IsolatedDriverMapLayer extends StatelessWidget {
     required this.polylinesNotifier,
     required this.circlesNotifier,
     required this.initialCameraPosition,
+    required this.padding,
     required this.isDark,
     required this.onMapCreated,
   });
 
-  String? _getMapStyle() {
+  String? _darkStyle() {
     if (!isDark) return null;
     return '''[{"elementType":"geometry","stylers":[{"color":"#212121"}]},{"elementType":"labels.icon","stylers":[{"visibility":"off"}]},{"elementType":"labels.text.fill","stylers":[{"color":"#757575"}]},{"elementType":"labels.text.stroke","stylers":[{"color":"#212121"}]},{"featureType":"administrative","elementType":"geometry","stylers":[{"color":"#757575"}]},{"featureType":"administrative.country","elementType":"labels.text.fill","stylers":[{"color":"#9e9e9e"}]},{"featureType":"administrative.land_parcel","stylers":[{"visibility":"off"}]},{"featureType":"administrative.locality","elementType":"labels.text.fill","stylers":[{"color":"#bdbdbd"}]},{"featureType":"poi","elementType":"labels.text.fill","stylers":[{"color":"#757575"}]},{"featureType":"poi.park","elementType":"geometry","stylers":[{"color":"#181818"}]},{"featureType":"poi.park","elementType":"labels.text.fill","stylers":[{"color":"#616161"}]},{"featureType":"poi.park","elementType":"labels.text.stroke","stylers":[{"color":"#1b1b1b"}]},{"featureType":"road","elementType":"geometry.fill","stylers":[{"color":"#2c2c2c"}]},{"featureType":"road","elementType":"labels.text.fill","stylers":[{"color":"#8a8a8a"}]},{"featureType":"road.arterial","elementType":"geometry","stylers":[{"color":"#373737"}]},{"featureType":"road.highway","elementType":"geometry","stylers":[{"color":"#3c3c3c"}]},{"featureType":"road.highway.controlled_access","elementType":"geometry","stylers":[{"color":"#4e4e4e"}]},{"featureType":"road.local","elementType":"labels.text.fill","stylers":[{"color":"#616161"}]},{"featureType":"transit","elementType":"labels.text.fill","stylers":[{"color":"#757575"}]},{"featureType":"water","elementType":"geometry","stylers":[{"color":"#000000"}]},{"featureType":"water","elementType":"labels.text.fill","stylers":[{"color":"#3d3d3d"}]}]''';
   }
@@ -1011,6 +1143,7 @@ class _IsolatedDriverMapLayer extends StatelessWidget {
                 builder: (context, circles, _) {
                   return GoogleMap(
                     initialCameraPosition: initialCameraPosition,
+                    padding: padding,
                     myLocationEnabled: false,
                     myLocationButtonEnabled: false,
                     zoomControlsEnabled: false,
@@ -1025,7 +1158,7 @@ class _IsolatedDriverMapLayer extends StatelessWidget {
                     polylines: polylines,
                     circles: circles,
                     onMapCreated: (c) {
-                      if (isDark) c.setMapStyle(_getMapStyle());
+                      if (isDark) c.setMapStyle(_darkStyle());
                       onMapCreated(c);
                     },
                   );
@@ -1039,10 +1172,9 @@ class _IsolatedDriverMapLayer extends StatelessWidget {
   }
 }
 
-// ============================================================================
-// 🚀 ADVANCED ACTIVE RIDE CARD (TREE LAYOUT, IMAGE VIEWER, CALLS & FINANCES)
-// ============================================================================
-
+// ─────────────────────────────────────────────
+// Advanced Active Ride Card
+// ─────────────────────────────────────────────
 class _AdvancedActiveRideCard extends StatelessWidget {
   final RideJob ride;
   final UIScale uiScale;
@@ -1054,11 +1186,9 @@ class _AdvancedActiveRideCard extends StatelessWidget {
     required this.onNavigate,
   });
 
-  Future<void> _makePhoneCall(String phoneNumber) async {
-    final Uri launchUri = Uri(scheme: 'tel', path: phoneNumber);
-    if (await canLaunchUrl(launchUri)) {
-      await launchUrl(launchUri);
-    }
+  Future<void> _call(String phone) async {
+    final uri = Uri(scheme: 'tel', path: phone);
+    if (await canLaunchUrl(uri)) await launchUrl(uri);
   }
 
   void _showFullImage(BuildContext context, String imageUrl) {
@@ -1076,15 +1206,18 @@ class _AdvancedActiveRideCard extends StatelessWidget {
               minScale: 1.0,
               maxScale: 4.0,
               child: ClipRRect(
-                borderRadius: BorderRadius.circular(uiScale.radius(16)),
-                child: Image.network(imageUrl, fit: BoxFit.contain),
+                borderRadius:
+                BorderRadius.circular(uiScale.radius(16)),
+                child: Image.network(imageUrl,
+                    fit: BoxFit.contain),
               ),
             ),
             Positioned(
               top: 16,
               right: 16,
               child: IconButton(
-                icon: const Icon(Icons.close_rounded, color: Colors.white, size: 32),
+                icon: const Icon(Icons.close_rounded,
+                    color: Colors.white, size: 32),
                 onPressed: () => Navigator.pop(ctx),
               ),
             ),
@@ -1101,314 +1234,481 @@ class _AdvancedActiveRideCard extends StatelessWidget {
     final os = cs.onSurface;
     final isDark = theme.brightness == Brightness.dark;
 
-    // -------------------------------------------------------------
-    // DYNAMIC VARIABLES & FINANCIAL MATH
-    // -------------------------------------------------------------
-    String displayType = ride.rideType.replaceAll('_', ' ').toUpperCase();
-    bool isDelivery = ride.rideType == 'send_me' || ride.rideType == 'dispatch';
-
-    // Explicitly grab Sender and Receiver phones
+    final String displayType =
+    ride.rideType.replaceAll('_', ' ').toUpperCase();
+    final bool isDelivery =
+        ride.rideType == 'send_me' || ride.rideType == 'dispatch';
     final String senderPhone = ride.riderPhone ?? '';
     final String receiverPhone = ride.recipientPhone ?? '';
 
-    // 🔥 Dynamic Math Driven Completely by your PHP Backend
-    final double feePercent = ride.appFeePercentage; // Pulled straight from DB via PHP
+    final double feePercent = ride.appFeePercentage;
     final double driverPercent = 100.0 - feePercent;
-
     final double totalFare = ride.price;
     final double appFee = totalFare * (feePercent / 100);
     final double driverEarnings = totalFare - appFee;
-
     final String currency = ride.currency;
-    final String payMethod = (ride.payMethod).toUpperCase();
+    final String payMethod = ride.payMethod.toUpperCase();
 
     return Container(
       width: double.infinity,
-      padding: EdgeInsets.all(uiScale.inset(16)),
       decoration: BoxDecoration(
         color: isDark ? cs.surface : Colors.white,
         borderRadius: BorderRadius.circular(uiScale.radius(24)),
         boxShadow: [
-          BoxShadow(color: Colors.black.withOpacity(0.08), blurRadius: 20, offset: const Offset(0, 8)),
+          BoxShadow(
+              color: Colors.black.withOpacity(0.08),
+              blurRadius: 20,
+              offset: const Offset(0, 8)),
         ],
-        border: Border.all(color: cs.outlineVariant.withOpacity(0.3), width: 1.0),
+        border: Border.all(
+            color: cs.outlineVariant.withOpacity(0.3), width: 1.0),
       ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-
-          // HEADER (Type & Status)
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Text(
-                'Active $displayType',
-                style: TextStyle(color: os, fontSize: uiScale.font(14), fontWeight: FontWeight.w900, letterSpacing: 0.3),
-              ),
-              Container(
-                padding: EdgeInsets.symmetric(horizontal: uiScale.inset(10), vertical: uiScale.inset(4)),
-                decoration: BoxDecoration(
-                  color: AppColors.primary.withOpacity(0.15),
-                  borderRadius: BorderRadius.circular(20),
-                ),
-                child: Row(
-                  children: [
-                    Container(width: 6, height: 6, decoration: const BoxDecoration(color: AppColors.primary, shape: BoxShape.circle)),
-                    SizedBox(width: uiScale.gap(6)),
-                    Text('Live', style: TextStyle(color: AppColors.primary, fontSize: uiScale.font(10), fontWeight: FontWeight.w800)),
-                  ],
-                ),
-              ),
-            ],
-          ),
-
-          // SECURE OTP WARNING
-          if (ride.deliveryOtp != null && ride.deliveryOtp!.isNotEmpty) ...[
-            SizedBox(height: uiScale.gap(12)),
-            Container(
-              padding: EdgeInsets.all(uiScale.inset(8)),
-              decoration: BoxDecoration(color: Colors.orange.withOpacity(0.15), borderRadius: BorderRadius.circular(uiScale.radius(8))),
-              child: Row(
-                children: [
-                  Icon(Icons.shield_rounded, color: Colors.orange.shade700, size: uiScale.icon(14)),
-                  SizedBox(width: uiScale.gap(8)),
-                  Expanded(child: Text('Secure OTP required at destination to complete dropoff.', style: TextStyle(color: Colors.orange.shade800, fontSize: uiScale.font(10), fontWeight: FontWeight.w700))),
-                ],
-              ),
-            ),
-          ],
-
-          SizedBox(height: uiScale.gap(16)),
-
-          // FULL IMAGE VIEWER (FOR DELIVERIES)
-          if (isDelivery && ride.packageImage != null && ride.packageImage!.isNotEmpty) ...[
-            GestureDetector(
-              onTap: () => _showFullImage(context, ride.packageImage!),
-              child: ClipRRect(
-                borderRadius: BorderRadius.circular(uiScale.radius(12)),
-                child: Stack(
-                  alignment: Alignment.center,
-                  children: [
-                    Image.network(
-                      ride.packageImage!,
-                      width: double.infinity,
-                      height: uiScale.gap(120),
-                      fit: BoxFit.cover,
-                      errorBuilder: (_, __, ___) => Container(height: uiScale.gap(120), color: cs.surfaceVariant, child: const Icon(Icons.inventory_2_rounded)),
-                    ),
-                    Container(
-                      padding: const EdgeInsets.all(8),
-                      decoration: const BoxDecoration(color: Colors.black54, shape: BoxShape.circle),
-                      child: const Icon(Icons.fullscreen_rounded, color: Colors.white, size: 24),
-                    )
-                  ],
-                ),
-              ),
-            ),
-            SizedBox(height: uiScale.gap(8)),
-            Text(
-              "${(ride.packageSize ?? 'PACKAGE').toUpperCase()} • ${ride.packageWeight.toStringAsFixed(1)}kg",
-              style: TextStyle(color: os.withOpacity(0.6), fontSize: uiScale.font(10), fontWeight: FontWeight.w800, letterSpacing: 0.5),
-            ),
-            SizedBox(height: uiScale.gap(16)),
-          ],
-
-          // TREE LAYOUT FOR LOCATIONS & DUAL CALL BUTTONS
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              // Tree Graphics Column
-              Column(
-                children: [
-                  Icon(Icons.radio_button_checked, color: AppColors.primary, size: uiScale.icon(16)),
-                  Container(width: 2, height: uiScale.gap(45), color: os.withOpacity(0.15)),
-                  Icon(Icons.location_on, color: Colors.green, size: uiScale.icon(16)),
-                ],
-              ),
-              SizedBox(width: uiScale.gap(12)),
-
-              // Locations Data Column
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-
-                    // FROM (PICKUP / SENDER)
-                    Text('FROM', style: TextStyle(color: os.withOpacity(0.5), fontSize: uiScale.font(8), fontWeight: FontWeight.w800, letterSpacing: 0.5)),
-                    Text(ride.pickupText, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(color: os, fontSize: uiScale.font(13), fontWeight: FontWeight.w800)),
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(ride.riderName.isNotEmpty ? ride.riderName : 'Sender', style: TextStyle(color: os.withOpacity(0.6), fontSize: uiScale.font(11), fontWeight: FontWeight.w600)),
-                            if (senderPhone.isNotEmpty)
-                              Text(senderPhone, style: TextStyle(color: os.withOpacity(0.45), fontSize: uiScale.font(9), fontWeight: FontWeight.w700)),
-                          ],
-                        ),
-                        if (senderPhone.isNotEmpty)
-                          GestureDetector(
-                            onTap: () => _makePhoneCall(senderPhone),
-                            child: Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                              decoration: BoxDecoration(color: Colors.green.withOpacity(0.1), borderRadius: BorderRadius.circular(12)),
-                              child: Row(
-                                children: [
-                                  Icon(Icons.call, color: Colors.green, size: uiScale.icon(12)),
-                                  const SizedBox(width: 4),
-                                  Text("Call Sender", style: TextStyle(color: Colors.green, fontWeight: FontWeight.w700, fontSize: uiScale.font(10))),
-                                ],
-                              ),
-                            ),
-                          )
-                      ],
-                    ),
-
-                    SizedBox(height: uiScale.gap(16)),
-
-                    // TO (DESTINATION / RECEIVER)
-                    Text('TO', style: TextStyle(color: os.withOpacity(0.5), fontSize: uiScale.font(8), fontWeight: FontWeight.w800, letterSpacing: 0.5)),
-                    Text(ride.destText, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(color: os, fontSize: uiScale.font(13), fontWeight: FontWeight.w800)),
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(isDelivery ? 'Receiver' : 'Dropoff Point', style: TextStyle(color: os.withOpacity(0.6), fontSize: uiScale.font(11), fontWeight: FontWeight.w600)),
-                            if (isDelivery && receiverPhone.isNotEmpty && receiverPhone != senderPhone)
-                              Text(receiverPhone, style: TextStyle(color: os.withOpacity(0.45), fontSize: uiScale.font(9), fontWeight: FontWeight.w700)),
-                          ],
-                        ),
-                        if (isDelivery && receiverPhone.isNotEmpty && receiverPhone != senderPhone)
-                          GestureDetector(
-                            onTap: () => _makePhoneCall(receiverPhone),
-                            child: Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                              decoration: BoxDecoration(color: Colors.blue.withOpacity(0.1), borderRadius: BorderRadius.circular(12)),
-                              child: Row(
-                                children: [
-                                  Icon(Icons.call, color: Colors.blue, size: uiScale.icon(12)),
-                                  const SizedBox(width: 4),
-                                  Text("Call Receiver", style: TextStyle(color: Colors.blue, fontWeight: FontWeight.w700, fontSize: uiScale.font(10))),
-                                ],
-                              ),
-                            ),
-                          )
-                      ],
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-
-          SizedBox(height: uiScale.gap(20)),
-
-          // -------------------------------------------------------------
-          // 💰 PROFESSIONAL FINANCIAL BREAKDOWN BLOCK (DYNAMIC FROM DB)
-          // -------------------------------------------------------------
-          Container(
-            padding: EdgeInsets.all(uiScale.inset(14)),
-            decoration: BoxDecoration(
-              color: isDark ? Colors.black26 : Colors.grey.shade50,
-              borderRadius: BorderRadius.circular(uiScale.radius(16)),
-              border: Border.all(color: cs.outlineVariant.withOpacity(0.4)),
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+      child: SingleChildScrollView(
+        padding: EdgeInsets.all(uiScale.inset(16)),
+        physics: const BouncingScrollPhysics(),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // ── Header ────────────────────────────────────
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                // Fare & Payment Method Row
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  crossAxisAlignment: CrossAxisAlignment.center,
-                  children: [
-                    Text(
-                        'TOTAL FARE',
-                        style: TextStyle(color: os.withOpacity(0.5), fontSize: uiScale.font(9), fontWeight: FontWeight.w800, letterSpacing: 1.0)
-                    ),
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                      decoration: BoxDecoration(
-                          color: payMethod == 'WALLET' ? Colors.blue.withOpacity(0.1) : Colors.orange.withOpacity(0.1),
-                          borderRadius: BorderRadius.circular(6),
-                          border: Border.all(color: payMethod == 'WALLET' ? Colors.blue.withOpacity(0.3) : Colors.orange.withOpacity(0.3))
-                      ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Icon(payMethod == 'WALLET' ? Icons.account_balance_wallet_rounded : Icons.payments_rounded,
-                              color: payMethod == 'WALLET' ? Colors.blue : Colors.orange.shade700,
-                              size: uiScale.icon(10)
-                          ),
-                          const SizedBox(width: 4),
-                          Text(
-                              payMethod,
-                              style: TextStyle(color: payMethod == 'WALLET' ? Colors.blue : Colors.orange.shade700, fontSize: uiScale.font(9), fontWeight: FontWeight.w900, letterSpacing: 0.5)
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
-
                 Text(
-                    '$currency ${totalFare.toStringAsFixed(2)}',
-                    style: TextStyle(color: os, fontSize: uiScale.font(20), fontWeight: FontWeight.w900)
+                  'Active $displayType',
+                  style: TextStyle(
+                      color: os,
+                      fontSize: uiScale.font(14),
+                      fontWeight: FontWeight.w900,
+                      letterSpacing: 0.3),
                 ),
-
-                Padding(
-                  padding: EdgeInsets.symmetric(vertical: uiScale.gap(12)),
-                  child: Divider(color: cs.outlineVariant.withOpacity(0.4), height: 1, thickness: 1),
-                ),
-
-                // Dynamic Revenue Split Row
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text('YOUR EARNINGS (${driverPercent.toStringAsFixed(0)}%)', style: TextStyle(color: Colors.green, fontSize: uiScale.font(8.5), fontWeight: FontWeight.w800, letterSpacing: 0.5)),
-                        Text('$currency ${driverEarnings.toStringAsFixed(2)}', style: TextStyle(color: Colors.green, fontSize: uiScale.font(14), fontWeight: FontWeight.w900)),
-                      ],
-                    ),
-                    Column(
-                      crossAxisAlignment: CrossAxisAlignment.end,
-                      children: [
-                        Text('APP FEE (${feePercent.toStringAsFixed(0)}%)', style: TextStyle(color: os.withOpacity(0.5), fontSize: uiScale.font(8.5), fontWeight: FontWeight.w800, letterSpacing: 0.5)),
-                        Text('$currency ${appFee.toStringAsFixed(2)}', style: TextStyle(color: os.withOpacity(0.7), fontSize: uiScale.font(14), fontWeight: FontWeight.w800)),
-                      ],
-                    ),
-                  ],
+                Container(
+                  padding: EdgeInsets.symmetric(
+                      horizontal: uiScale.inset(10),
+                      vertical: uiScale.inset(4)),
+                  decoration: BoxDecoration(
+                    color: AppColors.primary.withOpacity(0.15),
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  child: Row(children: [
+                    Container(
+                        width: 6,
+                        height: 6,
+                        decoration: const BoxDecoration(
+                            color: AppColors.primary,
+                            shape: BoxShape.circle)),
+                    SizedBox(width: uiScale.gap(6)),
+                    Text('Live',
+                        style: TextStyle(
+                            color: AppColors.primary,
+                            fontSize: uiScale.font(10),
+                            fontWeight: FontWeight.w800)),
+                  ]),
                 ),
               ],
             ),
-          ),
-          // -------------------------------------------------------------
 
-          SizedBox(height: uiScale.gap(20)),
-
-          // MAIN ACTION BUTTON
-          GestureDetector(
-            onTap: onNavigate,
-            child: Container(
-              height: uiScale.gap(48),
-              alignment: Alignment.center,
-              decoration: BoxDecoration(color: AppColors.primary, borderRadius: BorderRadius.circular(uiScale.radius(14))),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Icon(Icons.navigation_rounded, color: Colors.white, size: uiScale.icon(16)),
+            // ── OTP warning ───────────────────────────────
+            if (ride.deliveryOtp != null &&
+                ride.deliveryOtp!.isNotEmpty) ...[
+              SizedBox(height: uiScale.gap(12)),
+              Container(
+                padding: EdgeInsets.all(uiScale.inset(8)),
+                decoration: BoxDecoration(
+                    color: Colors.orange.withOpacity(0.15),
+                    borderRadius:
+                    BorderRadius.circular(uiScale.radius(8))),
+                child: Row(children: [
+                  Icon(Icons.shield_rounded,
+                      color: Colors.orange.shade700,
+                      size: uiScale.icon(14)),
                   SizedBox(width: uiScale.gap(8)),
-                  Text('Open Navigation', style: TextStyle(color: Colors.white, fontSize: uiScale.font(13), fontWeight: FontWeight.w900, letterSpacing: 0.5)),
+                  Expanded(
+                    child: Text(
+                      'Secure OTP required at destination to complete dropoff.',
+                      style: TextStyle(
+                          color: Colors.orange.shade800,
+                          fontSize: uiScale.font(10),
+                          fontWeight: FontWeight.w700),
+                    ),
+                  ),
+                ]),
+              ),
+            ],
+
+            SizedBox(height: uiScale.gap(16)),
+
+            // ── Package image ─────────────────────────────
+            if (isDelivery &&
+                ride.packageImage != null &&
+                ride.packageImage!.isNotEmpty) ...[
+              GestureDetector(
+                onTap: () =>
+                    _showFullImage(context, ride.packageImage!),
+                child: ClipRRect(
+                  borderRadius:
+                  BorderRadius.circular(uiScale.radius(12)),
+                  child: Stack(
+                    alignment: Alignment.center,
+                    children: [
+                      Image.network(
+                        ride.packageImage!,
+                        width: double.infinity,
+                        height: uiScale.gap(120),
+                        fit: BoxFit.cover,
+                        errorBuilder: (_, __, ___) => Container(
+                          height: uiScale.gap(120),
+                          color: cs.surfaceVariant,
+                          child:
+                          const Icon(Icons.inventory_2_rounded),
+                        ),
+                      ),
+                      Container(
+                        padding: const EdgeInsets.all(8),
+                        decoration: const BoxDecoration(
+                            color: Colors.black54,
+                            shape: BoxShape.circle),
+                        child: const Icon(Icons.fullscreen_rounded,
+                            color: Colors.white, size: 24),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              SizedBox(height: uiScale.gap(8)),
+              Text(
+                '${(ride.packageSize ?? 'PACKAGE').toUpperCase()} • ${ride.packageWeight.toStringAsFixed(1)}kg',
+                style: TextStyle(
+                    color: os.withOpacity(0.6),
+                    fontSize: uiScale.font(10),
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: 0.5),
+              ),
+              SizedBox(height: uiScale.gap(16)),
+            ],
+
+            // ── Tree location layout ───────────────────────
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // Tree line
+                Column(children: [
+                  Icon(Icons.radio_button_checked,
+                      color: AppColors.primary,
+                      size: uiScale.icon(16)),
+                  Container(
+                      width: 2,
+                      height: uiScale.gap(45),
+                      color: os.withOpacity(0.15)),
+                  Icon(Icons.location_on,
+                      color: Colors.green,
+                      size: uiScale.icon(16)),
+                ]),
+                SizedBox(width: uiScale.gap(12)),
+                // Location data
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      // FROM
+                      Text('FROM',
+                          style: TextStyle(
+                              color: os.withOpacity(0.5),
+                              fontSize: uiScale.font(8),
+                              fontWeight: FontWeight.w800,
+                              letterSpacing: 0.5)),
+                      Text(ride.pickupText,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                              color: os,
+                              fontSize: uiScale.font(13),
+                              fontWeight: FontWeight.w800)),
+                      Row(
+                        mainAxisAlignment:
+                        MainAxisAlignment.spaceBetween,
+                        children: [
+                          Column(
+                              crossAxisAlignment:
+                              CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                    ride.riderName.isNotEmpty
+                                        ? ride.riderName
+                                        : 'Sender',
+                                    style: TextStyle(
+                                        color: os.withOpacity(0.6),
+                                        fontSize: uiScale.font(11),
+                                        fontWeight:
+                                        FontWeight.w600)),
+                                if (senderPhone.isNotEmpty)
+                                  Text(senderPhone,
+                                      style: TextStyle(
+                                          color:
+                                          os.withOpacity(0.45),
+                                          fontSize: uiScale.font(9),
+                                          fontWeight:
+                                          FontWeight.w700)),
+                              ]),
+                          if (senderPhone.isNotEmpty)
+                            GestureDetector(
+                              onTap: () => _call(senderPhone),
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 10, vertical: 4),
+                                decoration: BoxDecoration(
+                                    color: Colors.green
+                                        .withOpacity(0.1),
+                                    borderRadius:
+                                    BorderRadius.circular(12)),
+                                child: Row(children: [
+                                  Icon(Icons.call,
+                                      color: Colors.green,
+                                      size: uiScale.icon(12)),
+                                  const SizedBox(width: 4),
+                                  Text('Call Sender',
+                                      style: TextStyle(
+                                          color: Colors.green,
+                                          fontWeight: FontWeight.w700,
+                                          fontSize: uiScale.font(10))),
+                                ]),
+                              ),
+                            ),
+                        ],
+                      ),
+
+                      SizedBox(height: uiScale.gap(16)),
+
+                      // TO
+                      Text('TO',
+                          style: TextStyle(
+                              color: os.withOpacity(0.5),
+                              fontSize: uiScale.font(8),
+                              fontWeight: FontWeight.w800,
+                              letterSpacing: 0.5)),
+                      Text(ride.destText,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                              color: os,
+                              fontSize: uiScale.font(13),
+                              fontWeight: FontWeight.w800)),
+                      Row(
+                        mainAxisAlignment:
+                        MainAxisAlignment.spaceBetween,
+                        children: [
+                          Column(
+                              crossAxisAlignment:
+                              CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                    isDelivery
+                                        ? 'Receiver'
+                                        : 'Dropoff Point',
+                                    style: TextStyle(
+                                        color: os.withOpacity(0.6),
+                                        fontSize: uiScale.font(11),
+                                        fontWeight:
+                                        FontWeight.w600)),
+                                if (isDelivery &&
+                                    receiverPhone.isNotEmpty &&
+                                    receiverPhone != senderPhone)
+                                  Text(receiverPhone,
+                                      style: TextStyle(
+                                          color:
+                                          os.withOpacity(0.45),
+                                          fontSize: uiScale.font(9),
+                                          fontWeight:
+                                          FontWeight.w700)),
+                              ]),
+                          if (isDelivery &&
+                              receiverPhone.isNotEmpty &&
+                              receiverPhone != senderPhone)
+                            GestureDetector(
+                              onTap: () => _call(receiverPhone),
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 10, vertical: 4),
+                                decoration: BoxDecoration(
+                                    color:
+                                    Colors.blue.withOpacity(0.1),
+                                    borderRadius:
+                                    BorderRadius.circular(12)),
+                                child: Row(children: [
+                                  Icon(Icons.call,
+                                      color: Colors.blue,
+                                      size: uiScale.icon(12)),
+                                  const SizedBox(width: 4),
+                                  Text('Call Receiver',
+                                      style: TextStyle(
+                                          color: Colors.blue,
+                                          fontWeight: FontWeight.w700,
+                                          fontSize:
+                                          uiScale.font(10))),
+                                ]),
+                              ),
+                            ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+
+            SizedBox(height: uiScale.gap(20)),
+
+            // ── Financial breakdown ────────────────────────
+            Container(
+              padding: EdgeInsets.all(uiScale.inset(14)),
+              decoration: BoxDecoration(
+                color: isDark
+                    ? Colors.black26
+                    : Colors.grey.shade50,
+                borderRadius:
+                BorderRadius.circular(uiScale.radius(16)),
+                border: Border.all(
+                    color: cs.outlineVariant.withOpacity(0.4)),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    mainAxisAlignment:
+                    MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text('TOTAL FARE',
+                          style: TextStyle(
+                              color: os.withOpacity(0.5),
+                              fontSize: uiScale.font(9),
+                              fontWeight: FontWeight.w800,
+                              letterSpacing: 1.0)),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 8, vertical: 3),
+                        decoration: BoxDecoration(
+                          color: payMethod == 'WALLET'
+                              ? Colors.blue.withOpacity(0.1)
+                              : Colors.orange.withOpacity(0.1),
+                          borderRadius: BorderRadius.circular(6),
+                          border: Border.all(
+                              color: payMethod == 'WALLET'
+                                  ? Colors.blue.withOpacity(0.3)
+                                  : Colors.orange.withOpacity(0.3)),
+                        ),
+                        child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(
+                                  payMethod == 'WALLET'
+                                      ? Icons
+                                      .account_balance_wallet_rounded
+                                      : Icons.payments_rounded,
+                                  color: payMethod == 'WALLET'
+                                      ? Colors.blue
+                                      : Colors.orange.shade700,
+                                  size: uiScale.icon(10)),
+                              const SizedBox(width: 4),
+                              Text(payMethod,
+                                  style: TextStyle(
+                                      color: payMethod == 'WALLET'
+                                          ? Colors.blue
+                                          : Colors.orange.shade700,
+                                      fontSize: uiScale.font(9),
+                                      fontWeight: FontWeight.w900,
+                                      letterSpacing: 0.5)),
+                            ]),
+                      ),
+                    ],
+                  ),
+                  Text('$currency ${totalFare.toStringAsFixed(2)}',
+                      style: TextStyle(
+                          color: os,
+                          fontSize: uiScale.font(20),
+                          fontWeight: FontWeight.w900)),
+                  Padding(
+                    padding: EdgeInsets.symmetric(
+                        vertical: uiScale.gap(12)),
+                    child: Divider(
+                        color: cs.outlineVariant.withOpacity(0.4),
+                        height: 1,
+                        thickness: 1),
+                  ),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Column(
+                          crossAxisAlignment:
+                          CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                                'YOUR EARNINGS (${driverPercent.toStringAsFixed(0)}%)',
+                                style: TextStyle(
+                                    color: Colors.green,
+                                    fontSize: uiScale.font(8.5),
+                                    fontWeight: FontWeight.w800,
+                                    letterSpacing: 0.5)),
+                            Text(
+                                '$currency ${driverEarnings.toStringAsFixed(2)}',
+                                style: TextStyle(
+                                    color: Colors.green,
+                                    fontSize: uiScale.font(14),
+                                    fontWeight: FontWeight.w900)),
+                          ]),
+                      Column(
+                          crossAxisAlignment:
+                          CrossAxisAlignment.end,
+                          children: [
+                            Text(
+                                'APP FEE (${feePercent.toStringAsFixed(0)}%)',
+                                style: TextStyle(
+                                    color: os.withOpacity(0.5),
+                                    fontSize: uiScale.font(8.5),
+                                    fontWeight: FontWeight.w800,
+                                    letterSpacing: 0.5)),
+                            Text(
+                                '$currency ${appFee.toStringAsFixed(2)}',
+                                style: TextStyle(
+                                    color: os.withOpacity(0.7),
+                                    fontSize: uiScale.font(14),
+                                    fontWeight: FontWeight.w800)),
+                          ]),
+                    ],
+                  ),
                 ],
               ),
             ),
-          ),
-        ],
+
+            SizedBox(height: uiScale.gap(20)),
+
+            // ── Navigate button ───────────────────────────
+            GestureDetector(
+              onTap: onNavigate,
+              child: Container(
+                height: uiScale.gap(48),
+                alignment: Alignment.center,
+                decoration: BoxDecoration(
+                    color: AppColors.primary,
+                    borderRadius:
+                    BorderRadius.circular(uiScale.radius(14))),
+                child: Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Icon(Icons.navigation_rounded,
+                          color: Colors.white,
+                          size: uiScale.icon(16)),
+                      SizedBox(width: uiScale.gap(8)),
+                      Text('Open Navigation',
+                          style: TextStyle(
+                              color: Colors.white,
+                              fontSize: uiScale.font(13),
+                              fontWeight: FontWeight.w900,
+                              letterSpacing: 0.5)),
+                    ]),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }

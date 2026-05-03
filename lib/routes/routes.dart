@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 
 // EXISTING
-import '../screens/home_page.dart';
 import '../screens/loading_screen.dart';
 import '../screens/authentication/onboarding_screen.dart';
 import '../screens/authentication/login_screen.dart';
@@ -11,8 +10,10 @@ import '../screens/authentication/forgotpassword_screen.dart';
 import '../screens/authentication/set_pin.dart';
 import '../screens/TransactionList.dart';
 import '../screens/profile.dart';
+import '../screens/home_page.dart'; // Keep this for direct access if ever needed
 
 // NEW
+import '../screens/main_navigation_screen.dart'; // <-- IMPORT THE NEW SHELL
 import '../screens/ride_options_screen.dart';
 import '../screens/notifications_screen.dart';
 import '../screens/ride_history_screen.dart';
@@ -43,7 +44,6 @@ class AppRoutes {
 
   static const String become_a_driver = '/become_a_driver';
 
-  // Added to satisfy Home/Booking
   static const String rideOptions = '/ride-options';
   static const String notifications = '/notifications';
   static const String rideHistory = '/ride-history';
@@ -62,16 +62,15 @@ class AppRoutes {
       forgot_password: (context) => const ForgotPasswordScreen(),
       authentication: (context) => const AuthenticationScreen(),
       set_user_pin: (context) => const SetPinScreen(),
-      home: (context) => const HomePage(),
+
+      // 👇 CHANGE THIS: Map '/home' to your new MainNavigationScreen
+      home: (context) => const MainNavigationScreen(),
+
       profile: (context) => const ProfileScreen(),
       campus_ride: (context) => const CampusRidePage(),
       send_me: (context) => const SendMeLandingPage(),
       dispatch: (context) => const DispatchLandingPage(),
-
-      // You already had "history" for transactions; keep it
       history: (context) => const TransactionHistoryPage(),
-
-      // Map the new menu entries
       transactions: (context) => const TransactionHistoryPage(),
       notifications: (context) => const NotificationsScreen(),
       rideHistory: (context) => const RideHistoryScreen(),
@@ -79,13 +78,10 @@ class AppRoutes {
       offers: (context) => const OffersScreen(),
       settings: (context) => const SettingsScreen(),
       help: (context) => const HelpScreen(),
-
       become_a_driver: (context) => const BecomeADriverPage(),
 
-      // Ride options expects a Map argument from HomePage
       rideOptions: (context) {
-        final args = ModalRoute.of(context)!.settings.arguments
-        as Map<String, dynamic>?;
+        final args = ModalRoute.of(context)!.settings.arguments as Map<String, dynamic>?;
         return RideOptionsScreen(args: args);
       },
     };

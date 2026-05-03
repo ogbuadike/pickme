@@ -272,6 +272,7 @@ class _DispatchLandingPageState extends State<DispatchLandingPage> with SingleTi
       ),
 
       // 5. Custom Bottom Navigation Bar
+      /*
       bottomNavigationBar: CustomBottomNavBar(
         currentIndex: _currentIndex,
         onTap: (i) {
@@ -287,6 +288,8 @@ class _DispatchLandingPageState extends State<DispatchLandingPage> with SingleTi
           }
         },
       ),
+
+       */
     );
   }
 

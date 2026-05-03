@@ -1965,6 +1965,8 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
             ),
         ],
       ),
+
+      /*
       bottomNavigationBar: (!_marketOpen && _tripPhase == TripPhase.browsing)
           ? CustomBottomNavBar(
         currentIndex: _currentIndex,
@@ -1981,6 +1983,8 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
         },
       )
           : null,
+
+       */
     );
   }
 }

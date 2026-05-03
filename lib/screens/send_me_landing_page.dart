@@ -272,6 +272,7 @@ class _SendMeLandingPageState extends State<SendMeLandingPage> with SingleTicker
       ),
 
       // 5. Custom Bottom Navigation Bar
+      /*
       bottomNavigationBar: CustomBottomNavBar(
         currentIndex: _currentIndex,
         onTap: (i) {
@@ -287,6 +288,8 @@ class _SendMeLandingPageState extends State<SendMeLandingPage> with SingleTicker
           }
         },
       ),
+
+       */
     );
   }
 

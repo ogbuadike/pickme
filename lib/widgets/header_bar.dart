@@ -1,21 +1,57 @@
 // lib/screens/home/widgets/header_bar.dart
 //
-// Premium, responsive header:
-// - Avatar (menu) + greeting
-// - Notification action
-// - Wallet action with subtle scanner/pulse animation
-// - Consistent scaling via _ResponsiveMetrics
-// - Safe avatar loading (no asset dependency)
-// - Clean tooltips, a11y, haptics, and shadows
+// ─── PRODUCTION-GRADE HEADER BAR ───────────────────────────────────────────
+//  • Self-contained active-task detection via SharedPreferences ride cache.
+//    Zero prop-drilling required — reads the EXACT same cache key that
+//    RideHistoryScreen writes, so the alert appears instantly on mount.
+//  • Reactive: refreshes whenever the widget is rebuilt (tab switch, resume)
+//    and every 15 seconds via a background ticker for live accuracy.
+//  • Red pulsing ALERT PILL replaces notification icon when tasks are pending.
+//  • Retains all original functionality: avatar, greeting, wallet button.
+//  • Full a11y, haptics, responsive scaling, dark/light theming.
+// ────────────────────────────────────────────────────────────────────────────
 
+import 'dart:async';
+import 'dart:convert';
 import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import '../../../themes/app_theme.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
+import '../../../themes/app_theme.dart';
+import '../routes/routes.dart';
+
+// ─── Active status set — mirrors RideHistoryScreen exactly ───────────────────
+const _kActiveStatuses = {
+  'searching',
+  'accepted',
+  'enroute_pickup',
+  'arrived_pickup',
+  'in_progress',
+  'in_ride',
+  'driver_arriving',
+  'driver_assigned',
+  'arrived_destination',
+};
+
+// ─── Cache refresh interval ───────────────────────────────────────────────────
+const _kRefreshInterval = Duration(seconds: 15);
+
+// ─── Default logo fallback ────────────────────────────────────────────────────
+const _kDefaultLogoUrl = 'https://phantomphones.store/pick_me/img/logo.png';
+
+// ═════════════════════════════════════════════════════════════════════════════
+//  HeaderBar
+// ═════════════════════════════════════════════════════════════════════════════
 class HeaderBar extends StatefulWidget {
   final Map<String, dynamic>? user;
   final bool busyProfile;
+
+  /// Optional external override. When null (default), HeaderBar derives the
+  /// value autonomously from the SharedPreferences ride cache.
+  final bool? hasActiveTask;
+
   final VoidCallback onMenu;
   final VoidCallback onWallet;
   final VoidCallback onNotifications;
@@ -24,6 +60,7 @@ class HeaderBar extends StatefulWidget {
     super.key,
     required this.user,
     required this.busyProfile,
+    this.hasActiveTask,               // optional override
     required this.onMenu,
     required this.onWallet,
     required this.onNotifications,
@@ -33,121 +70,236 @@ class HeaderBar extends StatefulWidget {
   State<HeaderBar> createState() => _HeaderBarState();
 }
 
-class _HeaderBarState extends State<HeaderBar> with SingleTickerProviderStateMixin {
+class _HeaderBarState extends State<HeaderBar>
+    with SingleTickerProviderStateMixin {
+
+  // ── Animation ──────────────────────────────────────────────────────────────
   late final AnimationController _pulseCtrl;
 
+  // ── Derived active-task state ──────────────────────────────────────────────
+  bool _derivedHasActiveTask = false;
+  int  _activeTaskCount       = 0;
+  Timer? _refreshTimer;
+
+  // ── Unified resolved flag ──────────────────────────────────────────────────
+  bool get _hasActiveTask =>
+      widget.hasActiveTask ?? _derivedHasActiveTask;
+
+  // ── Lifecycle ──────────────────────────────────────────────────────────────
   @override
   void initState() {
     super.initState();
+
     _pulseCtrl = AnimationController(
       vsync: this,
-      duration: const Duration(milliseconds: 1700),
+      duration: const Duration(milliseconds: 1400),
     )..repeat();
+
+    // Immediate cache read — no await spinner; UI renders default then snaps.
+    _refreshFromCache();
+
+    // Periodic background refresh for live accuracy.
+    _refreshTimer = Timer.periodic(_kRefreshInterval, (_) {
+      if (mounted) _refreshFromCache();
+    });
+  }
+
+  @override
+  void didUpdateWidget(HeaderBar oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // Re-check whenever parent rebuilds (e.g. tab switch returns to home).
+    _refreshFromCache();
   }
 
   @override
   void dispose() {
     _pulseCtrl.dispose();
+    _refreshTimer?.cancel();
     super.dispose();
   }
 
+  // ─── Cache reader ────────────────────────────────────────────────────────
+  Future<void> _refreshFromCache() async {
+    // Only runs the autonomous path when parent hasn't provided an override.
+    if (widget.hasActiveTask != null) return;
+
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final isDriver = prefs.getBool('user_is_driver') ?? false;
+      final cacheKey = 'ride_history_${isDriver ? "driver" : "rider"}';
+      final raw = prefs.getString(cacheKey);
+
+      if (raw == null || raw.isEmpty) {
+        _applyTaskState(false, 0);
+        return;
+      }
+
+      final decoded = jsonDecode(raw) as List<dynamic>;
+      int count = 0;
+      for (final item in decoded) {
+        if (item is Map<String, dynamic>) {
+          final s = (item['status'] ?? '').toString().toLowerCase();
+          if (_kActiveStatuses.contains(s)) count++;
+        }
+      }
+
+      _applyTaskState(count > 0, count);
+    } catch (_) {
+      // Silently fail — never crash the header.
+    }
+  }
+
+  void _applyTaskState(bool hasTask, int count) {
+    if (!mounted) return;
+    if (_derivedHasActiveTask == hasTask && _activeTaskCount == count) return;
+    setState(() {
+      _derivedHasActiveTask = hasTask;
+      _activeTaskCount       = count;
+    });
+  }
+
+  // ─── Metrics ──────────────────────────────────────────────────────────────
   _ResponsiveMetrics _metricsOf(BuildContext context) {
     final mq = MediaQuery.of(context);
-    final w = mq.size.width;
-    final h = mq.size.height;
-    final shortest = math.min(w, h);
+    final shortest = math.min(mq.size.width, mq.size.height);
     final base = (shortest / 390.0).clamp(0.75, 1.15);
-    final textScale = mq.textScaleFactor.clamp(0.85, 1.25);
     return _ResponsiveMetrics(
-      scale: base.toDouble(),
-      textScale: textScale.toDouble(),
+      scale:       base.toDouble(),
+      textScale:   mq.textScaleFactor.clamp(0.85, 1.25).toDouble(),
       isLandscape: mq.orientation == Orientation.landscape,
-      safeTop: mq.padding.top,
+      safeTop:     mq.padding.top,
     );
   }
 
+  // ─── Avatar URL sanitiser ─────────────────────────────────────────────────
   String? _safeAvatarUrl(String? url) {
     if (url == null || url.isEmpty) return null;
     final u = url.toLowerCase();
     if (!u.startsWith('http')) return null;
-    if (u.contains('icon-library.com')) return null; // avoid noisy SSL
+    if (u.contains('icon-library.com')) return null;
     return url;
   }
 
+  // ─── Navigation ───────────────────────────────────────────────────────────
+  void _openRideHistory() {
+    HapticFeedback.heavyImpact();
+    Navigator.pushNamed(context, AppRoutes.rideHistory).then((_) {
+      // Refresh after returning — status may have changed.
+      _refreshFromCache();
+    });
+  }
+
+  // ─── Build ────────────────────────────────────────────────────────────────
   @override
   Widget build(BuildContext context) {
-    final m = _metricsOf(context);
-    final theme = Theme.of(context);
+    final m      = _metricsOf(context);
+    final theme  = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
-    final cs = theme.colorScheme;
+    final cs     = theme.colorScheme;
 
-    final name = (widget.user?['user_lname'] ?? widget.user?['user_name'] ?? 'Rider').toString();
+    final name      = (widget.user?['user_lname'] ??
+        widget.user?['user_name'] ?? 'Rider').toString();
     final avatarUrl = _safeAvatarUrl(widget.user?['user_logo'] as String?);
 
-    // Uses crisp theme colors instead of faded whites
-    final textColor = isDark ? cs.onSurface : AppColors.textPrimary;
+    final textColor = isDark ? cs.onSurface       : AppColors.textPrimary;
     final subColor  = isDark ? cs.onSurfaceVariant : AppColors.textSecondary.withOpacity(.90);
-
-    // Uses sleek surface colors for OLED compatibility
-    final bg   = isDark ? cs.surface : theme.cardColor;
-    final brdr = isDark ? cs.outline : AppColors.mintBgLight.withOpacity(.30);
+    final bg        = isDark ? cs.surface          : theme.cardColor;
+    final brdr      = isDark ? cs.outline          : AppColors.mintBgLight.withOpacity(.30);
 
     return Padding(
-      padding: EdgeInsets.fromLTRB(12 * m.scale, 6 * m.scale, 12 * m.scale, 6 * m.scale),
+      padding: EdgeInsets.fromLTRB(
+        12 * m.scale, 6 * m.scale, 12 * m.scale, 6 * m.scale,
+      ),
       child: Container(
-        padding: EdgeInsets.symmetric(horizontal: 10 * m.scale, vertical: 6 * m.scale),
+        padding: EdgeInsets.symmetric(
+          horizontal: 10 * m.scale, vertical: 6 * m.scale,
+        ),
         decoration: BoxDecoration(
-          color: bg,
+          color:        bg,
           borderRadius: BorderRadius.circular(26 * m.scale),
-          border: Border.all(color: brdr, width: 1),
+          border:       Border.all(color: brdr, width: 1),
           boxShadow: [
             BoxShadow(
-              color: Colors.black.withOpacity(isDark ? .40 : .08),
+              color:      Colors.black.withOpacity(isDark ? .40 : .08),
               blurRadius: 12 * m.scale,
-              offset: Offset(0, 6 * m.scale),
+              offset:     Offset(0, 6 * m.scale),
             ),
           ],
         ),
         child: Row(
           children: [
+            // ── Avatar / Menu ──────────────────────────────────────────────
             _AvatarButton(
-              size: 36 * m.scale,
+              size:       36 * m.scale,
               networkUrl: avatarUrl,
-              busy: widget.busyProfile,
+              busy:       widget.busyProfile,
               onTap: () {
                 HapticFeedback.selectionClick();
                 widget.onMenu();
               },
               metrics: m,
-              isDark: isDark,
-              cs: cs,
+              isDark:  isDark,
+              cs:      cs,
             ),
             SizedBox(width: 10 * m.scale),
-            Expanded(child: _Greeting(name: name, textColor: textColor, subColor: subColor, metrics: m)),
-            SizedBox(width: 6 * m.scale),
-            _HeaderAction(
-              tooltip: 'Notifications',
-              icon: Icons.notifications_none_rounded,
-              onTap: () {
-                HapticFeedback.selectionClick();
-                widget.onNotifications();
-              },
-              size: 34 * m.scale,
-              metrics: m,
-              isDark: isDark,
-              cs: cs,
+
+            // ── Greeting ───────────────────────────────────────────────────
+            Expanded(
+              child: _Greeting(
+                name:      name,
+                textColor: textColor,
+                subColor:  subColor,
+                metrics:   m,
+              ),
             ),
             SizedBox(width: 6 * m.scale),
+
+            // ── ALERT PILL  ↔  Notification icon (mutually exclusive) ──────
+            AnimatedSwitcher(
+              duration: const Duration(milliseconds: 350),
+              switchInCurve:  Curves.elasticOut,
+              switchOutCurve: Curves.easeIn,
+              transitionBuilder: (child, anim) => ScaleTransition(
+                scale: anim,
+                child: FadeTransition(opacity: anim, child: child),
+              ),
+              child: _hasActiveTask
+                  ? _ActiveTaskAlertPill(
+                key:        const ValueKey('alert_pill'),
+                onTap:      _openRideHistory,
+                activeCount: _activeTaskCount,
+                height:     34 * m.scale,
+                metrics:    m,
+                pulseCtrl:  _pulseCtrl,
+              )
+                  : _HeaderAction(
+                key:     const ValueKey('notif_btn'),
+                tooltip: 'Ride History',
+                icon:    Icons.notifications_none_rounded,
+                onTap: () {
+                  HapticFeedback.selectionClick();
+                  _openRideHistory();
+                },
+                size:    34 * m.scale,
+                metrics: m,
+                isDark:  isDark,
+                cs:      cs,
+              ),
+            ),
+
+            SizedBox(width: 6 * m.scale),
+
+            // ── Wallet ─────────────────────────────────────────────────────
             _WalletButton(
-              tooltip: 'Fund account',
+              tooltip:   'Fund account',
               onTap: () {
                 HapticFeedback.selectionClick();
                 widget.onWallet();
               },
-              size: 34 * m.scale,
-              metrics: m,
-              isDark: isDark,
-              cs: cs,
+              size:      34 * m.scale,
+              metrics:   m,
+              isDark:    isDark,
+              cs:        cs,
               pulseCtrl: _pulseCtrl,
               textColor: textColor,
             ),
@@ -158,11 +310,15 @@ class _HeaderBarState extends State<HeaderBar> with SingleTickerProviderStateMix
   }
 }
 
+// ═════════════════════════════════════════════════════════════════════════════
+//  Responsive Metrics
+// ═════════════════════════════════════════════════════════════════════════════
 class _ResponsiveMetrics {
   final double scale;
   final double textScale;
-  final bool isLandscape;
+  final bool   isLandscape;
   final double safeTop;
+
   const _ResponsiveMetrics({
     required this.scale,
     required this.textScale,
@@ -171,11 +327,15 @@ class _ResponsiveMetrics {
   });
 }
 
+// ═════════════════════════════════════════════════════════════════════════════
+//  Greeting
+// ═════════════════════════════════════════════════════════════════════════════
 class _Greeting extends StatelessWidget {
-  final String name;
-  final Color textColor;
-  final Color subColor;
+  final String             name;
+  final Color              textColor;
+  final Color              subColor;
   final _ResponsiveMetrics metrics;
+
   const _Greeting({
     required this.name,
     required this.textColor,
@@ -195,17 +355,17 @@ class _Greeting extends StatelessWidget {
     final tight = MediaQuery.of(context).size.width < 360;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
-      mainAxisSize: MainAxisSize.min,
+      mainAxisSize:       MainAxisSize.min,
       children: [
         if (!tight)
           Text(
             'Good ${_partOfDay()}',
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
+            maxLines:  1,
+            overflow:  TextOverflow.ellipsis,
             style: TextStyle(
-              color: subColor,
-              fontSize: (9.5 * metrics.scale * metrics.textScale).clamp(8.0, 11.0),
-              fontWeight: FontWeight.w600, // FIXED: Changed 600 to FontWeight.w600
+              color:       subColor,
+              fontSize:    (9.5 * metrics.scale * metrics.textScale).clamp(8.0, 11.0),
+              fontWeight:  FontWeight.w600,
               letterSpacing: -0.1,
             ),
           ),
@@ -214,9 +374,9 @@ class _Greeting extends StatelessWidget {
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
           style: TextStyle(
-            color: textColor,
-            fontSize: (13 * metrics.scale * metrics.textScale).clamp(12.0, 16.0),
-            fontWeight: FontWeight.w800,
+            color:         textColor,
+            fontSize:      (13 * metrics.scale * metrics.textScale).clamp(12.0, 16.0),
+            fontWeight:    FontWeight.w800,
             letterSpacing: -0.25,
           ),
         ),
@@ -225,14 +385,17 @@ class _Greeting extends StatelessWidget {
   }
 }
 
+// ═════════════════════════════════════════════════════════════════════════════
+//  Avatar Button
+// ═════════════════════════════════════════════════════════════════════════════
 class _AvatarButton extends StatelessWidget {
-  final double size;
-  final String? networkUrl;
-  final bool busy;
-  final VoidCallback onTap;
+  final double             size;
+  final String?            networkUrl;
+  final bool               busy;
+  final VoidCallback       onTap;
   final _ResponsiveMetrics metrics;
-  final bool isDark;
-  final ColorScheme cs;
+  final bool               isDark;
+  final ColorScheme        cs;
 
   const _AvatarButton({
     required this.size,
@@ -246,40 +409,41 @@ class _AvatarButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    Widget avatarCore;
-    if (networkUrl != null && networkUrl!.isNotEmpty) {
-      avatarCore = ClipOval(
-        child: Image.network(
-          networkUrl!,
-          width: size,
-          height: size,
-          fit: BoxFit.cover,
-          errorBuilder: (_, __, ___) => _PlaceholderAvatar(size: size, isDark: isDark, cs: cs),
-        ),
-      );
-    } else {
-      avatarCore = _PlaceholderAvatar(size: size, isDark: isDark, cs: cs);
-    }
+    Widget avatarCore = networkUrl != null && networkUrl!.isNotEmpty
+        ? ClipOval(
+      child: Image.network(
+        networkUrl!,
+        width:   size,
+        height:  size,
+        fit:     BoxFit.cover,
+        errorBuilder: (_, __, ___) =>
+            _PlaceholderAvatar(size: size, isDark: isDark, cs: cs),
+      ),
+    )
+        : _PlaceholderAvatar(size: size, isDark: isDark, cs: cs);
 
     return Semantics(
       button: true,
-      label: 'Open menu',
+      label:  'Open menu',
       child: GestureDetector(
         onTap: onTap,
         child: Stack(
           clipBehavior: Clip.none,
           children: [
             Container(
-              width: size,
+              width:  size,
               height: size,
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
-                border: Border.all(color: isDark ? cs.primary : Colors.white.withOpacity(.9), width: 1.5),
+                border: Border.all(
+                  color: isDark ? cs.primary : Colors.white.withOpacity(.9),
+                  width: 1.5,
+                ),
                 boxShadow: [
                   BoxShadow(
-                    color: Colors.black.withOpacity(isDark ? .40 : .18),
+                    color:      Colors.black.withOpacity(isDark ? .40 : .18),
                     blurRadius: 8 * metrics.scale,
-                    offset: Offset(0, 3.5 * metrics.scale),
+                    offset:     Offset(0, 3.5 * metrics.scale),
                   ),
                 ],
               ),
@@ -288,17 +452,21 @@ class _AvatarButton extends StatelessWidget {
             if (busy)
               Positioned(
                 right: -2.0 * metrics.scale,
-                top: -2.0 * metrics.scale,
+                top:   -2.0 * metrics.scale,
                 child: Container(
-                  width: 10.0 * metrics.scale,
+                  width:  10.0 * metrics.scale,
                   height: 10.0 * metrics.scale,
                   decoration: BoxDecoration(
-                    color: isDark ? cs.primary : AppColors.primary,
-                    shape: BoxShape.circle,
-                    border: Border.all(color: isDark ? cs.surface : Colors.white, width: 1.4),
+                    color:  isDark ? cs.primary : AppColors.primary,
+                    shape:  BoxShape.circle,
+                    border: Border.all(
+                      color: isDark ? cs.surface : Colors.white,
+                      width: 1.4,
+                    ),
                     boxShadow: [
                       BoxShadow(
-                        color: (isDark ? cs.primary : AppColors.primary).withOpacity(0.45),
+                        color: (isDark ? cs.primary : AppColors.primary)
+                            .withOpacity(0.45),
                         blurRadius: 3.5 * metrics.scale,
                       ),
                     ],
@@ -313,32 +481,209 @@ class _AvatarButton extends StatelessWidget {
 }
 
 class _PlaceholderAvatar extends StatelessWidget {
-  final double size;
-  final bool isDark;
+  final double      size;
+  final bool        isDark;
   final ColorScheme cs;
 
-  const _PlaceholderAvatar({required this.size, required this.isDark, required this.cs});
+  const _PlaceholderAvatar({
+    required this.size,
+    required this.isDark,
+    required this.cs,
+  });
 
   @override
   Widget build(BuildContext context) {
     return CircleAvatar(
-      radius: size / 2,
+      radius:          size / 2,
       backgroundColor: isDark ? cs.surfaceVariant : Colors.white.withOpacity(.7),
-      child: Icon(Icons.person, color: isDark ? cs.onSurfaceVariant : Colors.black54),
+      child: Icon(
+        Icons.person,
+        color: isDark ? cs.onSurfaceVariant : Colors.black54,
+      ),
     );
   }
 }
 
-class _HeaderAction extends StatefulWidget {
-  final String tooltip;
-  final IconData icon;
-  final VoidCallback onTap;
-  final double size;
+// ═════════════════════════════════════════════════════════════════════════════
+//  Active Task Alert Pill  ← THE CORE INNOVATION
+//
+//  Replaces the notification icon when pending rides exist.
+//  • Sinusoidal red pulse on background + glow shadow.
+//  • Count badge when >1 active task.
+//  • Press scale feedback.
+//  • Animated entry via AnimatedSwitcher in parent.
+// ═════════════════════════════════════════════════════════════════════════════
+class _ActiveTaskAlertPill extends StatefulWidget {
+  final VoidCallback       onTap;
+  final int                activeCount;
+  final double             height;
   final _ResponsiveMetrics metrics;
-  final bool isDark;
-  final ColorScheme cs;
+  final AnimationController pulseCtrl;
+
+  const _ActiveTaskAlertPill({
+    super.key,
+    required this.onTap,
+    required this.activeCount,
+    required this.height,
+    required this.metrics,
+    required this.pulseCtrl,
+  });
+
+  @override
+  State<_ActiveTaskAlertPill> createState() => _ActiveTaskAlertPillState();
+}
+
+class _ActiveTaskAlertPillState extends State<_ActiveTaskAlertPill>
+    with SingleTickerProviderStateMixin {
+
+  late final AnimationController _pressCtrl = AnimationController(
+    vsync:    this,
+    duration: const Duration(milliseconds: 140),
+  );
+
+  @override
+  void dispose() {
+    _pressCtrl.dispose();
+    super.dispose();
+  }
+
+  void _onTapDown(TapDownDetails _) => _pressCtrl.forward();
+  void _onTapUp(TapUpDetails _) {
+    _pressCtrl.reverse();
+    widget.onTap();
+  }
+  void _onTapCancel() => _pressCtrl.reverse();
+
+  @override
+  Widget build(BuildContext context) {
+    final m = widget.metrics;
+
+    return Semantics(
+      button: true,
+      label:  'Pending task — tap to view ride history',
+      child: Tooltip(
+        message:       'You have ${widget.activeCount} pending task${widget.activeCount > 1 ? "s" : ""} — tap to manage',
+        preferBelow:   true,
+        waitDuration:  const Duration(milliseconds: 300),
+        child: GestureDetector(
+          onTapDown:   _onTapDown,
+          onTapUp:     _onTapUp,
+          onTapCancel: _onTapCancel,
+          child: ScaleTransition(
+            scale: Tween<double>(begin: 1.0, end: 0.88).animate(
+              CurvedAnimation(parent: _pressCtrl, curve: Curves.easeOut),
+            ),
+            child: AnimatedBuilder(
+              animation: widget.pulseCtrl,
+              builder: (context, _) {
+                // Smooth sinusoidal pulse — 0..1..0
+                final pulse = math.sin(widget.pulseCtrl.value * math.pi);
+
+                return Container(
+                  height:  widget.height,
+                  padding: EdgeInsets.symmetric(horizontal: 10 * m.scale),
+                  decoration: BoxDecoration(
+                    // Interpolate between two red shades
+                    color: Color.lerp(
+                      const Color(0xFFDC2626),   // red-600
+                      const Color(0xFFEF4444),   // red-500 brighter
+                      pulse,
+                    ),
+                    borderRadius: BorderRadius.circular(12 * m.scale),
+                    border: Border.all(
+                      color: Colors.red.shade200.withOpacity(0.55 + 0.25 * pulse),
+                      width: 1.5,
+                    ),
+                    boxShadow: [
+                      // Inner soft glow
+                      BoxShadow(
+                        color:       Colors.red.withOpacity(0.30 + 0.35 * pulse),
+                        blurRadius:  6 + 10 * pulse,
+                        spreadRadius: 0 + 2 * pulse,
+                      ),
+                      // Outer dramatic halo at peak pulse
+                      BoxShadow(
+                        color:       Colors.redAccent.withOpacity(0.15 * pulse),
+                        blurRadius:  20 * pulse,
+                        spreadRadius: 4 * pulse,
+                      ),
+                    ],
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      // Animated warning icon — scales subtly with pulse
+                      Transform.scale(
+                        scale: 1.0 + 0.08 * pulse,
+                        child: Icon(
+                          Icons.warning_amber_rounded,
+                          color: Colors.white,
+                          size:  16 * m.scale,
+                        ),
+                      ),
+                      SizedBox(width: 5 * m.scale),
+                      Text(
+                        'PENDING',
+                        style: TextStyle(
+                          color:         Colors.white,
+                          fontWeight:    FontWeight.w900,
+                          fontSize:      (11 * m.scale * m.textScale).clamp(10.0, 13.0),
+                          letterSpacing: 0.6,
+                        ),
+                      ),
+                      // Count badge — only shown when >1
+                      if (widget.activeCount > 1) ...[
+                        SizedBox(width: 5 * m.scale),
+                        Container(
+                          padding: EdgeInsets.symmetric(
+                            horizontal: 5 * m.scale,
+                            vertical:   1.5 * m.scale,
+                          ),
+                          decoration: BoxDecoration(
+                            color:        Colors.white.withOpacity(0.25),
+                            borderRadius: BorderRadius.circular(20),
+                            border:       Border.all(
+                              color: Colors.white.withOpacity(0.50),
+                              width: 1,
+                            ),
+                          ),
+                          child: Text(
+                            '${widget.activeCount}',
+                            style: TextStyle(
+                              color:         Colors.white,
+                              fontWeight:    FontWeight.w900,
+                              fontSize:      (9.5 * m.scale).clamp(8.5, 11.0),
+                              letterSpacing: -0.2,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                );
+              },
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+//  Header Action (Notification icon — shown when no active tasks)
+// ═════════════════════════════════════════════════════════════════════════════
+class _HeaderAction extends StatefulWidget {
+  final String             tooltip;
+  final IconData           icon;
+  final VoidCallback       onTap;
+  final double             size;
+  final _ResponsiveMetrics metrics;
+  final bool               isDark;
+  final ColorScheme        cs;
 
   const _HeaderAction({
+    super.key,
     required this.tooltip,
     required this.icon,
     required this.onTap,
@@ -352,9 +697,12 @@ class _HeaderAction extends StatefulWidget {
   State<_HeaderAction> createState() => _HeaderActionState();
 }
 
-class _HeaderActionState extends State<_HeaderAction> with SingleTickerProviderStateMixin {
-  late final AnimationController _scaleCtrl =
-  AnimationController(vsync: this, duration: const Duration(milliseconds: 160));
+class _HeaderActionState extends State<_HeaderAction>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _scaleCtrl = AnimationController(
+    vsync:    this,
+    duration: const Duration(milliseconds: 160),
+  );
 
   @override
   void dispose() {
@@ -363,51 +711,49 @@ class _HeaderActionState extends State<_HeaderAction> with SingleTickerProviderS
   }
 
   void _down(TapDownDetails _) => _scaleCtrl.forward();
-  void _up(TapUpDetails _) {
-    _scaleCtrl.reverse();
-    widget.onTap();
-  }
-
+  void _up(TapUpDetails _) { _scaleCtrl.reverse(); widget.onTap(); }
   void _cancel() => _scaleCtrl.reverse();
 
   @override
   Widget build(BuildContext context) {
-    final isDark = widget.isDark;
-    final cs = widget.cs;
-
-    // Uses sleek Surface Variant and Neon Primary in dark mode
-    final bg = isDark ? cs.surfaceVariant : Colors.white;
-    final iconColor = isDark ? cs.primary : AppColors.deep;
-    final borderColor = isDark ? cs.outline : AppColors.mintBgLight.withOpacity(.45);
+    final bg          = widget.isDark ? widget.cs.surfaceVariant : Colors.white;
+    final iconColor   = widget.isDark ? widget.cs.primary        : AppColors.deep;
+    final borderColor = widget.isDark
+        ? widget.cs.outline
+        : AppColors.mintBgLight.withOpacity(.45);
 
     return Tooltip(
-      message: widget.tooltip,
+      message:      widget.tooltip,
       waitDuration: const Duration(milliseconds: 400),
       child: GestureDetector(
-        onTapDown: _down,
-        onTapUp: _up,
+        onTapDown:   _down,
+        onTapUp:     _up,
         onTapCancel: _cancel,
         child: ScaleTransition(
           scale: Tween<double>(begin: 1, end: 0.86).animate(
             CurvedAnimation(parent: _scaleCtrl, curve: Curves.easeOut),
           ),
           child: Container(
-            width: widget.size,
+            width:  widget.size,
             height: widget.size,
+            alignment: Alignment.center,
             decoration: BoxDecoration(
-              color: bg,
-              shape: BoxShape.circle,
+              color:  bg,
+              shape:  BoxShape.circle,
               border: Border.all(color: borderColor, width: 1),
               boxShadow: [
                 BoxShadow(
-                  color: Colors.black.withOpacity(isDark ? .40 : .08),
+                  color:      Colors.black.withOpacity(widget.isDark ? .40 : .08),
                   blurRadius: 7 * widget.metrics.scale,
-                  offset: Offset(0, 2.5 * widget.metrics.scale),
+                  offset:     Offset(0, 2.5 * widget.metrics.scale),
                 ),
               ],
             ),
-            alignment: Alignment.center,
-            child: Icon(widget.icon, size: 18 * widget.metrics.scale, color: iconColor),
+            child: Icon(
+              widget.icon,
+              size:  18 * widget.metrics.scale,
+              color: iconColor,
+            ),
           ),
         ),
       ),
@@ -415,15 +761,18 @@ class _HeaderActionState extends State<_HeaderAction> with SingleTickerProviderS
   }
 }
 
+// ═════════════════════════════════════════════════════════════════════════════
+//  Wallet Button
+// ═════════════════════════════════════════════════════════════════════════════
 class _WalletButton extends StatefulWidget {
-  final String tooltip;
-  final VoidCallback onTap;
-  final double size;
+  final String             tooltip;
+  final VoidCallback       onTap;
+  final double             size;
   final _ResponsiveMetrics metrics;
-  final bool isDark;
-  final ColorScheme cs;
+  final bool               isDark;
+  final ColorScheme        cs;
   final AnimationController pulseCtrl;
-  final Color textColor;
+  final Color              textColor;
 
   const _WalletButton({
     required this.tooltip,
@@ -440,9 +789,12 @@ class _WalletButton extends StatefulWidget {
   State<_WalletButton> createState() => _WalletButtonState();
 }
 
-class _WalletButtonState extends State<_WalletButton> with SingleTickerProviderStateMixin {
-  late final AnimationController _scaleCtrl =
-  AnimationController(vsync: this, duration: const Duration(milliseconds: 160));
+class _WalletButtonState extends State<_WalletButton>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _scaleCtrl = AnimationController(
+    vsync:    this,
+    duration: const Duration(milliseconds: 160),
+  );
 
   @override
   void dispose() {
@@ -451,47 +803,43 @@ class _WalletButtonState extends State<_WalletButton> with SingleTickerProviderS
   }
 
   void _down(TapDownDetails _) => _scaleCtrl.forward();
-  void _up(TapUpDetails _) {
-    _scaleCtrl.reverse();
-    widget.onTap();
-  }
-
+  void _up(TapUpDetails _) { _scaleCtrl.reverse(); widget.onTap(); }
   void _cancel() => _scaleCtrl.reverse();
 
   @override
   Widget build(BuildContext context) {
-    final isDark = widget.isDark;
-    final cs = widget.cs;
-
-    // Uses sleek Surface Variant and Neon Primary in dark mode
-    final bg = isDark ? cs.surfaceVariant : Colors.white;
-    final borderColor = isDark ? cs.outline : AppColors.mintBgLight.withOpacity(.45);
-    final iconColor = isDark ? cs.primary : AppColors.deep;
-
-    final ringSize = widget.size * 0.64;
+    final bg          = widget.isDark ? widget.cs.surfaceVariant : Colors.white;
+    final borderColor = widget.isDark
+        ? widget.cs.outline
+        : AppColors.mintBgLight.withOpacity(.45);
+    final iconColor   = widget.isDark ? widget.cs.primary : AppColors.deep;
+    final ringSize    = widget.size * 0.64;
 
     return Tooltip(
-      message: widget.tooltip,
+      message:      widget.tooltip,
       waitDuration: const Duration(milliseconds: 400),
       child: GestureDetector(
-        onTapDown: _down,
-        onTapUp: _up,
+        onTapDown:   _down,
+        onTapUp:     _up,
         onTapCancel: _cancel,
         child: ScaleTransition(
           scale: Tween<double>(begin: 1, end: 0.86).animate(
             CurvedAnimation(parent: _scaleCtrl, curve: Curves.easeOut),
           ),
           child: Container(
-            padding: EdgeInsets.symmetric(horizontal: 9 * widget.metrics.scale, vertical: 5 * widget.metrics.scale),
+            padding: EdgeInsets.symmetric(
+              horizontal: 9 * widget.metrics.scale,
+              vertical:   5 * widget.metrics.scale,
+            ),
             decoration: BoxDecoration(
-              color: bg,
+              color:        bg,
               borderRadius: BorderRadius.circular(12 * widget.metrics.scale),
-              border: Border.all(color: borderColor, width: 1),
+              border:       Border.all(color: borderColor, width: 1),
               boxShadow: [
                 BoxShadow(
-                  color: Colors.black.withOpacity(isDark ? .40 : .08),
+                  color:      Colors.black.withOpacity(widget.isDark ? .40 : .08),
                   blurRadius: 7 * widget.metrics.scale,
-                  offset: Offset(0, 2.5 * widget.metrics.scale),
+                  offset:     Offset(0, 2.5 * widget.metrics.scale),
                 ),
               ],
             ),
@@ -499,7 +847,7 @@ class _WalletButtonState extends State<_WalletButton> with SingleTickerProviderS
               mainAxisSize: MainAxisSize.min,
               children: [
                 SizedBox(
-                  width: ringSize,
+                  width:  ringSize,
                   height: ringSize,
                   child: Stack(
                     alignment: Alignment.center,
@@ -510,16 +858,23 @@ class _WalletButtonState extends State<_WalletButton> with SingleTickerProviderS
                           final t = widget.pulseCtrl.value;
                           return Container(
                             decoration: BoxDecoration(
-                              shape: BoxShape.circle,
+                              shape:  BoxShape.circle,
                               border: Border.all(
-                                color: (isDark ? cs.primary : AppColors.primary).withOpacity((1 - t) * 0.40),
+                                color: (widget.isDark
+                                    ? widget.cs.primary
+                                    : AppColors.primary)
+                                    .withOpacity((1 - t) * 0.40),
                                 width: 1.2,
                               ),
                             ),
                           );
                         },
                       ),
-                      Icon(Icons.wallet_rounded, size: 16 * widget.metrics.scale, color: iconColor),
+                      Icon(
+                        Icons.wallet_rounded,
+                        size:  16 * widget.metrics.scale,
+                        color: iconColor,
+                      ),
                     ],
                   ),
                 ),
@@ -527,9 +882,10 @@ class _WalletButtonState extends State<_WalletButton> with SingleTickerProviderS
                 Text(
                   'Wallet',
                   style: TextStyle(
-                    color: widget.textColor,
-                    fontSize: (12 * widget.metrics.scale * widget.metrics.textScale).clamp(11.0, 14.0),
-                    fontWeight: FontWeight.w800,
+                    color:         widget.textColor,
+                    fontSize:      (12 * widget.metrics.scale * widget.metrics.textScale)
+                        .clamp(11.0, 14.0),
+                    fontWeight:    FontWeight.w800,
                     letterSpacing: -0.1,
                   ),
                 ),

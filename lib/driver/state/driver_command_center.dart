@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import '../../themes/app_theme.dart';
 import '../../ui/ui_scale.dart';
 import 'driver_models.dart';
+import '../../widgets/incoming_request_card.dart';
 
 class DriverCommandCenter extends StatelessWidget {
   final UIScale uiScale;
@@ -260,7 +261,6 @@ class _QuickActionStrip extends StatelessWidget {
   }
 }
 
-// --- MISSING CLASS RESTORED ---
 class _ActionPill extends StatelessWidget {
   final UIScale uiScale;
   final IconData icon;
@@ -294,7 +294,6 @@ class _ActionPill extends StatelessWidget {
     );
   }
 }
-// ------------------------------
 
 class _TripStateCard extends StatelessWidget {
   final UIScale uiScale; final RideJob ride; final bool busy; final ValueChanged<String> onRideAction; final VoidCallback onNavigate; final bool isDark; final ColorScheme cs;
@@ -354,8 +353,6 @@ class _QueueCard extends StatelessWidget {
   final UIScale uiScale; final List<RideJob> rides; final bool busy; final ValueChanged<RideJob> onAccept; final bool isDark; final ColorScheme cs;
   const _QueueCard({required this.uiScale, required this.rides, required this.busy, required this.onAccept, required this.isDark, required this.cs});
 
-  String _formatAmount(double amount) => amount.toStringAsFixed(0).replaceAllMapped(RegExp(r'(\d{1,3})(?=(\d{3})+(?!\d))'), (Match m) => '${m[1]},');
-
   @override
   Widget build(BuildContext context) {
     return Container(
@@ -370,59 +367,11 @@ class _QueueCard extends StatelessWidget {
             Text('No requests right now. Stay online and nearby requests will appear here automatically.', style: TextStyle(fontSize: uiScale.font(11.0), fontWeight: FontWeight.w600, color: isDark ? cs.onSurfaceVariant : AppColors.textSecondary, height: 1.4))
           else
             ...rides.take(5).map((ride) {
-              final isDispatch = ride.rideType == 'dispatch';
-              final isSendMe = ride.rideType == 'send_me';
-
-              return Padding(
-                padding: EdgeInsets.only(bottom: uiScale.gap(10)),
-                child: Container(
-                  padding: EdgeInsets.all(uiScale.inset(14)),
-                  decoration: BoxDecoration(color: isDark ? cs.surface : Colors.white, borderRadius: BorderRadius.circular(16), border: Border.all(color: isDark ? cs.outline.withOpacity(0.5) : Colors.black.withOpacity(0.04)), boxShadow: [BoxShadow(color: Colors.black.withOpacity(isDark ? 0.3 : 0.04), blurRadius: 12, offset: const Offset(0, 4))]),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        children: [
-                          if (isSendMe) ...[
-                            Container(padding: EdgeInsets.symmetric(horizontal: uiScale.inset(6), vertical: uiScale.inset(4)), decoration: BoxDecoration(color: Colors.blueAccent.withOpacity(0.15), borderRadius: BorderRadius.circular(6)), child: Text('🛒 ERRAND', style: TextStyle(color: isDark ? Colors.blue.shade300 : Colors.blue.shade700, fontSize: uiScale.font(9), fontWeight: FontWeight.w900))),
-                            SizedBox(width: uiScale.gap(6)),
-                          ] else if (isDispatch) ...[
-                            Container(padding: EdgeInsets.symmetric(horizontal: uiScale.inset(6), vertical: uiScale.inset(4)), decoration: BoxDecoration(color: Colors.amber.withOpacity(0.15), borderRadius: BorderRadius.circular(6)), child: Text('📦 PACKAGE', style: TextStyle(color: isDark ? Colors.amber.shade300 : Colors.amber.shade900, fontSize: uiScale.font(9), fontWeight: FontWeight.w900))),
-                            SizedBox(width: uiScale.gap(6)),
-                          ],
-                          Expanded(child: Text(ride.riderName, maxLines: 1, style: TextStyle(fontSize: uiScale.font(14.0), fontWeight: FontWeight.w900, color: isDark ? cs.onSurface : AppColors.textPrimary))),
-                          Text('${ride.currency} ${_formatAmount(ride.price)}', style: TextStyle(fontSize: uiScale.font(15.0), fontWeight: FontWeight.w900, color: isDark ? cs.primary : AppColors.primary, letterSpacing: -0.5)),
-                        ],
-                      ),
-
-                      if (isDispatch && ride.packageImage != null && ride.packageImage!.isNotEmpty) ...[
-                        SizedBox(height: uiScale.gap(12)),
-                        ClipRRect(
-                          borderRadius: BorderRadius.circular(uiScale.radius(12)),
-                          child: SizedBox(
-                            width: double.infinity, height: 140,
-                            child: Image.network(ride.packageImage!, fit: BoxFit.cover, errorBuilder: (_,__,___) => Container(color: cs.surfaceVariant, child: Icon(Icons.broken_image, color: cs.onSurfaceVariant))),
-                          ),
-                        ),
-                      ],
-
-                      if (isDispatch) ...[
-                        SizedBox(height: uiScale.gap(6)),
-                        Text('${ride.packageSize?.toUpperCase() ?? 'PACKAGE'} • ${ride.packageWeight}kg', style: TextStyle(color: isDark ? cs.onSurfaceVariant : AppColors.textSecondary, fontSize: uiScale.font(10.5), fontWeight: FontWeight.w800)),
-                      ] else if (isSendMe) ...[
-                        SizedBox(height: uiScale.gap(6)),
-                        Text('Instructions: ${ride.instructions ?? 'No specific instructions provided.'}', maxLines: 2, overflow: TextOverflow.ellipsis, style: TextStyle(color: isDark ? cs.onSurfaceVariant : AppColors.textSecondary, fontSize: uiScale.font(11.5), fontStyle: FontStyle.italic)),
-                      ],
-
-                      SizedBox(height: uiScale.gap(10)),
-                      Row(children: [Icon(Icons.place_rounded, size: uiScale.icon(14), color: AppColors.textSecondary), SizedBox(width: uiScale.gap(6)), Expanded(child: Text(ride.pickupText, maxLines: 1, style: TextStyle(fontSize: uiScale.font(11.5), fontWeight: FontWeight.w600, color: isDark ? cs.onSurfaceVariant : AppColors.textSecondary)))]),
-                      SizedBox(height: uiScale.gap(6)),
-                      Row(children: [Icon(Icons.flag_rounded, size: uiScale.icon(14), color: AppColors.textSecondary), SizedBox(width: uiScale.gap(6)), Expanded(child: Text(ride.destText, maxLines: 1, style: TextStyle(fontSize: uiScale.font(11.5), fontWeight: FontWeight.w600, color: isDark ? cs.onSurfaceVariant : AppColors.textSecondary)))]),
-                      SizedBox(height: uiScale.gap(16)),
-                      SizedBox(width: double.infinity, height: uiScale.inset(48), child: ElevatedButton(onPressed: busy ? null : () => onAccept(ride), style: ElevatedButton.styleFrom(backgroundColor: isDark ? cs.primary : AppColors.primary, foregroundColor: isDark ? cs.onPrimary : Colors.white, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)), elevation: 0), child: busy ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2.5, valueColor: AlwaysStoppedAnimation<Color>(Colors.white))) : Text(isSendMe ? 'Accept Errand' : (isDispatch ? 'Accept Delivery' : 'Accept Request'), style: TextStyle(fontSize: uiScale.font(13.5), fontWeight: FontWeight.w800, letterSpacing: 0.2)))),
-                    ],
-                  ),
-                ),
+              return IncomingRequestCard(
+                ride: ride,
+                uiScale: uiScale,
+                isAccepting: busy,
+                onAccept: () => onAccept(ride),
               );
             }),
         ],

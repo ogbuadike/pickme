@@ -25,6 +25,7 @@ import '../screens/become_a_driver.dart';
 import '../screens/campus_ride_page.dart';
 import '../screens/send_me_landing_page.dart';
 import '../screens/dispatch_landing_page.dart';
+import '../driver/driver_home_page.dart';
 
 class AppRoutes {
   // Existing
@@ -52,6 +53,7 @@ class AppRoutes {
   static const String transactions = '/transactions';
   static const String settings = '/settings';
   static const String help = '/help';
+  static const String driver_home = '/driver-home';
 
   static Map<String, WidgetBuilder> getRoutes() {
     return {
@@ -79,6 +81,8 @@ class AppRoutes {
       settings: (context) => const SettingsScreen(),
       help: (context) => const HelpScreen(),
       become_a_driver: (context) => const BecomeADriverPage(),
+
+      driver_home: (context) => const DriverHomePage(),
 
       rideOptions: (context) {
         final args = ModalRoute.of(context)!.settings.arguments as Map<String, dynamic>?;

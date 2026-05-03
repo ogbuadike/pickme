@@ -114,6 +114,11 @@ class _TransactionHistoryPageState extends State<TransactionHistoryPage> with Si
       final data = jsonDecode(res.body);
       if (res.statusCode == 200 && data['error'] == false) {
         final txList = (data['data']['transactions'] as List).map((e) => Transaction.fromJson(e)).toList();
+
+        // --- STRICT TIME SORTING APPLIED HERE ---
+        // This mathematically forces the absolute newest date to index 0, regardless of AM/PM text
+        txList.sort((a, b) => b.date.compareTo(a.date));
+
         setState(() {
           _transactions = txList;
           _totalIn = double.tryParse(data['data']['summary']['inflow']?.toString() ?? '0') ?? 0.0;

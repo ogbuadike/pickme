@@ -60,9 +60,16 @@ class _BalanceCardState extends State<BalanceCard> with SingleTickerProviderStat
     try {
       final prefs = await SharedPreferences.getInstance();
       final userId = prefs.getString('user_id');
+
+      // Load initial local data to prevent showing 0.0 while loading
+      final storedBal = prefs.getString('user_bal');
+      final storedTran = prefs.getString('user_last_tran');
+
       if (userId != null && userId.isNotEmpty) {
         setState(() {
           _uid = userId;
+          if (storedBal != null) _balance = double.tryParse(storedBal) ?? 0.0;
+          if (storedTran != null) _lastTran = storedTran;
         });
         await _fetchUserInfo();
         _startPeriodicUpdates();
@@ -93,17 +100,19 @@ class _BalanceCardState extends State<BalanceCard> with SingleTickerProviderStat
       return;
     }
 
+    if (mounted) setState(() => _isLoading = true);
+
     try {
       final response = await _apiClient.request(
         ApiConstants.userInfoEndpoint,
         method: 'POST',
         data: {'user': _uid},
-      ).timeout(Duration(seconds: 30)); // Add timeout
+      ).timeout(const Duration(seconds: 30));
 
       if (response.statusCode == 200) {
         final responseData = jsonDecode(response.body);
         if (responseData['error'] == false) {
-          _updateUserInfo(responseData['user']);
+          await _updateUserInfo(responseData['user']);
         } else {
           throw Exception(responseData['message'] ?? 'Unknown error occurred');
         }
@@ -120,19 +129,39 @@ class _BalanceCardState extends State<BalanceCard> with SingleTickerProviderStat
     }
   }
 
-  void _updateUserInfo(Map<String, dynamic> userData) {
+  // --- GLOBAL STATE SYNC INCLUDED HERE ---
+  Future<void> _updateUserInfo(Map<String, dynamic> userData) async {
     double newBalance = double.tryParse(userData['user_bal'] ?? '0.0') ?? 0.0;
+    String newLastTranStr = userData['user_last_tran'] ?? '';
 
-    setState(() {
-      _balance = newBalance;
-      _currency = userData['user_currency'] ?? 'NGN';
-      _lastTran = userData['user_last_tran'] ?? '';
-      _bankName = userData['user_bank'] ?? '';
-      _accountNumber = userData['user_account_number'] ?? '';
-      _accountName = userData['user_account_name'] ?? '';
-      _isLoading = false;
-      _retryCount = 0; // Reset retry count on successful fetch
-    });
+    // Save globally so the entire app (Drawers, Profile, etc.) syncs instantly
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('user_bal', userData['user_bal'] ?? '0.0');
+    await prefs.setString('user_last_tran', newLastTranStr);
+
+    final userDataStr = prefs.getString('user_data') ?? prefs.getString('user');
+    if (userDataStr != null) {
+      try {
+        final Map<String, dynamic> storedUser = jsonDecode(userDataStr);
+        storedUser['user_bal'] = userData['user_bal'] ?? '0.0';
+        storedUser['user_last_tran'] = newLastTranStr;
+        await prefs.setString('user_data', jsonEncode(storedUser));
+        await prefs.setString('user', jsonEncode(storedUser));
+      } catch (_) {}
+    }
+
+    if (mounted) {
+      setState(() {
+        _balance = newBalance;
+        _currency = userData['user_currency'] ?? 'NGN';
+        _lastTran = newLastTranStr;
+        _bankName = userData['user_bank'] ?? '';
+        _accountNumber = userData['user_account_number'] ?? '';
+        _accountName = userData['user_account_name'] ?? '';
+        _isLoading = false;
+        _retryCount = 0; // Reset retry count on successful fetch
+      });
+    }
 
     _adjustUpdateInterval(newBalance);
   }
@@ -164,7 +193,7 @@ class _BalanceCardState extends State<BalanceCard> with SingleTickerProviderStat
   }
 
   void _showError(String message) {
-    setState(() => _isLoading = false);
+    if (mounted) setState(() => _isLoading = false);
     showToastNotification(
       context: context,
       title: 'Error',
@@ -174,6 +203,7 @@ class _BalanceCardState extends State<BalanceCard> with SingleTickerProviderStat
   }
 
   Future<void> _onRefresh() async {
+    HapticFeedback.lightImpact();
     _updateInterval = 10; // Reset interval on manual refresh
     _retryCount = 0; // Reset retry count
     await _fetchUserInfo();
@@ -181,68 +211,88 @@ class _BalanceCardState extends State<BalanceCard> with SingleTickerProviderStat
   }
 
   void _toggleBalanceVisibility() {
+    HapticFeedback.selectionClick();
     setState(() {
       _isBalanceVisible = !_isBalanceVisible;
       _animationController.forward(from: 0);
     });
   }
 
+  // --- BULLETPROOF BOTTOM SHEET ---
   void _showFundAccountBottomSheet() {
+    HapticFeedback.mediumImpact();
+
+    // Explicitly grab the theme to enforce a hard background color
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final solidBgColor = isDark ? Theme.of(context).colorScheme.surface : Colors.white;
+    final textColor = isDark ? Colors.white : AppColors.textPrimary;
+
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
-      backgroundColor: Colors.transparent,
+      backgroundColor: Colors.transparent, // Keep transparent for the rounded corners
       builder: (BuildContext context) {
         return DraggableScrollableSheet(
           initialChildSize: 0.50,
           minChildSize: 0.5,
           maxChildSize: 0.95,
           builder: (_, ScrollController scrollController) {
-            return Container(
-              decoration: BoxDecoration(
-                color: AppColors.backgroundColor,
-                borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-              ),
-              child: Column(
-                children: [
-                  Container(
-                    height: 5,
-                    width: 40,
-                    margin: EdgeInsets.symmetric(vertical: 10),
-                    decoration: BoxDecoration(
-                      color: Colors.grey[300],
-                      borderRadius: BorderRadius.circular(2.5),
+            return Material(
+              color: Colors.transparent,
+              child: Container(
+                // This solid decoration mathematically guarantees it will never lose its background
+                decoration: BoxDecoration(
+                  color: solidBgColor,
+                  borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withOpacity(0.2),
+                      blurRadius: 10,
+                      spreadRadius: 2,
+                    )
+                  ],
+                ),
+                child: Column(
+                  children: [
+                    Container(
+                      height: 5,
+                      width: 40,
+                      margin: const EdgeInsets.symmetric(vertical: 10),
+                      decoration: BoxDecoration(
+                        color: isDark ? Colors.grey[700] : Colors.grey[300],
+                        borderRadius: BorderRadius.circular(2.5),
+                      ),
                     ),
-                  ),
-                  Expanded(
-                    child: ListView(
-                      controller: scrollController,
-                      padding: EdgeInsets.all(16), // Reduced padding
-                      children: [
-                        Text(
-                          'Fund Your Account',
-                          style: AppTextStyles.heading2.copyWith(fontSize: 20), // Smaller font
-                        ),
-                        SizedBox(height: 16), // Reduced spacing
-                        Text(
-                          'Make a transfer to the account details below:',
-                          style: AppTextStyles.bodyText.copyWith(fontSize: 14), // Smaller font
-                        ),
-                        SizedBox(height: 16), // Reduced spacing
-                        _buildAccountInfoCard(),
-                        SizedBox(height: 16), // Reduced spacing
-                        Text(
-                          'Important Notes:',
-                          style: AppTextStyles.subHeading.copyWith(fontSize: 16), // Smaller font
-                        ),
-                        SizedBox(height: 8), // Reduced spacing
-                        _buildBulletPoint('Transfers may be delayed within 30-60 minutes.'),
-                        _buildBulletPoint('Include detailed info in the transfer description (optional).'),
-                        _buildBulletPoint('Contact support if you encounter any issues.'),
-                      ],
+                    Expanded(
+                      child: ListView(
+                        controller: scrollController,
+                        padding: const EdgeInsets.all(16),
+                        children: [
+                          Text(
+                            'Fund Your Account',
+                            style: AppTextStyles.heading2.copyWith(fontSize: 20, color: textColor),
+                          ),
+                          const SizedBox(height: 16),
+                          Text(
+                            'Make a transfer to the account details below:',
+                            style: AppTextStyles.bodyText.copyWith(fontSize: 14, color: textColor),
+                          ),
+                          const SizedBox(height: 16),
+                          _buildAccountInfoCard(isDark, textColor),
+                          const SizedBox(height: 16),
+                          Text(
+                            'Important Notes:',
+                            style: AppTextStyles.subHeading.copyWith(fontSize: 16, color: textColor),
+                          ),
+                          const SizedBox(height: 8),
+                          _buildBulletPoint('Transfers may be delayed within 30-60 minutes.', textColor),
+                          _buildBulletPoint('Include detailed info in the transfer description (optional).', textColor),
+                          _buildBulletPoint('Contact support if you encounter any issues.', textColor),
+                        ],
+                      ),
                     ),
-                  ),
-                ],
+                  ],
+                ),
               ),
             );
           },
@@ -251,25 +301,25 @@ class _BalanceCardState extends State<BalanceCard> with SingleTickerProviderStat
     );
   }
 
-  Widget _buildAccountInfoCard() {
+  Widget _buildAccountInfoCard(bool isDark, Color textColor) {
     return Container(
-      padding: EdgeInsets.all(16), // Reduced padding
+      padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: AppColors.accentColor.withOpacity(0.1),
+        color: isDark ? AppColors.accentColor.withOpacity(0.15) : AppColors.accentColor.withOpacity(0.08),
         borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: AppColors.accentColor),
+        border: Border.all(color: AppColors.accentColor.withOpacity(0.5)),
       ),
       child: Column(
         children: [
-          _buildAccountInfoRow('Bank Name', _bankName),
-          _buildAccountInfoRow('Account Name', _accountName),
-          _buildAccountInfoRow('Account Number', _accountNumber),
+          _buildAccountInfoRow('Bank Name', _bankName, textColor),
+          _buildAccountInfoRow('Account Name', _accountName, textColor),
+          _buildAccountInfoRow('Account Number', _accountNumber, textColor),
         ],
       ),
     );
   }
 
-  Widget _buildAccountInfoRow(String label, String value) {
+  Widget _buildAccountInfoRow(String label, String value, Color textColor) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -282,23 +332,25 @@ class _BalanceCardState extends State<BalanceCard> with SingleTickerProviderStat
                 label,
                 style: AppTextStyles.bodyText.copyWith(
                   fontWeight: FontWeight.bold,
-                  fontSize: 14, // Smaller font
+                  fontSize: 12,
+                  color: AppColors.accentColor,
                 ),
               ),
+              const SizedBox(height: 2),
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
                   Expanded(
                     child: Text(
                       value.isNotEmpty ? value : 'Not available',
-                      style: AppTextStyles.bodyText.copyWith(fontSize: 14), // Smaller font
+                      style: AppTextStyles.bodyText.copyWith(fontSize: 15, fontWeight: FontWeight.bold, color: textColor),
                       overflow: TextOverflow.ellipsis,
                       maxLines: 1,
                     ),
                   ),
-                  const SizedBox(width: 8), // Reduced spacing
+                  const SizedBox(width: 8),
                   IconButton(
-                    icon: const Icon(Icons.copy, size: 16), // Smaller icon
+                    icon: Icon(Icons.copy_rounded, size: 18, color: AppColors.accentColor),
                     onPressed: value.isNotEmpty ? () => _copyToClipboard(label, value) : null,
                   ),
                 ],
@@ -312,7 +364,7 @@ class _BalanceCardState extends State<BalanceCard> with SingleTickerProviderStat
   }
 
   Widget _buildDottedLine() {
-    return Container(
+    return SizedBox(
       height: 1,
       child: LayoutBuilder(
         builder: (BuildContext context, BoxConstraints constraints) {
@@ -329,7 +381,7 @@ class _BalanceCardState extends State<BalanceCard> with SingleTickerProviderStat
                 width: dashWidth,
                 height: dashHeight,
                 child: DecoratedBox(
-                  decoration: BoxDecoration(color: Colors.grey.withOpacity(0.5)),
+                  decoration: BoxDecoration(color: Colors.grey.withOpacity(0.4)),
                 ),
               );
             }),
@@ -348,17 +400,17 @@ class _BalanceCardState extends State<BalanceCard> with SingleTickerProviderStat
     );
   }
 
-  Widget _buildBulletPoint(String text) {
+  Widget _buildBulletPoint(String text, Color textColor) {
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 4), // Reduced spacing
+      padding: const EdgeInsets.symmetric(vertical: 4),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text('• ', style: AppTextStyles.bodyText.copyWith(fontSize: 14)), // Smaller font
+          Text('• ', style: AppTextStyles.bodyText.copyWith(fontSize: 14, color: textColor)),
           Expanded(
             child: Text(
               text,
-              style: AppTextStyles.bodyText.copyWith(fontSize: 14), // Smaller font
+              style: AppTextStyles.bodyText.copyWith(fontSize: 14, color: textColor),
             ),
           ),
         ],
@@ -373,7 +425,7 @@ class _BalanceCardState extends State<BalanceCard> with SingleTickerProviderStat
       child: SingleChildScrollView(
         physics: const AlwaysScrollableScrollPhysics(),
         child: SizedBox(
-          height: 180, // Reduced height
+          height: 190, // Adjusted height to accommodate Crypto Indicator
           child: _buildCard(),
         ),
       ),
@@ -382,7 +434,7 @@ class _BalanceCardState extends State<BalanceCard> with SingleTickerProviderStat
 
   Widget _buildCard() {
     return Container(
-      padding: const EdgeInsets.all(16), // Reduced padding
+      padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
         gradient: LinearGradient(
           begin: Alignment.topLeft,
@@ -398,7 +450,7 @@ class _BalanceCardState extends State<BalanceCard> with SingleTickerProviderStat
           ),
         ],
       ),
-      child: _isLoading ? _buildLoadingIndicator() : _buildCardContent(),
+      child: _buildCardContent(),
     );
   }
 
@@ -410,19 +462,35 @@ class _BalanceCardState extends State<BalanceCard> with SingleTickerProviderStat
         Row(
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
-            Text(
-              'Total Balance',
-              style: AppTextStyles.subHeading.copyWith(
-                color: AppColors.textOnDarkPrimary,
-                fontSize: 16, // Smaller font
-              ),
+            // Title + Refresh Icon inside the Card Header
+            Row(
+              children: [
+                Text(
+                  'Total Balance',
+                  style: AppTextStyles.subHeading.copyWith(
+                    color: AppColors.textOnDarkPrimary,
+                    fontSize: 16,
+                  ),
+                ),
+                const SizedBox(width: 8),
+                GestureDetector(
+                  onTap: _isLoading ? null : _onRefresh,
+                  child: _isLoading
+                      ? SizedBox(
+                      width: 14,
+                      height: 14,
+                      child: CircularProgressIndicator(strokeWidth: 2, color: AppColors.textOnDarkPrimary.withOpacity(0.8))
+                  )
+                      : Icon(Icons.refresh_rounded, color: AppColors.textOnDarkPrimary.withOpacity(0.8), size: 16),
+                ),
+              ],
             ),
             GestureDetector(
               onTap: _toggleBalanceVisibility,
               child: Icon(
                 _isBalanceVisible ? Icons.visibility : Icons.visibility_off,
                 color: AppColors.textOnDarkPrimary,
-                size: 20, // Smaller icon
+                size: 20,
               ),
             ),
           ],
@@ -433,9 +501,9 @@ class _BalanceCardState extends State<BalanceCard> with SingleTickerProviderStat
             return Opacity(
               opacity: _animation.value,
               child: Text(
-                _isBalanceVisible ? '${_currency}${_formatNumber(_balance)}' : '****',
+                _isBalanceVisible ? '$_currency${_formatNumber(_balance)}' : '****',
                 style: AppTextStyles.heading.copyWith(
-                  fontSize: 22, // Smaller font
+                  fontSize: 26, // Kept prominent
                   fontWeight: FontWeight.bold,
                   color: AppColors.textOnDarkPrimary,
                 ),
@@ -443,58 +511,59 @@ class _BalanceCardState extends State<BalanceCard> with SingleTickerProviderStat
             );
           },
         ),
-        Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          children: [
-            _buildLastTransactionInfo(),
-          ],
-        ),
+
+        // --- PREMIUM CRYPTO-STYLE INDICATOR ---
+        _buildLastTransactionInfo(),
+
         _buildFundAccountButton(),
       ],
     );
   }
 
+  // --- REPLACED WITH HIGH CONTRAST CRYPTO INDICATOR ---
   Widget _buildLastTransactionInfo() {
-    if (_lastTran.isEmpty) return SizedBox.shrink();
+    if (_lastTran.isEmpty || _lastTran == '+0.00' || _lastTran == '-0.00') {
+      return const SizedBox.shrink();
+    }
 
-    bool isIncome = _lastTran.startsWith('+');
-    String transactionAmount = _lastTran.substring(1); // Remove the +/- prefix
-    double lastTransactionAmount = double.tryParse(transactionAmount) ?? 0.0;
-    Color transactionColor = isIncome ? Colors.white : Colors.redAccent;
-    IconData transactionIcon = isIncome ? Icons.trending_up : Icons.trending_down;
+    final isSubtracted = _lastTran.startsWith('-');
+    final amountStr = _lastTran.replaceAll(RegExp(r'[+-]'), '');
+    final amount = double.tryParse(amountStr) ?? 0.0;
 
-    return Row(
-      children: [
-        Icon(transactionIcon, color: transactionColor, size: 16), // Smaller icon
-        const SizedBox(width: 4), // Reduced spacing
-        Text(
-          '${_currency}${_formatNumber(lastTransactionAmount)}',
-          style: AppTextStyles.caption.copyWith(
-            color: transactionColor,
-            fontSize: 14, // Smaller font
-          ),
-        ),
-      ],
-    );
-  }
+    if (amount == 0.0) return const SizedBox.shrink();
 
-  Widget _buildFundAccountButton() {
-    return ElevatedButton(
-      onPressed: _showFundAccountBottomSheet,
-      style: ElevatedButton.styleFrom(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(30)),
-        padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8), // Reduced padding
+    // High Contrast Colors for the green gradient background
+    final indicatorColor = isSubtracted
+        ? const Color(0xFFFF8A80) // Bright Coral/Red
+        : Colors.white; // Pure White
+
+    final bgColor = isSubtracted
+        ? Colors.redAccent.withOpacity(0.2)
+        : Colors.white.withOpacity(0.25);
+
+    final icon = isSubtracted ? Icons.arrow_downward_rounded : Icons.arrow_upward_rounded;
+    final sign = isSubtracted ? '-' : '+';
+
+    return Container(
+      margin: const EdgeInsets.only(top: 4, bottom: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+      decoration: BoxDecoration(
+        color: bgColor,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: indicatorColor.withOpacity(0.4), width: 1),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(Icons.add_circle_outline, color: AppColors.accentColor, size: 16), // Smaller icon
-          SizedBox(width: 4), // Reduced spacing
+          Icon(icon, size: 14, color: indicatorColor),
+          const SizedBox(width: 4),
           Text(
-            'Fund Account',
-            style: AppTextStyles.bodyText.copyWith(
-              color: AppColors.accentColor,
-              fontSize: 14, // Smaller font
+            'Recent: $sign$_currency ${_formatNumber(amount)}',
+            style: AppTextStyles.caption.copyWith(
+              fontSize: 11.5,
+              fontWeight: FontWeight.w800,
+              color: indicatorColor,
+              letterSpacing: 0.3,
             ),
           ),
         ],
@@ -502,19 +571,34 @@ class _BalanceCardState extends State<BalanceCard> with SingleTickerProviderStat
     );
   }
 
-  Widget _buildLoadingIndicator() {
-    return const Center(
-      child: CircularProgressIndicator(
-        valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+  Widget _buildFundAccountButton() {
+    return ElevatedButton(
+      onPressed: _showFundAccountBottomSheet,
+      style: ElevatedButton.styleFrom(
+        backgroundColor: Colors.white, // Contrasting button against dark gradient
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(30)),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.add_circle_outline, color: AppColors.accentColor, size: 16),
+          const SizedBox(width: 6),
+          Text(
+            'Fund Account',
+            style: AppTextStyles.bodyText.copyWith(
+              color: AppColors.accentColor,
+              fontWeight: FontWeight.bold,
+              fontSize: 14,
+            ),
+          ),
+        ],
       ),
     );
   }
 
   String _formatNumber(double number) {
-    // Convert the number to a string with two decimal places
     String numberString = number.toStringAsFixed(2);
-
-    // Use regular expression to add commas
     RegExp regExp = RegExp(r'(\d{1,3})(?=(\d{3})+(?!\d))');
     return numberString.replaceAllMapped(regExp, (Match match) => '${match[1]},');
   }

@@ -1,7 +1,6 @@
 // lib/screens/ride_history_screen.dart
 import 'dart:async';
 import 'dart:convert';
-import 'dart:math' as math;
 import 'dart:ui' show ImageFilter;
 
 import 'package:flutter/material.dart';
@@ -881,6 +880,53 @@ class _PremiumRideDetailSheetState extends State<_PremiumRideDetailSheet> {
     return Colors.grey;
   }
 
+  // --- FULL SCREEN IMAGE VIEWER ---
+  void _openImageFullScreen(String imageUrl, String heroTag) {
+    Navigator.of(context).push(
+      PageRouteBuilder(
+        opaque: false,
+        barrierColor: Colors.black.withOpacity(0.9),
+        barrierDismissible: true,
+        transitionDuration: const Duration(milliseconds: 300),
+        pageBuilder: (BuildContext context, _, __) {
+          return Scaffold(
+            backgroundColor: Colors.transparent,
+            appBar: AppBar(
+              backgroundColor: Colors.transparent,
+              elevation: 0,
+              iconTheme: const IconThemeData(color: Colors.white),
+              actions: [
+                IconButton(
+                  icon: const Icon(Icons.close_rounded, size: 28),
+                  onPressed: () => Navigator.pop(context),
+                )
+              ],
+            ),
+            body: Center(
+              child: InteractiveViewer(
+                panEnabled: true,
+                minScale: 0.5,
+                maxScale: 4.0,
+                child: Hero(
+                  tag: heroTag,
+                  child: Image.network(
+                    imageUrl,
+                    fit: BoxFit.contain,
+                    width: double.infinity,
+                    height: double.infinity,
+                    errorBuilder: (_, __, ___) => const Center(
+                      child: Icon(Icons.broken_image_rounded, color: Colors.white54, size: 64),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+
   // --- PERSISTENT OTP CARD ---
   Widget _buildOTPCard(UIScale ui, ColorScheme cs, bool isDark, bool isDispatch, bool isSendMe) {
     final otp = widget.ride['delivery_otp']?.toString() ?? '';
@@ -898,7 +944,7 @@ class _PremiumRideDetailSheetState extends State<_PremiumRideDetailSheet> {
       margin: EdgeInsets.only(bottom: ui.gap(16)),
       padding: EdgeInsets.all(ui.inset(16)),
       decoration: BoxDecoration(
-        color: themeColor.withOpacity(isDark ? 0.15 : 0.1),
+        color: themeColor.withOpacity(isDark ? 0.15 : 0.08),
         borderRadius: BorderRadius.circular(ui.radius(16)),
         border: Border.all(color: themeColor.withOpacity(0.4), width: 1.5),
       ),
@@ -987,6 +1033,8 @@ class _PremiumRideDetailSheetState extends State<_PremiumRideDetailSheet> {
       packageImage = _kDefaultLogoUrl;
     }
 
+    final String imageHeroTag = 'package_image_${widget.ride['id']}';
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -996,7 +1044,7 @@ class _PremiumRideDetailSheetState extends State<_PremiumRideDetailSheet> {
           width: double.infinity,
           padding: EdgeInsets.all(ui.inset(16)),
           decoration: BoxDecoration(
-            color: isDark ? cs.surfaceVariant.withOpacity(0.3) : const Color(0xFFF8FAFC),
+            color: isDark ? cs.surfaceVariant.withOpacity(0.2) : const Color(0xFFF8FAFC),
             borderRadius: BorderRadius.circular(ui.radius(16)),
             border: Border.all(color: isDark ? cs.outlineVariant.withOpacity(0.2) : Colors.black12),
           ),
@@ -1005,19 +1053,74 @@ class _PremiumRideDetailSheetState extends State<_PremiumRideDetailSheet> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               if (packageImage.isNotEmpty) ...[
-                ClipRRect(
-                  borderRadius: BorderRadius.circular(ui.radius(12)),
-                  child: Image.network(
-                    packageImage,
-                    width: double.infinity, height: 160, fit: BoxFit.cover,
-                    errorBuilder: (_, __, ___) => Container(height: 100, color: cs.surfaceVariant, child: Center(child: Icon(Icons.broken_image_rounded, color: cs.onSurfaceVariant, size: ui.icon(32)))),
+                GestureDetector(
+                  onTap: () => _openImageFullScreen(packageImage, imageHeroTag),
+                  child: Hero(
+                    tag: imageHeroTag,
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(ui.radius(12)),
+                      child: Stack(
+                        alignment: Alignment.center,
+                        children: [
+                          Image.network(
+                            packageImage,
+                            width: double.infinity,
+                            height: 180,
+                            fit: BoxFit.cover,
+                            errorBuilder: (_, __, ___) => Container(height: 120, color: cs.surfaceVariant, child: Center(child: Icon(Icons.broken_image_rounded, color: cs.onSurfaceVariant, size: ui.icon(32)))),
+                          ),
+                          Container(
+                            width: double.infinity,
+                            height: 180,
+                            color: Colors.black.withOpacity(0.1),
+                          ),
+                          Container(
+                            padding: EdgeInsets.all(ui.inset(10)),
+                            decoration: BoxDecoration(
+                              color: Colors.black.withOpacity(0.6),
+                              shape: BoxShape.circle,
+                            ),
+                            child: Icon(Icons.zoom_out_map_rounded, color: Colors.white, size: ui.icon(20)),
+                          ),
+                        ],
+                      ),
+                    ),
                   ),
                 ),
                 SizedBox(height: ui.gap(16)),
               ],
               _DetailRow(ui: ui, icon: Icons.inventory_2_rounded, title: 'Size & Weight', value: '${packageSize.toUpperCase()} • ${packageWeight}kg', cs: cs, isDark: isDark),
               SizedBox(height: ui.gap(12)),
-              _DetailRow(ui: ui, icon: Icons.contact_phone_rounded, title: 'Recipient Phone', value: recipientPhone.isEmpty ? 'Not Provided' : recipientPhone, cs: cs, isDark: isDark),
+
+              // --- DEDICATED RECIPIENT PHONE CALL ROW ---
+              Row(
+                children: [
+                  Expanded(
+                    child: _DetailRow(
+                        ui: ui,
+                        icon: Icons.contact_phone_rounded,
+                        title: 'Recipient Phone',
+                        value: recipientPhone.isEmpty ? 'Not Provided' : recipientPhone,
+                        cs: cs,
+                        isDark: isDark
+                    ),
+                  ),
+                  if (recipientPhone.isNotEmpty)
+                    Container(
+                      width: ui.gap(44),
+                      height: ui.gap(44),
+                      decoration: BoxDecoration(
+                          color: Colors.amber.shade700.withOpacity(0.15),
+                          shape: BoxShape.circle
+                      ),
+                      child: IconButton(
+                        padding: EdgeInsets.zero,
+                        icon: Icon(Icons.phone_rounded, color: Colors.amber.shade700, size: ui.icon(20)),
+                        onPressed: () => _call(recipientPhone),
+                      ),
+                    ),
+                ],
+              ),
             ],
           )
               : Row(
@@ -1036,6 +1139,105 @@ class _PremiumRideDetailSheetState extends State<_PremiumRideDetailSheet> {
         ),
         SizedBox(height: ui.gap(20)),
       ],
+    );
+  }
+
+  // --- TIMELINE / ROUTE TREE ---
+  Widget _buildProfessionalTimeline(bool isDark, ColorScheme cs, UIScale ui) {
+    final pickup = widget.ride['pickup_text']?.toString() ?? 'Unknown Pickup Location';
+    final dest = widget.ride['dest_text']?.toString() ?? 'Unknown Destination';
+    final stops = widget.ride['stops'] as List<dynamic>? ?? [];
+
+    List<Map<String, dynamic>> routeNodes = [
+      {'title': 'PICKUP', 'address': pickup, 'color': cs.primary, 'icon': Icons.my_location_rounded},
+    ];
+
+    for (int i = 0; i < stops.length; i++) {
+      routeNodes.add({
+        'title': 'STOP ${i + 1}',
+        'address': stops[i]['address']?.toString() ?? 'Drop-off point',
+        'color': Colors.orange.shade600,
+        'icon': Icons.stop_circle_rounded,
+      });
+    }
+
+    routeNodes.add({
+      'title': 'DESTINATION',
+      'address': dest,
+      'color': const Color(0xFF10B981), // Success Emerald Green
+      'icon': Icons.location_on_rounded,
+    });
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text('ROUTE', style: TextStyle(fontSize: ui.font(10), fontWeight: FontWeight.w900, color: cs.onSurfaceVariant, letterSpacing: 0.5)),
+        SizedBox(height: ui.gap(12)),
+        Container(
+          padding: EdgeInsets.fromLTRB(ui.inset(16), ui.inset(20), ui.inset(16), ui.inset(20)),
+          decoration: BoxDecoration(
+            color: isDark ? cs.surfaceVariant.withOpacity(0.2) : const Color(0xFFF8FAFC),
+            borderRadius: BorderRadius.circular(ui.radius(16)),
+            border: Border.all(color: isDark ? cs.outlineVariant.withOpacity(0.2) : Colors.black12, width: 1),
+          ),
+          child: Column(
+            children: List.generate(routeNodes.length, (index) {
+              final node = routeNodes[index];
+              final isLast = index == routeNodes.length - 1;
+              return _buildRouteTreeItem(ui, node['icon'], node['title'], node['address'], node['color'], isLast: isLast);
+            }),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildRouteTreeItem(UIScale ui, IconData icon, String title, String address, Color color, {bool isLast = false}) {
+    final cs = Theme.of(context).colorScheme;
+    return IntrinsicHeight(
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          // Timeline Tree Graphic Column
+          Column(
+            children: [
+              Container(
+                padding: EdgeInsets.all(ui.inset(6)),
+                decoration: BoxDecoration(
+                    color: color.withOpacity(0.15),
+                    shape: BoxShape.circle,
+                    border: Border.all(color: color.withOpacity(0.5), width: 1.5)
+                ),
+                child: Icon(icon, size: ui.icon(14), color: color),
+              ),
+              if (!isLast)
+                Expanded(
+                  child: CustomPaint(
+                    size: const Size(2, double.infinity),
+                    painter: _DashedLinePainter(color: color.withOpacity(0.4)),
+                  ),
+                ),
+            ],
+          ),
+          SizedBox(width: ui.gap(16)),
+          // Data Column
+          Expanded(
+            child: Padding(
+              padding: EdgeInsets.only(bottom: isLast ? 0 : ui.gap(24)),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisAlignment: MainAxisAlignment.start,
+                children: [
+                  SizedBox(height: ui.gap(2)),
+                  Text(title, style: TextStyle(fontSize: ui.font(9.5), fontWeight: FontWeight.w900, color: cs.onSurfaceVariant, letterSpacing: 0.5)),
+                  SizedBox(height: ui.gap(4)),
+                  Text(address, style: TextStyle(fontWeight: FontWeight.w800, fontSize: ui.font(13), color: cs.onSurface, height: 1.3)),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 
@@ -1059,37 +1261,44 @@ class _PremiumRideDetailSheetState extends State<_PremiumRideDetailSheet> {
     final dateStr = widget.ride['created_at']?.toString() ?? '';
 
     String avatarUrl = widget.ride['peer_avatar']?.toString() ?? '';
+    final String avatarHeroTag = 'avatar_image_${widget.ride['id']}';
 
     return ConstrainedBox(
       constraints: BoxConstraints(
-        maxHeight: MediaQuery.of(context).size.height * (ui.landscape ? 0.85 : 0.85),
+        maxHeight: MediaQuery.of(context).size.height * (ui.landscape ? 0.9 : 0.88),
         maxWidth: ui.tablet ? 600 : double.infinity,
       ),
       child: Container(
-        margin: EdgeInsets.all(ui.inset(12)),
+        margin: EdgeInsets.symmetric(horizontal: ui.inset(12), vertical: ui.inset(16)),
         decoration: BoxDecoration(
           color: isDark ? cs.surface : Colors.white,
-          borderRadius: BorderRadius.circular(ui.radius(24)),
-          boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.2), blurRadius: 20, offset: const Offset(0, 10))],
+          borderRadius: BorderRadius.circular(ui.radius(28)),
+          boxShadow: [
+            BoxShadow(color: Colors.black.withOpacity(0.25), blurRadius: 30, offset: const Offset(0, 15)),
+          ],
         ),
         child: ClipRRect(
-          borderRadius: BorderRadius.circular(ui.radius(24)),
+          borderRadius: BorderRadius.circular(ui.radius(28)),
           child: SingleChildScrollView(
             physics: const BouncingScrollPhysics(),
-            padding: EdgeInsets.symmetric(horizontal: ui.inset(20), vertical: ui.inset(20)),
+            padding: EdgeInsets.symmetric(horizontal: ui.inset(24), vertical: ui.inset(20)),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
+                // Top notch drag handle
                 Center(
                   child: Container(
-                    width: 48,
+                    width: 50,
                     height: 5,
-                    decoration: BoxDecoration(color: cs.onSurfaceVariant.withOpacity(0.3), borderRadius: BorderRadius.circular(10)),
+                    decoration: BoxDecoration(
+                        color: isDark ? cs.surfaceVariant : Colors.grey.shade300,
+                        borderRadius: BorderRadius.circular(10)
+                    ),
                   ),
                 ),
-                SizedBox(height: ui.gap(20)),
+                SizedBox(height: ui.gap(24)),
 
-                // If searching, show the prominent Auto-Cancel Countdown synced via the Server
+                // Auto-Cancel Countdown
                 if (status == 'searching' && !widget.isDriverMode) ...[
                   Container(
                     width: double.infinity,
@@ -1114,62 +1323,70 @@ class _PremiumRideDetailSheetState extends State<_PremiumRideDetailSheet> {
                   SizedBox(height: ui.gap(20)),
                 ],
 
-                // --- 1. Persistent OTP Card (Only shows to Rider if Active Delivery/Errand) ---
+                // 1. Persistent OTP Card
                 if (!widget.isDriverMode && isActive && (isDispatch || isSendMe))
                   _buildOTPCard(ui, cs, isDark, isDispatch, isSendMe),
 
-                // --- 2. Price & Status Header ---
+                // 2. Price & Status Header
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
                     Text(
                       _formatCurrency(widget.ride['price'], widget.ride['currency']?.toString() ?? 'NGN'),
-                      style: TextStyle(fontWeight: FontWeight.w900, fontSize: ui.font(24), color: cs.primary, letterSpacing: -0.5),
+                      style: TextStyle(fontWeight: FontWeight.w900, fontSize: ui.font(28), color: cs.primary, letterSpacing: -0.5),
                     ),
                     Container(
-                      padding: EdgeInsets.symmetric(horizontal: ui.inset(10), vertical: ui.inset(6)),
+                      padding: EdgeInsets.symmetric(horizontal: ui.inset(12), vertical: ui.inset(8)),
                       decoration: BoxDecoration(
                         color: _statusColor(status).withOpacity(0.15),
-                        borderRadius: BorderRadius.circular(ui.radius(8)),
+                        borderRadius: BorderRadius.circular(ui.radius(10)),
+                        border: Border.all(color: _statusColor(status).withOpacity(0.3), width: 1),
                       ),
                       child: Text(
                         status.toUpperCase().replaceAll('_', ' '),
-                        style: TextStyle(color: _statusColor(status), fontWeight: FontWeight.w900, fontSize: ui.font(10), letterSpacing: 0.5),
+                        style: TextStyle(color: _statusColor(status), fontWeight: FontWeight.w900, fontSize: ui.font(10.5), letterSpacing: 0.5),
                       ),
                     ),
                   ],
                 ),
-                SizedBox(height: ui.gap(20)),
+                SizedBox(height: ui.gap(24)),
 
-                // --- 3. Peer Driver/Rider Info ---
+                // 3. Peer Info Container
                 Container(
-                  padding: EdgeInsets.all(ui.inset(14)),
+                  padding: EdgeInsets.all(ui.inset(16)),
                   decoration: BoxDecoration(
-                    color: isDark ? cs.surfaceVariant.withOpacity(0.3) : const Color(0xFFF8FAFC),
+                    color: isDark ? cs.surfaceVariant.withOpacity(0.2) : const Color(0xFFF8FAFC),
                     borderRadius: BorderRadius.circular(ui.radius(16)),
                     border: Border.all(color: isDark ? cs.outlineVariant.withOpacity(0.2) : Colors.black12, width: 1),
                   ),
                   child: Row(
                     children: [
-                      Container(
-                        width: ui.gap(48),
-                        height: ui.gap(48),
-                        decoration: BoxDecoration(
-                          color: cs.primary.withOpacity(0.1),
-                          borderRadius: BorderRadius.circular(ui.radius(12)),
-                        ),
-                        child: ClipRRect(
-                          borderRadius: BorderRadius.circular(ui.radius(12)),
-                          child: avatarUrl.isNotEmpty
-                              ? Image.network(
-                            avatarUrl,
-                            fit: BoxFit.cover,
-                            errorBuilder: (_, __, ___) => Icon(widget.isDriverMode ? Icons.person_rounded : Icons.local_taxi_rounded, size: ui.icon(24), color: cs.primary),
-                          )
-                              : Icon(widget.isDriverMode ? Icons.person_rounded : Icons.local_taxi_rounded, size: ui.icon(24), color: cs.primary),
+                      GestureDetector(
+                        onTap: avatarUrl.isNotEmpty ? () => _openImageFullScreen(avatarUrl, avatarHeroTag) : null,
+                        child: Hero(
+                          tag: avatarHeroTag,
+                          child: Container(
+                            width: ui.gap(56),
+                            height: ui.gap(56),
+                            decoration: BoxDecoration(
+                              color: cs.primary.withOpacity(0.1),
+                              borderRadius: BorderRadius.circular(ui.radius(14)),
+                              border: Border.all(color: cs.primary.withOpacity(0.2), width: 1.5),
+                            ),
+                            child: ClipRRect(
+                              borderRadius: BorderRadius.circular(ui.radius(12)),
+                              child: avatarUrl.isNotEmpty
+                                  ? Image.network(
+                                avatarUrl,
+                                fit: BoxFit.cover,
+                                errorBuilder: (_, __, ___) => Icon(widget.isDriverMode ? Icons.person_rounded : Icons.local_taxi_rounded, size: ui.icon(28), color: cs.primary),
+                              )
+                                  : Icon(widget.isDriverMode ? Icons.person_rounded : Icons.local_taxi_rounded, size: ui.icon(28), color: cs.primary),
+                            ),
+                          ),
                         ),
                       ),
-                      SizedBox(width: ui.gap(14)),
+                      SizedBox(width: ui.gap(16)),
                       Expanded(
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
@@ -1183,23 +1400,34 @@ class _PremiumRideDetailSheetState extends State<_PremiumRideDetailSheet> {
                               name,
                               style: TextStyle(fontWeight: FontWeight.w900, fontSize: ui.font(16), color: cs.onSurface),
                             ),
+                            if (phone.isNotEmpty) ...[
+                              SizedBox(height: ui.gap(2)),
+                              Text(
+                                phone,
+                                style: TextStyle(fontWeight: FontWeight.w700, fontSize: ui.font(12), color: cs.onSurfaceVariant),
+                              ),
+                            ],
                             if (plate.isNotEmpty || rating > 0) ...[
-                              SizedBox(height: ui.gap(4)),
+                              SizedBox(height: ui.gap(6)),
                               Row(
                                 children: [
                                   if (plate.isNotEmpty)
                                     Container(
-                                      padding: EdgeInsets.symmetric(horizontal: ui.inset(6), vertical: ui.inset(2)),
-                                      decoration: BoxDecoration(color: const Color(0xFFFACC15), borderRadius: BorderRadius.circular(ui.radius(6))),
-                                      child: Text(plate.toUpperCase(), style: TextStyle(color: Colors.black, fontWeight: FontWeight.w900, fontSize: ui.font(9), letterSpacing: 0.5)),
+                                      padding: EdgeInsets.symmetric(horizontal: ui.inset(8), vertical: ui.inset(4)),
+                                      decoration: BoxDecoration(
+                                          color: const Color(0xFFFACC15).withOpacity(0.2),
+                                          borderRadius: BorderRadius.circular(ui.radius(6)),
+                                          border: Border.all(color: const Color(0xFFFACC15).withOpacity(0.5))
+                                      ),
+                                      child: Text(plate.toUpperCase(), style: TextStyle(color: isDark ? const Color(0xFFFACC15) : Colors.black87, fontWeight: FontWeight.w900, fontSize: ui.font(9), letterSpacing: 0.5)),
                                     ),
-                                  if (plate.isNotEmpty && rating > 0) SizedBox(width: ui.gap(10)),
+                                  if (plate.isNotEmpty && rating > 0) SizedBox(width: ui.gap(12)),
                                   if (rating > 0)
                                     Row(
                                       children: [
-                                        Icon(Icons.star_rounded, size: ui.icon(14), color: Colors.amber),
+                                        Icon(Icons.star_rounded, size: ui.icon(16), color: Colors.amber),
                                         SizedBox(width: ui.gap(4)),
-                                        Text(rating.toStringAsFixed(1), style: TextStyle(fontWeight: FontWeight.w900, color: Colors.amber.shade700, fontSize: ui.font(12))),
+                                        Text(rating.toStringAsFixed(1), style: TextStyle(fontWeight: FontWeight.w900, color: Colors.amber.shade700, fontSize: ui.font(13))),
                                       ],
                                     ),
                                 ],
@@ -1210,41 +1438,41 @@ class _PremiumRideDetailSheetState extends State<_PremiumRideDetailSheet> {
                       ),
                       if (phone.isNotEmpty)
                         Container(
-                          width: ui.gap(40),
-                          height: ui.gap(40),
+                          width: ui.gap(44),
+                          height: ui.gap(44),
                           decoration: BoxDecoration(color: cs.primary.withOpacity(0.15), shape: BoxShape.circle),
                           child: IconButton(
                             padding: EdgeInsets.zero,
-                            icon: Icon(Icons.phone_rounded, color: cs.primary, size: ui.icon(18)),
+                            icon: Icon(Icons.phone_rounded, color: cs.primary, size: ui.icon(20)),
                             onPressed: () => _call(phone),
                           ),
                         ),
                     ],
                   ),
                 ),
-                SizedBox(height: ui.gap(20)),
-
-                // --- 4. Logistics / Package specific details ---
-                _buildLogisticsDetails(ui, cs, isDark, isDispatch, isSendMe),
-
-                // --- 5. Timeline / Route ---
-                _buildTimeline(isDark, cs, ui),
                 SizedBox(height: ui.gap(24)),
 
-                // --- 6. Actions ---
+                // 4. Logistics Details
+                _buildLogisticsDetails(ui, cs, isDark, isDispatch, isSendMe),
+
+                // 5. Timeline / Route Tree Map
+                _buildProfessionalTimeline(isDark, cs, ui),
+                SizedBox(height: ui.gap(28)),
+
+                // 6. Action Button
                 if (isActive)
                   SizedBox(
                     width: double.infinity,
-                    height: ui.gap(52),
+                    height: ui.gap(56),
                     child: ElevatedButton.icon(
                       onPressed: _actionBusy ? null : _resumeTrip,
-                      icon: _actionBusy ? SizedBox(width: ui.gap(20), height: ui.gap(20), child: const CircularProgressIndicator(strokeWidth: 2.5, color: Colors.white)) : Icon(Icons.navigation_rounded, size: ui.icon(18)),
-                      label: Text(_actionBusy ? 'LOADING...' : 'RESUME NAVIGATION', style: TextStyle(fontWeight: FontWeight.w900, fontSize: ui.font(14), letterSpacing: 0.5)),
+                      icon: _actionBusy ? SizedBox(width: ui.gap(22), height: ui.gap(22), child: const CircularProgressIndicator(strokeWidth: 2.5, color: Colors.white)) : Icon(Icons.navigation_rounded, size: ui.icon(20)),
+                      label: Text(_actionBusy ? 'LOADING...' : 'RESUME NAVIGATION', style: TextStyle(fontWeight: FontWeight.w900, fontSize: ui.font(14.5), letterSpacing: 0.5)),
                       style: ElevatedButton.styleFrom(
                         backgroundColor: cs.primary,
                         foregroundColor: Colors.white,
-                        elevation: 4,
-                        shadowColor: cs.primary.withOpacity(0.4),
+                        elevation: 6,
+                        shadowColor: cs.primary.withOpacity(0.5),
                         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(ui.radius(16))),
                       ),
                     ),
@@ -1255,56 +1483,6 @@ class _PremiumRideDetailSheetState extends State<_PremiumRideDetailSheet> {
           ),
         ),
       ),
-    );
-  }
-
-  Widget _buildTimeline(bool isDark, ColorScheme cs, UIScale ui) {
-    final pickup = widget.ride['pickup_text']?.toString() ?? '';
-    final dest = widget.ride['dest_text']?.toString() ?? '';
-    final stops = widget.ride['stops'] as List<dynamic>? ?? [];
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text('ROUTE', style: TextStyle(fontSize: ui.font(10), fontWeight: FontWeight.w900, color: cs.onSurfaceVariant, letterSpacing: 0.5)),
-        SizedBox(height: ui.gap(12)),
-        _timelineItem(ui, Icons.radio_button_checked, 'PICKUP', pickup, cs.primary, isLast: stops.isEmpty),
-        if (stops.isNotEmpty)
-          ...stops.asMap().entries.map((e) => _timelineItem(ui, Icons.stop_circle_rounded, 'STOP ${e.key + 1}', e.value['address']?.toString() ?? 'Drop-off point', Colors.orange, isLast: e.key == stops.length - 1)),
-        _timelineItem(ui, Icons.location_on_rounded, 'DESTINATION', dest, const Color(0xFF10B981), isLast: true),
-      ],
-    );
-  }
-
-  Widget _timelineItem(UIScale ui, IconData icon, String title, String address, Color color, {bool isLast = false}) {
-    final cs = Theme.of(context).colorScheme;
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Column(
-          children: [
-            Container(
-              padding: EdgeInsets.all(ui.inset(6)),
-              decoration: BoxDecoration(color: color.withOpacity(0.15), shape: BoxShape.circle),
-              child: Icon(icon, size: ui.icon(14), color: color),
-            ),
-            if (!isLast) Container(width: 2.0, height: ui.gap(28), color: color.withOpacity(0.3)),
-          ],
-        ),
-        SizedBox(width: ui.gap(12)),
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              SizedBox(height: ui.gap(2)),
-              Text(title, style: TextStyle(fontSize: ui.font(9.5), fontWeight: FontWeight.w900, color: cs.onSurfaceVariant, letterSpacing: 0.5)),
-              SizedBox(height: ui.gap(4)),
-              Text(address, maxLines: 2, overflow: TextOverflow.ellipsis, style: TextStyle(fontWeight: FontWeight.w800, fontSize: ui.font(13), color: cs.onSurface)),
-              if (!isLast) SizedBox(height: ui.gap(12)),
-            ],
-          ),
-        ),
-      ],
     );
   }
 }
@@ -1323,7 +1501,14 @@ class _DetailRow extends StatelessWidget {
   Widget build(BuildContext context) {
     return Row(
       children: [
-        Icon(icon, size: ui.icon(20), color: cs.onSurfaceVariant),
+        Container(
+          padding: EdgeInsets.all(ui.inset(8)),
+          decoration: BoxDecoration(
+              color: cs.onSurfaceVariant.withOpacity(0.1),
+              borderRadius: BorderRadius.circular(ui.radius(8))
+          ),
+          child: Icon(icon, size: ui.icon(18), color: cs.onSurfaceVariant),
+        ),
         SizedBox(width: ui.gap(12)),
         Expanded(
           child: Column(
@@ -1366,4 +1551,32 @@ class _NativeSkeletonPulseState extends State<_NativeSkeletonPulse> with SingleT
 
   @override
   Widget build(BuildContext context) => FadeTransition(opacity: _anim, child: widget.child);
+}
+
+// --- DASHED LINE PAINTER FOR ROUTE TREE ---
+class _DashedLinePainter extends CustomPainter {
+  final Color color;
+
+  _DashedLinePainter({required this.color});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    double dashHeight = 4.0, dashSpace = 4.0, startY = 0.0;
+    final paint = Paint()
+      ..color = color
+      ..strokeWidth = 2.0
+      ..strokeCap = StrokeCap.round;
+
+    while (startY < size.height) {
+      canvas.drawLine(
+        Offset(size.width / 2, startY),
+        Offset(size.width / 2, startY + dashHeight),
+        paint,
+      );
+      startY += dashHeight + dashSpace;
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }

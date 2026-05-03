@@ -1,7 +1,7 @@
 // lib/widgets/app_menu_drawer.dart
 //
 // Premium, highly responsive navigation drawer with:
-// - Balance card with fund action
+// - Balance card with fund action, live refresh, & crypto-style recent transaction indicator
 // - Profile header with avatar & edit button
 // - Categorized menu items
 // - Premium Become a Driver opportunity card (Hides if already a driver)
@@ -9,13 +9,20 @@
 // - Dark mode support
 // - Smooth animations & haptics
 // - Safe avatar loading (no SSL errors)
+// - Deep State Syncing (Mutates parent map and SharedPrefs JSON)
 
+import 'dart:convert';
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
+
+import '../api/api_client.dart';
+import '../api/url.dart';
 import '../routes/routes.dart';
 import '../themes/app_theme.dart';
+import '../utility/notification.dart';
 import 'fund_account_sheet.dart';
 
 class AppMenuDrawer extends StatefulWidget {
@@ -31,7 +38,13 @@ class _AppMenuDrawerState extends State<AppMenuDrawer>
     with SingleTickerProviderStateMixin {
   late final AnimationController _fadeCtrl;
   late final Animation<double> _fadeAnim;
+
   bool _isAlreadyDriver = false;
+
+  // Balance State Variables
+  double? _liveBalance;
+  String? _liveLastTran;
+  bool _isRefreshingBalance = false;
 
   @override
   void initState() {
@@ -43,6 +56,7 @@ class _AppMenuDrawerState extends State<AppMenuDrawer>
     _fadeAnim = CurvedAnimation(parent: _fadeCtrl, curve: Curves.easeOut);
     _fadeCtrl.forward();
     _checkDriverStatus();
+    _loadStoredBalance();
   }
 
   Future<void> _checkDriverStatus() async {
@@ -51,6 +65,85 @@ class _AppMenuDrawerState extends State<AppMenuDrawer>
       setState(() {
         _isAlreadyDriver = prefs.getBool('user_is_driver') ?? false;
       });
+    }
+  }
+
+  /// Initial load check to see if we have a fresher balance in preferences
+  Future<void> _loadStoredBalance() async {
+    final prefs = await SharedPreferences.getInstance();
+    final storedBal = prefs.getString('user_bal');
+    final storedTran = prefs.getString('user_last_tran');
+    if (mounted) {
+      setState(() {
+        if (storedBal != null) _liveBalance = double.tryParse(storedBal);
+        if (storedTran != null) _liveLastTran = storedTran;
+      });
+    }
+  }
+
+  /// Refreshes the user balance via API and Syncs to Global SharedPreferences
+  Future<void> _refreshBalance() async {
+    if (_isRefreshingBalance) return;
+
+    HapticFeedback.lightImpact();
+    setState(() => _isRefreshingBalance = true);
+
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final uid = prefs.getString('user_id');
+
+      if (uid == null) throw Exception('User ID not found');
+
+      final api = ApiClient(http.Client(), context);
+
+      final res = await api.request(
+        ApiConstants.userInfoEndpoint,
+        method: 'POST',
+        data: {'user': uid},
+      );
+
+      final body = jsonDecode(res.body);
+      if (body['error'] == false && body['user'] != null) {
+
+        final String newBalStr = body['user']['user_bal']?.toString() ?? '0.0';
+        final String newLastTranStr = body['user']['user_last_tran']?.toString() ?? '';
+
+        // --- 1. MUTATE PARENT STATE BY REFERENCE ---
+        // Modifying widget.user directly guarantees that the parent screen
+        // instantly has the new data without needing to fetch it again.
+        if (widget.user != null) {
+          widget.user!['user_bal'] = newBalStr;
+          widget.user!['user_last_tran'] = newLastTranStr;
+        }
+
+        // --- 2. UPDATE INDIVIDUAL PREFS ---
+        await prefs.setString('user_bal', newBalStr);
+        await prefs.setString('user_last_tran', newLastTranStr);
+
+        // --- 3. UPDATE JSON OBJECT IN PREFS ---
+        // Finds the full stored user string and injects the new balance into it.
+        final userDataStr = prefs.getString('user_data') ?? prefs.getString('user');
+        if (userDataStr != null) {
+          try {
+            final Map<String, dynamic> storedUser = jsonDecode(userDataStr);
+            storedUser['user_bal'] = newBalStr;
+            storedUser['user_last_tran'] = newLastTranStr;
+            await prefs.setString('user_data', jsonEncode(storedUser));
+            await prefs.setString('user', jsonEncode(storedUser));
+          } catch (_) {}
+        }
+
+        if (mounted) {
+          setState(() {
+            _liveBalance = double.tryParse(newBalStr);
+            _liveLastTran = newLastTranStr;
+          });
+        }
+      }
+    } catch (e) {
+      debugPrint('Balance refresh failed: $e');
+    } finally {
+      if (mounted) setState(() => _isRefreshingBalance = false);
     }
   }
 
@@ -74,17 +167,6 @@ class _AppMenuDrawerState extends State<AppMenuDrawer>
     return url.startsWith('http') ? url : null;
   }
 
-  /// Format balance with thousands separator
-  String _formatBalance(double balance) {
-    final str = balance.toStringAsFixed(2);
-    final parts = str.split('.');
-    final whole = parts[0].replaceAllMapped(
-      RegExp(r'(\d{1,3})(?=(\d{3})+(?!\d))'),
-          (m) => '${m[1]},',
-    );
-    return '$whole.${parts[1]}';
-  }
-
   /// Navigate with haptic feedback
   void _nav(String route) {
     HapticFeedback.selectionClick();
@@ -93,12 +175,9 @@ class _AppMenuDrawerState extends State<AppMenuDrawer>
   }
 
   /// Show fund account sheet
-  void _showFundSheet() {
+  void _showFundSheet(double displayBalance) {
     HapticFeedback.mediumImpact();
     Navigator.pop(context); // close drawer
-    final balance = widget.user != null
-        ? double.tryParse(widget.user!['user_bal']?.toString() ?? '0.0') ?? 0.0
-        : null;
     final currency = widget.user?['user_currency']?.toString() ?? 'NGN';
 
     showModalBottomSheet(
@@ -110,7 +189,7 @@ class _AppMenuDrawerState extends State<AppMenuDrawer>
       ),
       builder: (_) => FundAccountSheet(
         account: widget.user,
-        balance: balance,
+        balance: displayBalance,
         currency: currency,
       ),
     );
@@ -163,9 +242,16 @@ class _AppMenuDrawerState extends State<AppMenuDrawer>
     final avatarUrl = _safeAvatar(widget.user?['user_logo'] as String?);
     final name = widget.user?['user_lname'] ?? widget.user?['user_name'] ?? 'User';
     final email = (widget.user?['user_email'] as String?) ?? '';
-    final balance = widget.user != null
+
+    // Determine the balance to show (Live overridden value, or initial passed value)
+    final initialBalance = widget.user != null
         ? double.tryParse(widget.user!['user_bal']?.toString() ?? '0.0') ?? 0.0
         : 0.0;
+    final displayBalance = _liveBalance ?? initialBalance;
+
+    // Determine last transaction text
+    final displayLastTran = _liveLastTran ?? widget.user?['user_last_tran']?.toString() ?? '';
+
     final currency = widget.user?['user_currency']?.toString() ?? 'NGN';
 
     // Drawer width: narrower in landscape
@@ -175,7 +261,6 @@ class _AppMenuDrawerState extends State<AppMenuDrawer>
 
     return Drawer(
       width: drawerWidth,
-      // FIXED: Uses sleek OLED surface color in dark mode, pure white in light mode
       backgroundColor: isDark ? cs.surface : Colors.white,
       child: FadeTransition(
         opacity: _fadeAnim,
@@ -198,11 +283,14 @@ class _AppMenuDrawerState extends State<AppMenuDrawer>
               Padding(
                 padding: EdgeInsets.symmetric(horizontal: 16 * s),
                 child: _BalanceCard(
-                  balance: balance,
+                  balance: displayBalance,
                   currency: currency,
+                  lastTran: displayLastTran,
                   scale: s,
                   isDark: isDark,
-                  onFund: _showFundSheet,
+                  isRefreshing: _isRefreshingBalance,
+                  onRefresh: _refreshBalance,
+                  onFund: () => _showFundSheet(displayBalance),
                 ),
               ),
 
@@ -228,36 +316,7 @@ class _AppMenuDrawerState extends State<AppMenuDrawer>
                       isDark: isDark,
                       onTap: () => _nav(AppRoutes.transactions),
                     ),
-                    /*
-                    _MenuItem(
-                      icon: Icons.payments_rounded,
-                      label: 'Payments',
-                      scale: s,
-                      isDark: isDark,
-                      onTap: () => _nav(AppRoutes.payments),
-                    ),
 
-                     */
-
- /*
-
-                    SizedBox(height: 8 * s),
-                    _SectionLabel('Explore', s, isDark),
-                    _MenuItem(
-                      icon: Icons.card_giftcard_rounded,
-                      label: 'Offers & Rewards',
-                      scale: s,
-                      isDark: isDark,
-                      onTap: () => _nav(AppRoutes.offers),
-                    ),
-                    _MenuItem(
-                      icon: Icons.notifications_active_outlined,
-                      label: 'Notifications',
-                      scale: s,
-                      isDark: isDark,
-                      onTap: () => _nav(AppRoutes.notifications),
-                    ),
- */
                     SizedBox(height: 8 * s),
                     _SectionLabel('Support', s, isDark),
                     _MenuItem(
@@ -434,21 +493,27 @@ class _ProfileHeader extends StatelessWidget {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// BALANCE CARD
+// BALANCE CARD WITH HIGH-CONTRAST CRYPTO INDICATOR
 // ═══════════════════════════════════════════════════════════════════════════
 
 class _BalanceCard extends StatelessWidget {
   final double balance;
   final String currency;
+  final String lastTran;
   final double scale;
   final bool isDark;
+  final bool isRefreshing;
+  final VoidCallback onRefresh;
   final VoidCallback onFund;
 
   const _BalanceCard({
     required this.balance,
     required this.currency,
+    required this.lastTran,
     required this.scale,
     required this.isDark,
+    required this.isRefreshing,
+    required this.onRefresh,
     required this.onFund,
   });
 
@@ -462,9 +527,62 @@ class _BalanceCard extends StatelessWidget {
     return '$whole.${parts[1]}';
   }
 
+  Widget _buildCryptoIndicator(ColorScheme cs, double scale) {
+    if (lastTran.isEmpty || lastTran == '+0.00' || lastTran == '-0.00') {
+      return const SizedBox.shrink();
+    }
+
+    final isSubtracted = lastTran.startsWith('-');
+    final amountStr = lastTran.replaceAll(RegExp(r'[+-]'), '');
+    final amount = double.tryParse(amountStr) ?? 0.0;
+
+    if (amount == 0.0) return const SizedBox.shrink();
+
+    // High Contrast Colors:
+    // Negative = Bright Coral/Red.
+    // Positive = Neon Green (Dark Mode) or Pure White (Light Mode green card)
+    final indicatorColor = isSubtracted
+        ? const Color(0xFFFF8A80)
+        : (isDark ? const Color(0xFF69F0AE) : Colors.white);
+
+    final bgColor = isSubtracted
+        ? Colors.redAccent.withOpacity(0.2)
+        : (isDark ? const Color(0xFF00E676).withOpacity(0.15) : Colors.white.withOpacity(0.25));
+
+    final icon = isSubtracted ? Icons.arrow_downward_rounded : Icons.arrow_upward_rounded;
+    final sign = isSubtracted ? '-' : '+';
+
+    return Container(
+      margin: EdgeInsets.only(top: 6 * scale),
+      padding: EdgeInsets.symmetric(horizontal: 8 * scale, vertical: 4 * scale),
+      decoration: BoxDecoration(
+        color: bgColor,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: indicatorColor.withOpacity(0.4), width: 1),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 12 * scale, color: indicatorColor),
+          SizedBox(width: 4 * scale),
+          Text(
+            'Recent: $sign$currency ${_fmt(amount)}',
+            style: TextStyle(
+              fontSize: (10.5 * scale).clamp(9.0, 12.0),
+              fontWeight: FontWeight.w800,
+              color: indicatorColor,
+              letterSpacing: 0.3,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
+    final contentColor = isDark ? cs.onPrimaryContainer.withOpacity(0.9) : Colors.white.withOpacity(0.85);
 
     return Container(
       padding: EdgeInsets.all(14 * scale),
@@ -489,18 +607,47 @@ class _BalanceCard extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Label
-          Text(
-            'Wallet Balance',
-            style: TextStyle(
-              fontSize: (11 * scale).clamp(10.0, 13.0),
-              fontWeight: FontWeight.w700,
-              color: isDark ? cs.onPrimaryContainer.withOpacity(0.9) : Colors.white.withOpacity(0.85),
-              letterSpacing: 0.3,
-            ),
+          // Label and Refresh Button Row
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(
+                'Wallet Balance',
+                style: TextStyle(
+                  fontSize: (11 * scale).clamp(10.0, 13.0),
+                  fontWeight: FontWeight.w700,
+                  color: contentColor,
+                  letterSpacing: 0.3,
+                ),
+              ),
+              Material(
+                color: Colors.transparent,
+                child: InkWell(
+                  onTap: isRefreshing ? null : onRefresh,
+                  borderRadius: BorderRadius.circular(20),
+                  child: Padding(
+                    padding: EdgeInsets.all(4 * scale),
+                    child: isRefreshing
+                        ? SizedBox(
+                      width: 14 * scale,
+                      height: 14 * scale,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        valueColor: AlwaysStoppedAnimation<Color>(contentColor),
+                      ),
+                    )
+                        : Icon(
+                      Icons.refresh_rounded,
+                      size: 16 * scale,
+                      color: contentColor,
+                    ),
+                  ),
+                ),
+              ),
+            ],
           ),
 
-          SizedBox(height: 6 * scale),
+          SizedBox(height: 2 * scale),
 
           // Balance amount
           Row(
@@ -511,9 +658,9 @@ class _BalanceCard extends StatelessWidget {
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(
-                    fontSize: (22 * scale).clamp(20.0, 28.0),
+                    fontSize: (26 * scale).clamp(24.0, 32.0),
                     fontWeight: FontWeight.w900,
-                    color: isDark ? Colors.white : Colors.white,
+                    color: Colors.white,
                     letterSpacing: -0.5,
                   ),
                 ),
@@ -521,7 +668,10 @@ class _BalanceCard extends StatelessWidget {
             ],
           ),
 
-          SizedBox(height: 10 * scale),
+          // Crypto-style Recent Transaction Indicator
+          _buildCryptoIndicator(cs, scale),
+
+          SizedBox(height: 14 * scale),
 
           // Fund button
           SizedBox(

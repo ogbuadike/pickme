@@ -446,7 +446,6 @@ class _DriverHomePageState extends State<DriverHomePage> with WidgetsBindingObse
     if (defaultTargetPlatform == TargetPlatform.android) {
       return AndroidSettings(
         accuracy: LocationAccuracy.bestForNavigation, distanceFilter: 3, intervalDuration: const Duration(seconds: 1), forceLocationManager: false,
-        foregroundNotificationConfig: const ForegroundNotificationConfig(notificationTitle: 'Pick Me Driver', notificationText: 'Driver availability is active.', enableWakeLock: false, setOngoing: true),
       );
     }
     if (defaultTargetPlatform == TargetPlatform.iOS) {

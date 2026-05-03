@@ -1,4 +1,4 @@
-// lib/pages/become_a_driver.dart
+// lib/screens/become_a_driver.dart
 //
 // Premium driver onboarding screen
 // - Responsive pinned header
@@ -6,6 +6,8 @@
 // - Premium application steps timeline
 // - Driver verification bottom sheet with guided uploads
 // - Locked account identity fields (full name + email)
+// - Captures Bank Details, Ride Types, and Vehicle Data
+// - Full-screen interactive image review before submission
 // - Keyboard-safe, drag-friendly modal sheet
 
 import 'dart:convert';
@@ -40,7 +42,6 @@ String _normalizeDriverUiStatus(dynamic raw) {
       return 'not_started';
   }
 }
-
 
 class BecomeADriverPage extends StatefulWidget {
   const BecomeADriverPage({super.key});
@@ -119,43 +120,28 @@ class _BecomeADriverPageState extends State<BecomeADriverPage>
     try {
       final cached = _prefs.getString(_userCacheKey);
       if (cached == null || cached.trim().isEmpty) return;
-
       final decoded = jsonDecode(cached);
       if (decoded is! Map) return;
-
-      final mapped = decoded.map(
-            (k, v) => MapEntry<String, dynamic>(k.toString(), v),
-      );
-
+      final mapped = decoded.map((k, v) => MapEntry<String, dynamic>(k.toString(), v));
       if (!mounted) {
         _user = mapped;
         return;
       }
-
-      setState(() {
-        _user = mapped;
-      });
-    } catch (_) {
-      // Ignore invalid local cache and continue with network fetch.
-    }
+      setState(() => _user = mapped);
+    } catch (_) {}
   }
 
   Future<void> _cacheUser(Map<String, dynamic> user) async {
     try {
       await _prefs.setString(_userCacheKey, jsonEncode(user));
-    } catch (_) {
-      // Cache failure should not block page rendering.
-    }
+    } catch (_) {}
   }
 
   Future<void> _fetchUser({bool silent = false}) async {
     if (!mounted) return;
-
     if (silent) {
       _isFetchingAccount = true;
-      if (_hasError) {
-        setState(() => _hasError = false);
-      }
+      if (_hasError) setState(() => _hasError = false);
     } else {
       setState(() {
         _isFetchingAccount = true;
@@ -165,9 +151,7 @@ class _BecomeADriverPageState extends State<BecomeADriverPage>
 
     try {
       final uid = _prefs.getString('user_id');
-      if (uid == null || uid.isEmpty) {
-        throw Exception('User ID missing');
-      }
+      if (uid == null || uid.isEmpty) throw Exception('User ID missing');
 
       final res = await _api.request(
         ApiConstants.userInfoEndpoint,
@@ -179,15 +163,9 @@ class _BecomeADriverPageState extends State<BecomeADriverPage>
       if (res.statusCode == 200 && data is Map && data['error'] == false) {
         final rawUser = data['user'];
         if (rawUser is Map) {
-          final mapped = rawUser.map(
-                (k, v) => MapEntry<String, dynamic>(k.toString(), v),
-          );
-
+          final mapped = rawUser.map((k, v) => MapEntry<String, dynamic>(k.toString(), v));
           if (!mounted) return;
-          setState(() {
-            _user = mapped;
-          });
-
+          setState(() => _user = mapped);
           await _cacheUser(mapped);
         } else {
           throw Exception('User payload missing');
@@ -207,10 +185,8 @@ class _BecomeADriverPageState extends State<BecomeADriverPage>
     }
   }
 
-
   Future<void> _fetchApplicationStatus({bool silent = false}) async {
     if (!mounted) return;
-
     if (silent) {
       _isCheckingApplicationStatus = true;
     } else {
@@ -231,10 +207,7 @@ class _BecomeADriverPageState extends State<BecomeADriverPage>
       final res = await _api.request(
         ApiConstants.upgradeToDriverEndpoint,
         method: 'POST',
-        data: {
-          'action': 'status',
-          'user': uid,
-        },
+        data: {'action': 'status', 'user': uid},
       );
 
       final body = jsonDecode(res.body);
@@ -243,10 +216,7 @@ class _BecomeADriverPageState extends State<BecomeADriverPage>
       if (res.statusCode == 200 && body is Map && body['error'] == false) {
         final data = body['data'];
         final status = data is Map ? _normalizeDriverUiStatus(data['status']) : 'not_started';
-        final note = data is Map
-            ? ((data['message'] ?? data['admin_note'])?.toString())
-            : null;
-
+        final note = data is Map ? ((data['message'] ?? data['admin_note'])?.toString()) : null;
         setState(() {
           _applicationStatus = status;
           _applicationStatusNote = note;
@@ -273,137 +243,69 @@ class _BecomeADriverPageState extends State<BecomeADriverPage>
     }
   }
 
-  bool get _applicationLocked =>
-      _applicationStatus == 'pending' || _applicationStatus == 'activated';
+  bool get _applicationLocked => _applicationStatus == 'pending' || _applicationStatus == 'activated';
 
   String get _applicationButtonLabel {
     if (_isCheckingApplicationStatus) return 'Checking Application...';
     switch (_applicationStatus) {
-      case 'pending':
-        return 'Application Pending';
-      case 'activated':
-        return 'Driver Activated';
-      case 'rejected':
-        return 'Resume Application';
-      default:
-        return 'Start Your Application';
+      case 'pending': return 'Application Pending';
+      case 'activated': return 'Driver Activated';
+      case 'rejected': return 'Resume Application';
+      default: return 'Start Your Application';
     }
   }
 
   IconData get _applicationButtonIcon {
-    if (_applicationStatus == 'activated') {
-      return Icons.verified_rounded;
-    }
-    if (_applicationStatus == 'pending') {
-      return Icons.hourglass_top_rounded;
-    }
-    if (_applicationStatus == 'rejected') {
-      return Icons.refresh_rounded;
-    }
+    if (_applicationStatus == 'activated') return Icons.verified_rounded;
+    if (_applicationStatus == 'pending') return Icons.hourglass_top_rounded;
+    if (_applicationStatus == 'rejected') return Icons.refresh_rounded;
     return Icons.arrow_forward_rounded;
   }
 
   String get _applicationStatusCaption {
-    if (_isCheckingApplicationStatus) {
-      return 'Syncing your driver application status.';
-    }
-    if (_applicationStatus == 'pending') {
-      return _applicationStatusNote?.trim().isNotEmpty == true
-          ? _applicationStatusNote!.trim()
-          : 'Your onboarding is under review. You cannot submit another application now.';
-    }
-    if (_applicationStatus == 'activated') {
-      return _applicationStatusNote?.trim().isNotEmpty == true
-          ? _applicationStatusNote!.trim()
-          : 'Your driver account is active. No further application is required.';
-    }
-    if (_applicationStatus == 'rejected') {
-      return _applicationStatusNote?.trim().isNotEmpty == true
-          ? _applicationStatusNote!.trim()
-          : 'Your last application needs an update. Open the flow and resubmit.';
-    }
+    if (_isCheckingApplicationStatus) return 'Syncing your driver application status.';
+    if (_applicationStatus == 'pending') return _applicationStatusNote?.trim().isNotEmpty == true ? _applicationStatusNote!.trim() : 'Your onboarding is under review. You cannot submit another application now.';
+    if (_applicationStatus == 'activated') return _applicationStatusNote?.trim().isNotEmpty == true ? _applicationStatusNote!.trim() : 'Your driver account is active. No further application is required.';
+    if (_applicationStatus == 'rejected') return _applicationStatusNote?.trim().isNotEmpty == true ? _applicationStatusNote!.trim() : 'Your last application needs an update. Open the flow and resubmit.';
     return 'Complete the guided onboarding once to submit your driver application.';
   }
 
   Color _applicationStatusColor(ColorScheme cs) {
     switch (_applicationStatus) {
-      case 'pending':
-        return const Color(0xFFE67E22);
-      case 'activated':
-        return const Color(0xFF1E8E3E);
-      case 'rejected':
-        return const Color(0xFFD64545);
-      default:
-        return AppColors.primary;
+      case 'pending': return const Color(0xFFE67E22);
+      case 'activated': return const Color(0xFF1E8E3E);
+      case 'rejected': return const Color(0xFFD64545);
+      default: return AppColors.primary;
     }
   }
 
-  bool get _canTriggerApplicationFlow =>
-      _canOpenApplicationModal &&
-          !_isCheckingApplicationStatus &&
-          !_applicationLocked;
+  bool get _canTriggerApplicationFlow => _canOpenApplicationModal && !_isCheckingApplicationStatus && !_applicationLocked;
 
   void _fail(String msg) {
     if (!mounted) return;
     setState(() => _hasError = true);
-    showToastNotification(
-      context: context,
-      title: 'Error',
-      message: msg,
-      isSuccess: false,
-    );
+    showToastNotification(context: context, title: 'Error', message: msg, isSuccess: false);
   }
 
   String get _accountFullName {
-    final first = (_user['user_fname'] ??
-        _user['fname'] ??
-        _user['first_name'] ??
-        '')
-        .toString()
-        .trim();
-
-    final last = (_user['user_lname'] ??
-        _user['lname'] ??
-        _user['last_name'] ??
-        '')
-        .toString()
-        .trim();
-
-    final legal = (_user['legal_full_name'] ??
-        _user['full_name'] ??
-        _user['name'] ??
-        '')
-        .toString()
-        .trim();
-
+    final first = (_user['user_fname'] ?? _user['fname'] ?? _user['first_name'] ?? '').toString().trim();
+    final last = (_user['user_lname'] ?? _user['lname'] ?? _user['last_name'] ?? '').toString().trim();
+    final legal = (_user['legal_full_name'] ?? _user['full_name'] ?? _user['name'] ?? '').toString().trim();
     final combined = [first, last].where((e) => e.isNotEmpty).join(' ').trim();
-
     if (legal.isNotEmpty) return legal;
     if (combined.isNotEmpty) return combined;
     return '';
   }
 
   String get _accountEmail {
-    return (_user['email'] ??
-        _user['user_email'] ??
-        _user['mail'] ??
-        '')
-        .toString()
-        .trim();
+    return (_user['email'] ?? _user['user_email'] ?? _user['mail'] ?? '').toString().trim();
   }
 
   String get _accountPhone {
-    return (_user['phone'] ??
-        _user['user_phone'] ??
-        _user['mobile'] ??
-        _user['phone_number'] ??
-        '')
-        .toString()
-        .trim();
+    return (_user['phone'] ?? _user['user_phone'] ?? _user['mobile'] ?? _user['phone_number'] ?? '').toString().trim();
   }
 
-  bool get _canOpenApplicationModal =>
-      _accountFullName.isNotEmpty && _accountEmail.isNotEmpty;
+  bool get _canOpenApplicationModal => _accountFullName.isNotEmpty && _accountEmail.isNotEmpty;
 
   @override
   void dispose() {
@@ -421,11 +323,7 @@ class _BecomeADriverPageState extends State<BecomeADriverPage>
     return Scaffold(
       body: Stack(
         children: [
-          const BackgroundWidget(
-            animate: true,
-            intensity: 0.85,
-            style: HoloStyle.flux,
-          ),
+          const BackgroundWidget(animate: true, intensity: 0.85, style: HoloStyle.flux),
           CustomScrollView(
             physics: const BouncingScrollPhysics(),
             slivers: [
@@ -434,8 +332,7 @@ class _BecomeADriverPageState extends State<BecomeADriverPage>
                 centerTitle: false,
                 elevation: 0,
                 surfaceTintColor: Colors.transparent,
-                backgroundColor:
-                theme.scaffoldBackgroundColor.withOpacity(isDark ? 0.88 : 0.96),
+                backgroundColor: theme.scaffoldBackgroundColor.withOpacity(isDark ? 0.88 : 0.96),
                 titleSpacing: 0,
                 leadingWidth: ui.inset(64).clamp(58.0, 72.0).toDouble(),
                 automaticallyImplyLeading: false,
@@ -444,12 +341,7 @@ class _BecomeADriverPageState extends State<BecomeADriverPage>
               ),
               SliverToBoxAdapter(
                 child: Padding(
-                  padding: EdgeInsets.fromLTRB(
-                    ui.screenPadding.left,
-                    ui.gap(14).clamp(12.0, 18.0).toDouble(),
-                    ui.screenPadding.right,
-                    0,
-                  ),
+                  padding: EdgeInsets.fromLTRB(ui.screenPadding.left, ui.gap(14).clamp(12.0, 18.0).toDouble(), ui.screenPadding.right, 0),
                   child: FadeTransition(
                     opacity: _fadeAnim,
                     child: SlideTransition(
@@ -461,64 +353,34 @@ class _BecomeADriverPageState extends State<BecomeADriverPage>
               ),
               SliverToBoxAdapter(
                 child: Padding(
-                  padding: EdgeInsets.symmetric(
-                    horizontal: ui.screenPadding.left,
-                  ),
+                  padding: EdgeInsets.symmetric(horizontal: ui.screenPadding.left),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       SizedBox(height: ui.gap(24).clamp(20.0, 28.0).toDouble()),
-                      _SectionHeader(
-                        ui: ui,
-                        cs: cs,
-                        title: 'Why Become a PickMe Driver',
-                        icon: Icons.trending_up_rounded,
-                      ),
+                      _SectionHeader(ui: ui, cs: cs, title: 'Why Become a PickMe Driver', icon: Icons.trending_up_rounded),
                       SizedBox(height: ui.gap(16).clamp(12.0, 18.0).toDouble()),
                       _BenefitsCarousel(
-                        ui: ui,
-                        cs: cs,
-                        isDark: isDark,
-                        selectedIndex: _selectedBenefit,
+                        ui: ui, cs: cs, isDark: isDark, selectedIndex: _selectedBenefit,
                         onTap: (i) {
                           HapticFeedback.lightImpact();
                           setState(() => _selectedBenefit = i);
                         },
                       ),
                       SizedBox(height: ui.gap(28).clamp(24.0, 32.0).toDouble()),
-                      _SectionHeader(
-                        ui: ui,
-                        cs: cs,
-                        title: 'Quick Requirements',
-                        icon: Icons.checklist_rounded,
-                      ),
+                      _SectionHeader(ui: ui, cs: cs, title: 'Quick Requirements', icon: Icons.checklist_rounded),
                       SizedBox(height: ui.gap(16).clamp(12.0, 18.0).toDouble()),
                       _RequirementsGrid(ui: ui, cs: cs, isDark: isDark),
                       SizedBox(height: ui.gap(28).clamp(24.0, 32.0).toDouble()),
-                      _SectionHeader(
-                        ui: ui,
-                        cs: cs,
-                        title: 'Earnings Potential',
-                        icon: Icons.payments_rounded,
-                      ),
+                      _SectionHeader(ui: ui, cs: cs, title: 'Earnings Potential', icon: Icons.payments_rounded),
                       SizedBox(height: ui.gap(16).clamp(12.0, 18.0).toDouble()),
                       _EarningsShowcase(ui: ui, cs: cs, isDark: isDark),
                       SizedBox(height: ui.gap(28).clamp(24.0, 32.0).toDouble()),
-                      _SectionHeader(
-                        ui: ui,
-                        cs: cs,
-                        title: 'Driver Success Stories',
-                        icon: Icons.star_rounded,
-                      ),
+                      _SectionHeader(ui: ui, cs: cs, title: 'Driver Success Stories', icon: Icons.star_rounded),
                       SizedBox(height: ui.gap(16).clamp(12.0, 18.0).toDouble()),
                       _TestimonialCards(ui: ui, cs: cs, isDark: isDark),
                       SizedBox(height: ui.gap(28).clamp(24.0, 32.0).toDouble()),
-                      _SectionHeader(
-                        ui: ui,
-                        cs: cs,
-                        title: 'Application Steps',
-                        icon: Icons.directions_car_rounded,
-                      ),
+                      _SectionHeader(ui: ui, cs: cs, title: 'Application Steps', icon: Icons.directions_car_rounded),
                       SizedBox(height: ui.gap(16).clamp(12.0, 18.0).toDouble()),
                       _ApplicationSteps(ui: ui, cs: cs, isDark: isDark),
                       SizedBox(height: ui.gap(44).clamp(38.0, 50.0).toDouble()),
@@ -536,11 +398,7 @@ class _BecomeADriverPageState extends State<BecomeADriverPage>
           padding: EdgeInsets.all(ui.inset(16).clamp(14.0, 18.0).toDouble()),
           decoration: BoxDecoration(
             color: theme.scaffoldBackgroundColor,
-            border: Border(
-              top: BorderSide(
-                color: cs.onSurface.withOpacity(0.08),
-              ),
-            ),
+            border: Border(top: BorderSide(color: cs.onSurface.withOpacity(0.08))),
           ),
           child: Column(
             mainAxisSize: MainAxisSize.min,
@@ -548,21 +406,12 @@ class _BecomeADriverPageState extends State<BecomeADriverPage>
             children: [
               Container(
                 width: double.infinity,
-                margin: EdgeInsets.only(
-                  bottom: ui.gap(12).clamp(10.0, 14.0).toDouble(),
-                ),
-                padding: EdgeInsets.symmetric(
-                  horizontal: ui.inset(12).clamp(10.0, 14.0).toDouble(),
-                  vertical: ui.inset(10).clamp(9.0, 12.0).toDouble(),
-                ),
+                margin: EdgeInsets.only(bottom: ui.gap(12).clamp(10.0, 14.0).toDouble()),
+                padding: EdgeInsets.symmetric(horizontal: ui.inset(12).clamp(10.0, 14.0).toDouble(), vertical: ui.inset(10).clamp(9.0, 12.0).toDouble()),
                 decoration: BoxDecoration(
                   color: _applicationStatusColor(cs).withOpacity(0.08),
-                  borderRadius: BorderRadius.circular(
-                    ui.radius(14).clamp(12.0, 16.0).toDouble(),
-                  ),
-                  border: Border.all(
-                    color: _applicationStatusColor(cs).withOpacity(0.18),
-                  ),
+                  borderRadius: BorderRadius.circular(ui.radius(14).clamp(12.0, 16.0).toDouble()),
+                  border: Border.all(color: _applicationStatusColor(cs).withOpacity(0.18)),
                 ),
                 child: Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -574,11 +423,7 @@ class _BecomeADriverPageState extends State<BecomeADriverPage>
                         color: _applicationStatusColor(cs).withOpacity(0.12),
                         shape: BoxShape.circle,
                       ),
-                      child: Icon(
-                        _applicationButtonIcon,
-                        size: ui.icon(17).clamp(16.0, 18.0).toDouble(),
-                        color: _applicationStatusColor(cs),
-                      ),
+                      child: Icon(_applicationButtonIcon, size: ui.icon(17).clamp(16.0, 18.0).toDouble(), color: _applicationStatusColor(cs)),
                     ),
                     SizedBox(width: ui.gap(10).clamp(8.0, 12.0).toDouble()),
                     Expanded(
@@ -587,21 +432,12 @@ class _BecomeADriverPageState extends State<BecomeADriverPage>
                         children: [
                           Text(
                             _applicationButtonLabel,
-                            style: TextStyle(
-                              fontSize: ui.font(12.6).clamp(12.0, 13.4).toDouble(),
-                              fontWeight: FontWeight.w900,
-                              color: cs.onSurface,
-                            ),
+                            style: TextStyle(fontSize: ui.font(12.6).clamp(12.0, 13.4).toDouble(), fontWeight: FontWeight.w900, color: cs.onSurface),
                           ),
                           SizedBox(height: ui.gap(4).clamp(2.0, 6.0).toDouble()),
                           Text(
                             _applicationStatusCaption,
-                            style: TextStyle(
-                              fontSize: ui.font(10.8).clamp(10.3, 11.4).toDouble(),
-                              fontWeight: FontWeight.w600,
-                              color: cs.onSurface.withOpacity(0.68),
-                              height: 1.35,
-                            ),
+                            style: TextStyle(fontSize: ui.font(10.8).clamp(10.3, 11.4).toDouble(), fontWeight: FontWeight.w600, color: cs.onSurface.withOpacity(0.68), height: 1.35),
                           ),
                         ],
                       ),
@@ -613,36 +449,22 @@ class _BecomeADriverPageState extends State<BecomeADriverPage>
                 width: double.infinity,
                 height: ui.buttonHeight,
                 child: ElevatedButton.icon(
-                  onPressed: _canTriggerApplicationFlow
-                      ? () {
+                  onPressed: _canTriggerApplicationFlow ? () {
                     HapticFeedback.mediumImpact();
                     _showApplicationModal(context, ui, cs);
-                  }
-                      : null,
+                  } : null,
                   icon: Icon(_applicationButtonIcon, size: ui.icon(18)),
                   label: Text(
                     _applicationButtonLabel,
-                    style: TextStyle(
-                      fontSize: ui.font(14).clamp(13.0, 15.0).toDouble(),
-                      fontWeight: FontWeight.w900,
-                      letterSpacing: -0.2,
-                    ),
+                    style: TextStyle(fontSize: ui.font(14).clamp(13.0, 15.0).toDouble(), fontWeight: FontWeight.w900, letterSpacing: -0.2),
                   ),
                   style: ElevatedButton.styleFrom(
                     elevation: 0,
-                    backgroundColor: _applicationLocked
-                        ? _applicationStatusColor(cs)
-                        : AppColors.primary,
+                    backgroundColor: _applicationLocked ? _applicationStatusColor(cs) : AppColors.primary,
                     foregroundColor: Colors.white,
-                    disabledBackgroundColor: _applicationLocked
-                        ? _applicationStatusColor(cs).withOpacity(0.90)
-                        : cs.onSurface.withOpacity(0.16),
+                    disabledBackgroundColor: _applicationLocked ? _applicationStatusColor(cs).withOpacity(0.90) : cs.onSurface.withOpacity(0.16),
                     disabledForegroundColor: Colors.white,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(
-                        ui.radius(14).clamp(12.0, 16.0).toDouble(),
-                      ),
-                    ),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(ui.radius(14).clamp(12.0, 16.0).toDouble())),
                   ),
                 ),
               ),
@@ -653,32 +475,19 @@ class _BecomeADriverPageState extends State<BecomeADriverPage>
     );
   }
 
-  Future<void> _showApplicationModal(
-      BuildContext context,
-      UIScale ui,
-      ColorScheme cs,
-      ) async {
+  Future<void> _showApplicationModal(BuildContext context, UIScale ui, ColorScheme cs) async {
     if (!_canOpenApplicationModal) {
       showToastNotification(
         context: context,
         title: 'Account details unavailable',
-        message: _isFetchingAccount
-            ? 'Your account is still syncing. Please try again in a moment.'
-            : 'We could not load your legal name and email from your profile.',
+        message: _isFetchingAccount ? 'Your account is still syncing. Please try again in a moment.' : 'We could not load your legal name and email from your profile.',
         isSuccess: false,
       );
       return;
     }
 
     if (_applicationLocked) {
-      showToastNotification(
-        context: context,
-        title: _applicationStatus == 'activated'
-            ? 'Driver already activated'
-            : 'Application pending',
-        message: _applicationStatusCaption,
-        isSuccess: false,
-      );
+      showToastNotification(context: context, title: _applicationStatus == 'activated' ? 'Driver already activated' : 'Application pending', message: _applicationStatusCaption, isSuccess: false);
       return;
     }
 
@@ -702,55 +511,28 @@ class _BecomeADriverPageState extends State<BecomeADriverPage>
   }
 }
 
+// ---------------------------------------------------------
+// REUSABLE HEADER & HERO WIDGETS
+// ---------------------------------------------------------
 class _HeaderBackButton extends StatelessWidget {
   final UIScale ui;
   final ColorScheme cs;
-
-  const _HeaderBackButton({
-    required this.ui,
-    required this.cs,
-  });
-
+  const _HeaderBackButton({required this.ui, required this.cs});
   @override
   Widget build(BuildContext context) {
     final radius = ui.radius(14).clamp(12.0, 16.0).toDouble();
-
     return Padding(
-      padding: EdgeInsets.only(
-        left: ui.gap(10).clamp(8.0, 12.0).toDouble(),
-        top: ui.gap(6).clamp(4.0, 8.0).toDouble(),
-        bottom: ui.gap(6).clamp(4.0, 8.0).toDouble(),
-      ),
+      padding: EdgeInsets.only(left: ui.gap(10).clamp(8.0, 12.0).toDouble(), top: ui.gap(6).clamp(4.0, 8.0).toDouble(), bottom: ui.gap(6).clamp(4.0, 8.0).toDouble()),
       child: Material(
         color: Colors.transparent,
         child: InkWell(
           borderRadius: BorderRadius.circular(radius),
-          onTap: () {
-            HapticFeedback.selectionClick();
-            Navigator.of(context).maybePop();
-          },
+          onTap: () { HapticFeedback.selectionClick(); Navigator.of(context).maybePop(); },
           child: Ink(
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(radius),
-              border: Border.all(
-                color: cs.onSurface.withOpacity(0.10),
-              ),
-              color: cs.surface.withOpacity(0.72),
-            ),
+            decoration: BoxDecoration(borderRadius: BorderRadius.circular(radius), border: Border.all(color: cs.onSurface.withOpacity(0.10)), color: cs.surface.withOpacity(0.72)),
             child: ClipRRect(
               borderRadius: BorderRadius.circular(radius),
-              child: BackdropFilter(
-                filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
-                child: SizedBox(
-                  width: ui.inset(42).clamp(40.0, 46.0).toDouble(),
-                  height: ui.inset(42).clamp(40.0, 46.0).toDouble(),
-                  child: Icon(
-                    Icons.arrow_back_ios_new_rounded,
-                    size: ui.icon(18).clamp(16.0, 19.0).toDouble(),
-                    color: cs.onSurface,
-                  ),
-                ),
-              ),
+              child: BackdropFilter(filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10), child: SizedBox(width: ui.inset(42).clamp(40.0, 46.0).toDouble(), height: ui.inset(42).clamp(40.0, 46.0).toDouble(), child: Icon(Icons.arrow_back_ios_new_rounded, size: ui.icon(18).clamp(16.0, 19.0).toDouble(), color: cs.onSurface))),
             ),
           ),
         ),
@@ -762,25 +544,16 @@ class _HeaderBackButton extends StatelessWidget {
 class _HeaderTitle extends StatelessWidget {
   final UIScale ui;
   final ColorScheme cs;
-
-  const _HeaderTitle({
-    required this.ui,
-    required this.cs,
-  });
-
+  const _HeaderTitle({required this.ui, required this.cs});
   @override
   Widget build(BuildContext context) {
     final textScale = MediaQuery.textScaleFactorOf(context);
-
     return LayoutBuilder(
       builder: (context, constraints) {
         final tightWidth = constraints.maxWidth < 230;
         final showSubtitle = !tightWidth && textScale <= 1.15;
-
         return Padding(
-          padding: EdgeInsets.only(
-            right: ui.screenPadding.right.clamp(12.0, 20.0).toDouble(),
-          ),
+          padding: EdgeInsets.only(right: ui.screenPadding.right.clamp(12.0, 20.0).toDouble()),
           child: Align(
             alignment: Alignment.centerLeft,
             child: SizedBox(
@@ -790,37 +563,10 @@ class _HeaderTitle extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  Text(
-                    'Join the Movement',
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    softWrap: false,
-                    style: TextStyle(
-                      fontSize: (tightWidth
-                          ? ui.font(14.5).clamp(13.0, 15.0)
-                          : ui.font(16).clamp(14.5, 17.0))
-                          .toDouble(),
-                      fontWeight: FontWeight.w900,
-                      color: cs.onSurface,
-                      letterSpacing: -0.3,
-                      height: 1.0,
-                    ),
-                  ),
+                  Text('Join the Movement', maxLines: 1, overflow: TextOverflow.ellipsis, softWrap: false, style: TextStyle(fontSize: (tightWidth ? ui.font(14.5).clamp(13.0, 15.0) : ui.font(16).clamp(14.5, 17.0)).toDouble(), fontWeight: FontWeight.w900, color: cs.onSurface, letterSpacing: -0.3, height: 1.0)),
                   if (showSubtitle) ...[
                     SizedBox(height: ui.gap(2).clamp(1.0, 3.0).toDouble()),
-                    Text(
-                      'Become a PickMe driver',
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      softWrap: false,
-                      style: TextStyle(
-                        fontSize:
-                        ui.font(10.8).clamp(10.0, 11.2).toDouble(),
-                        fontWeight: FontWeight.w700,
-                        color: cs.onSurface.withOpacity(0.62),
-                        height: 1.0,
-                      ),
-                    ),
+                    Text('Become a PickMe driver', maxLines: 1, overflow: TextOverflow.ellipsis, softWrap: false, style: TextStyle(fontSize: ui.font(10.8).clamp(10.0, 11.2).toDouble(), fontWeight: FontWeight.w700, color: cs.onSurface.withOpacity(0.62), height: 1.0)),
                   ],
                 ],
               ),
@@ -836,155 +582,57 @@ class _HeroSection extends StatelessWidget {
   final UIScale ui;
   final ColorScheme cs;
   final bool isDark;
-
-  const _HeroSection({
-    required this.ui,
-    required this.cs,
-    required this.isDark,
-  });
-
+  const _HeroSection({required this.ui, required this.cs, required this.isDark});
   @override
   Widget build(BuildContext context) {
     final radius = ui.radius(24).clamp(20.0, 28.0).toDouble();
-
     return Container(
       width: double.infinity,
       padding: EdgeInsets.all(ui.inset(18).clamp(16.0, 22.0).toDouble()),
       decoration: BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: isDark
-              ? [
-            AppColors.primary.withOpacity(0.18),
-            AppColors.secondary.withOpacity(0.12),
-          ]
-              : [
-            AppColors.primary.withOpacity(0.10),
-            AppColors.secondary.withOpacity(0.07),
-          ],
-        ),
+        gradient: LinearGradient(begin: Alignment.topLeft, end: Alignment.bottomRight, colors: isDark ? [AppColors.primary.withOpacity(0.18), AppColors.secondary.withOpacity(0.12)] : [AppColors.primary.withOpacity(0.10), AppColors.secondary.withOpacity(0.07)]),
         borderRadius: BorderRadius.circular(radius),
-        border: Border.all(
-          color: AppColors.primary.withOpacity(0.12),
-          width: 1.2,
-        ),
+        border: Border.all(color: AppColors.primary.withOpacity(0.12), width: 1.2),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           _HeroBadge(ui: ui, cs: cs),
           SizedBox(height: ui.gap(14).clamp(12.0, 18.0).toDouble()),
-          Text(
-            'Drive smarter.\nEarn faster.',
-            style: TextStyle(
-              fontSize: ui.font(ui.compact ? 26 : 30).clamp(24.0, 32.0).toDouble(),
-              fontWeight: FontWeight.w900,
-              height: 1.0,
-              letterSpacing: -0.9,
-              color: cs.onSurface,
-            ),
-          ),
+          Text('Drive smarter.\nEarn faster.', style: TextStyle(fontSize: ui.font(ui.compact ? 26 : 30).clamp(24.0, 32.0).toDouble(), fontWeight: FontWeight.w900, height: 1.0, letterSpacing: -0.9, color: cs.onSurface)),
           SizedBox(height: ui.gap(10).clamp(8.0, 12.0).toDouble()),
           ConstrainedBox(
-            constraints: BoxConstraints(
-              maxWidth: ui.compact ? double.infinity : 560,
-            ),
-            child: Text(
-              'Build flexible income with premium rider demand, fast payouts, and a guided onboarding experience designed to get you on the road quickly.',
-              style: TextStyle(
-                fontSize: ui.font(13).clamp(12.0, 14.0).toDouble(),
-                fontWeight: FontWeight.w600,
-                color: cs.onSurface.withOpacity(0.72),
-                height: 1.45,
-              ),
-            ),
+            constraints: BoxConstraints(maxWidth: ui.compact ? double.infinity : 560),
+            child: Text('Build flexible income with premium rider demand, fast payouts, and a guided onboarding experience.', style: TextStyle(fontSize: ui.font(13).clamp(12.0, 14.0).toDouble(), fontWeight: FontWeight.w600, color: cs.onSurface.withOpacity(0.72), height: 1.45)),
           ),
           SizedBox(height: ui.gap(16).clamp(12.0, 18.0).toDouble()),
           Wrap(
-            spacing: ui.gap(12).clamp(10.0, 14.0).toDouble(),
-            runSpacing: ui.gap(12).clamp(10.0, 14.0).toDouble(),
+            spacing: ui.gap(12).clamp(10.0, 14.0).toDouble(), runSpacing: ui.gap(12).clamp(10.0, 14.0).toDouble(),
             children: [
-              SizedBox(
-                width: ui.compact
-                    ? double.infinity
-                    : math.min(260, ui.width * 0.38),
-                child: _HeroMetricCard(
-                  ui: ui,
-                  cs: cs,
-                  title: 'Average Daily',
-                  value: '₦12,500',
-                  icon: Icons.payments_rounded,
-                ),
-              ),
-              SizedBox(
-                width: ui.compact
-                    ? double.infinity
-                    : math.min(260, ui.width * 0.38),
-                child: _HeroMetricCard(
-                  ui: ui,
-                  cs: cs,
-                  title: 'Activation',
-                  value: '24–48 hrs',
-                  icon: Icons.flash_on_rounded,
-                ),
-              ),
+              SizedBox(width: ui.compact ? double.infinity : math.min(260, ui.width * 0.38), child: _HeroMetricCard(ui: ui, cs: cs, title: 'Average Daily', value: '₦12,500', icon: Icons.payments_rounded)),
+              SizedBox(width: ui.compact ? double.infinity : math.min(260, ui.width * 0.38), child: _HeroMetricCard(ui: ui, cs: cs, title: 'Activation', value: '24–48 hrs', icon: Icons.flash_on_rounded)),
             ],
           ),
           SizedBox(height: ui.gap(14).clamp(12.0, 16.0).toDouble()),
           Container(
-            width: double.infinity,
-            padding: EdgeInsets.all(ui.inset(14).clamp(12.0, 16.0).toDouble()),
-            decoration: BoxDecoration(
-              color: cs.surface.withOpacity(isDark ? 0.72 : 0.92),
-              borderRadius: BorderRadius.circular(
-                ui.radius(18).clamp(16.0, 20.0).toDouble(),
-              ),
-              border: Border.all(
-                color: AppColors.primary.withOpacity(0.14),
-              ),
-            ),
+            width: double.infinity, padding: EdgeInsets.all(ui.inset(14).clamp(12.0, 16.0).toDouble()),
+            decoration: BoxDecoration(color: cs.surface.withOpacity(isDark ? 0.72 : 0.92), borderRadius: BorderRadius.circular(ui.radius(18).clamp(16.0, 20.0).toDouble()), border: Border.all(color: AppColors.primary.withOpacity(0.14))),
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Container(
-                  width: ui.inset(46).clamp(42.0, 50.0).toDouble(),
-                  height: ui.inset(46).clamp(42.0, 50.0).toDouble(),
-                  decoration: BoxDecoration(
-                    borderRadius: BorderRadius.circular(
-                      ui.radius(14).clamp(12.0, 16.0).toDouble(),
-                    ),
-                    color: AppColors.primary.withOpacity(0.12),
-                  ),
-                  child: Icon(
-                    Icons.directions_car_rounded,
-                    size: ui.icon(22).clamp(20.0, 24.0).toDouble(),
-                    color: AppColors.primary,
-                  ),
+                  width: ui.inset(46).clamp(42.0, 50.0).toDouble(), height: ui.inset(46).clamp(42.0, 50.0).toDouble(),
+                  decoration: BoxDecoration(borderRadius: BorderRadius.circular(ui.radius(14).clamp(12.0, 16.0).toDouble()), color: AppColors.primary.withOpacity(0.12)),
+                  child: Icon(Icons.directions_car_rounded, size: ui.icon(22).clamp(20.0, 24.0).toDouble(), color: AppColors.primary),
                 ),
                 SizedBox(width: ui.gap(12).clamp(10.0, 14.0).toDouble()),
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(
-                        'Premium onboarding experience',
-                        style: TextStyle(
-                          fontSize: ui.font(12.5).clamp(12.0, 13.5).toDouble(),
-                          fontWeight: FontWeight.w900,
-                          color: cs.onSurface,
-                        ),
-                      ),
+                      Text('Premium onboarding experience', style: TextStyle(fontSize: ui.font(12.5).clamp(12.0, 13.5).toDouble(), fontWeight: FontWeight.w900, color: cs.onSurface)),
                       SizedBox(height: ui.gap(4).clamp(2.0, 6.0).toDouble()),
-                      Text(
-                        'Clean verification, guided setup, and faster go-live.',
-                        style: TextStyle(
-                          fontSize: ui.font(11.2).clamp(10.8, 11.8).toDouble(),
-                          fontWeight: FontWeight.w600,
-                          color: cs.onSurface.withOpacity(0.66),
-                          height: 1.35,
-                        ),
-                      ),
+                      Text('Clean verification, guided setup, and faster go-live.', style: TextStyle(fontSize: ui.font(11.2).clamp(10.8, 11.8).toDouble(), fontWeight: FontWeight.w600, color: cs.onSurface.withOpacity(0.66), height: 1.35)),
                     ],
                   ),
                 ),
@@ -1000,43 +648,18 @@ class _HeroSection extends StatelessWidget {
 class _HeroBadge extends StatelessWidget {
   final UIScale ui;
   final ColorScheme cs;
-
-  const _HeroBadge({
-    required this.ui,
-    required this.cs,
-  });
-
+  const _HeroBadge({required this.ui, required this.cs});
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: EdgeInsets.symmetric(
-        horizontal: ui.inset(12).clamp(10.0, 14.0).toDouble(),
-        vertical: ui.inset(8).clamp(7.0, 9.0).toDouble(),
-      ),
-      decoration: BoxDecoration(
-        color: AppColors.primary.withOpacity(0.12),
-        borderRadius: BorderRadius.circular(999),
-        border: Border.all(
-          color: AppColors.primary.withOpacity(0.18),
-        ),
-      ),
+      padding: EdgeInsets.symmetric(horizontal: ui.inset(12).clamp(10.0, 14.0).toDouble(), vertical: ui.inset(8).clamp(7.0, 9.0).toDouble()),
+      decoration: BoxDecoration(color: AppColors.primary.withOpacity(0.12), borderRadius: BorderRadius.circular(999), border: Border.all(color: AppColors.primary.withOpacity(0.18))),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(
-            Icons.workspace_premium_rounded,
-            size: ui.icon(16).clamp(15.0, 17.0).toDouble(),
-            color: AppColors.primary,
-          ),
+          Icon(Icons.workspace_premium_rounded, size: ui.icon(16).clamp(15.0, 17.0).toDouble(), color: AppColors.primary),
           SizedBox(width: ui.gap(6).clamp(4.0, 8.0).toDouble()),
-          Text(
-            'Driver onboarding',
-            style: TextStyle(
-              fontSize: ui.font(11).clamp(10.5, 11.5).toDouble(),
-              fontWeight: FontWeight.w800,
-              color: AppColors.primary,
-            ),
-          ),
+          Text('Driver onboarding', style: TextStyle(fontSize: ui.font(11).clamp(10.5, 11.5).toDouble(), fontWeight: FontWeight.w800, color: AppColors.primary)),
         ],
       ),
     );
@@ -1046,76 +669,29 @@ class _HeroBadge extends StatelessWidget {
 class _HeroMetricCard extends StatelessWidget {
   final UIScale ui;
   final ColorScheme cs;
-  final String title;
-  final String value;
+  final String title, value;
   final IconData icon;
-
-  const _HeroMetricCard({
-    required this.ui,
-    required this.cs,
-    required this.title,
-    required this.value,
-    required this.icon,
-  });
-
+  const _HeroMetricCard({required this.ui, required this.cs, required this.title, required this.value, required this.icon});
   @override
   Widget build(BuildContext context) {
     return Container(
       padding: EdgeInsets.all(ui.inset(14).clamp(12.0, 16.0).toDouble()),
-      decoration: BoxDecoration(
-        color: cs.surface.withOpacity(0.84),
-        borderRadius: BorderRadius.circular(
-          ui.radius(18).clamp(16.0, 20.0).toDouble(),
-        ),
-        border: Border.all(
-          color: cs.onSurface.withOpacity(0.08),
-        ),
-      ),
+      decoration: BoxDecoration(color: cs.surface.withOpacity(0.84), borderRadius: BorderRadius.circular(ui.radius(18).clamp(16.0, 20.0).toDouble()), border: Border.all(color: cs.onSurface.withOpacity(0.08))),
       child: Row(
         children: [
           Container(
-            width: ui.inset(38).clamp(36.0, 42.0).toDouble(),
-            height: ui.inset(38).clamp(36.0, 42.0).toDouble(),
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(
-                ui.radius(12).clamp(10.0, 14.0).toDouble(),
-              ),
-              color: AppColors.primary.withOpacity(0.10),
-            ),
-            child: Icon(
-              icon,
-              size: ui.icon(18).clamp(17.0, 20.0).toDouble(),
-              color: AppColors.primary,
-            ),
+            width: ui.inset(38).clamp(36.0, 42.0).toDouble(), height: ui.inset(38).clamp(36.0, 42.0).toDouble(),
+            decoration: BoxDecoration(borderRadius: BorderRadius.circular(ui.radius(12).clamp(10.0, 14.0).toDouble()), color: AppColors.primary.withOpacity(0.10)),
+            child: Icon(icon, size: ui.icon(18).clamp(17.0, 20.0).toDouble(), color: AppColors.primary),
           ),
           SizedBox(width: ui.gap(10).clamp(8.0, 12.0).toDouble()),
           Expanded(
             child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
-                  title,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    fontSize: ui.font(10.8).clamp(10.3, 11.3).toDouble(),
-                    fontWeight: FontWeight.w700,
-                    color: cs.onSurface.withOpacity(0.62),
-                  ),
-                ),
+                Text(title, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: ui.font(10.8).clamp(10.3, 11.3).toDouble(), fontWeight: FontWeight.w700, color: cs.onSurface.withOpacity(0.62))),
                 SizedBox(height: ui.gap(3).clamp(2.0, 4.0).toDouble()),
-                Text(
-                  value,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    fontSize: ui.font(15.5).clamp(14.5, 17.0).toDouble(),
-                    fontWeight: FontWeight.w900,
-                    color: cs.onSurface,
-                    letterSpacing: -0.4,
-                  ),
-                ),
+                Text(value, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: ui.font(15.5).clamp(14.5, 17.0).toDouble(), fontWeight: FontWeight.w900, color: cs.onSurface, letterSpacing: -0.4)),
               ],
             ),
           ),
@@ -2181,17 +1757,17 @@ class _StepChip extends StatelessWidget {
 }
 
 enum _UploadGroup { identity, vehicle }
-
-enum _GuideKind {
-  documentFront,
-  documentBack,
-  carAngled3D,
-  carFrontPlate,
-  carBackPlate,
-  carSide,
-}
+enum _GuideKind { documentFront, documentBack, face, carAngled3D, carFrontPlate, carBackPlate, carSide }
 
 enum DriverUploadSlot {
+  driverFace(
+    title: 'Driver Photo',
+    subtitle: 'Clear, well-lit photo of your face (No glasses or hats).',
+    group: _UploadGroup.identity,
+    guideKind: _GuideKind.face,
+    accent: Color(0xFFE67E22),
+    previewAspectRatio: 1.0,
+  ),
   licenseFront(
     title: 'Driver License — Front',
     subtitle: 'Place the front side flat and capture all 4 corners clearly.',
@@ -2281,13 +1857,8 @@ enum DriverUploadSlot {
 class _PickedUpload {
   final XFile file;
   final int sizeBytes;
-
-  const _PickedUpload({
-    required this.file,
-    required this.sizeBytes,
-  });
+  const _PickedUpload({required this.file, required this.sizeBytes});
 }
-
 
 class _ApplicationModal extends StatefulWidget {
   final UIScale ui;
@@ -2310,6 +1881,7 @@ class _ApplicationModal extends StatefulWidget {
 
 class _ApplicationModalState extends State<_ApplicationModal> {
   static const Map<DriverUploadSlot, String> _uploadFieldMap = {
+    DriverUploadSlot.driverFace: 'driver_face',
     DriverUploadSlot.licenseFront: 'license_front',
     DriverUploadSlot.licenseBack: 'license_back',
     DriverUploadSlot.ninFront: 'nin_front',
@@ -2326,35 +1898,28 @@ class _ApplicationModalState extends State<_ApplicationModal> {
   late final Map<DriverUploadSlot, _PickedUpload?> _uploads;
   late final TextEditingController _phoneCtrl;
   late final TextEditingController _ninCtrl;
-  late final ApiClient _api;
+  late final TextEditingController _bankNameCtrl;
+  late final TextEditingController _accountNumCtrl;
+  late final TextEditingController _vehicleModelCtrl;
 
+  late final ApiClient _api;
   SharedPreferences? _prefs;
+
   int _currentStep = 0;
   bool _submitting = false;
   bool _showMissingState = false;
   bool _showAccountErrors = false;
 
+  String _vehicleType = 'car';
+  String _selectedRideType = 'street_ride'; // Default radio selection
+  final List<String> _availableRideTypes = ['street_ride', 'campus_ride', 'send_me', 'dispatch'];
+
   List<_WizardStepMeta> get _steps => const [
-    _WizardStepMeta(
-      title: 'Account Details',
-      subtitle: 'Confirm your identity and fill the contact data used for onboarding.',
-      icon: Icons.badge_rounded,
-    ),
-    _WizardStepMeta(
-      title: 'Identity Uploads',
-      subtitle: 'Upload the front and back of your driver license and NIN card.',
-      icon: Icons.credit_card_rounded,
-    ),
-    _WizardStepMeta(
-      title: 'Vehicle Uploads',
-      subtitle: 'Upload the four required vehicle angles with plate visibility where needed.',
-      icon: Icons.directions_car_filled_rounded,
-    ),
-    _WizardStepMeta(
-      title: 'Review & Submit',
-      subtitle: 'Review everything before sending the application to the backend.',
-      icon: Icons.verified_user_rounded,
-    ),
+    _WizardStepMeta(title: 'Account', subtitle: 'Confirm identity and fill your bank payout details.', icon: Icons.badge_rounded),
+    _WizardStepMeta(title: 'Service & Vehicle', subtitle: 'Select your vehicle type, model, and the ride types you want to accept.', icon: Icons.settings_applications_rounded),
+    _WizardStepMeta(title: 'Identity Uploads', subtitle: 'Upload your photo and ID cards.', icon: Icons.credit_card_rounded),
+    _WizardStepMeta(title: 'Vehicle Uploads', subtitle: 'Upload the four required vehicle angles.', icon: Icons.directions_car_filled_rounded),
+    _WizardStepMeta(title: 'Review', subtitle: 'Review everything before sending.', icon: Icons.verified_user_rounded),
   ];
 
   @override
@@ -2363,111 +1928,78 @@ class _ApplicationModalState extends State<_ApplicationModal> {
     _api = ApiClient(http.Client(), context);
     _phoneCtrl = TextEditingController(text: widget.initialPhone);
     _ninCtrl = TextEditingController();
+    _bankNameCtrl = TextEditingController();
+    _accountNumCtrl = TextEditingController();
+    _vehicleModelCtrl = TextEditingController();
     _uploads = {for (final slot in DriverUploadSlot.values) slot: null};
     _bootstrapPrefs();
   }
 
   Future<void> _bootstrapPrefs() async {
-    try {
-      _prefs = await SharedPreferences.getInstance();
-    } catch (_) {
-      // Fallback handled during submit.
-    }
+    try { _prefs = await SharedPreferences.getInstance(); } catch (_) {}
   }
 
-  List<DriverUploadSlot> get _identitySlots => DriverUploadSlot.values
-      .where((slot) => slot.group == _UploadGroup.identity)
-      .toList();
-
-  List<DriverUploadSlot> get _vehicleSlots => DriverUploadSlot.values
-      .where((slot) => slot.group == _UploadGroup.vehicle)
-      .toList();
-
-  List<DriverUploadSlot> get _missingUploads =>
-      DriverUploadSlot.values.where((slot) => _uploads[slot] == null).toList();
-
+  List<DriverUploadSlot> get _identitySlots => DriverUploadSlot.values.where((s) => s.group == _UploadGroup.identity).toList();
+  List<DriverUploadSlot> get _vehicleSlots => DriverUploadSlot.values.where((s) => s.group == _UploadGroup.vehicle).toList();
+  List<DriverUploadSlot> get _missingUploads => DriverUploadSlot.values.where((s) => _uploads[s] == null).toList();
   int get _totalUploads => DriverUploadSlot.values.length;
-  int get _uploadedCount =>
-      DriverUploadSlot.values.where((slot) => _uploads[slot] != null).length;
-
-  bool get _identityComplete =>
-      _identitySlots.every((slot) => _uploads[slot] != null);
-
-  bool get _vehicleComplete =>
-      _vehicleSlots.every((slot) => _uploads[slot] != null);
-
+  int get _uploadedCount => DriverUploadSlot.values.where((s) => _uploads[s] != null).length;
+  bool get _identityComplete => _identitySlots.every((s) => _uploads[s] != null);
+  bool get _vehicleComplete => _vehicleSlots.every((s) => _uploads[s] != null);
   bool get _allUploadsComplete => _missingUploads.isEmpty;
-
   double get _progress => (_currentStep + 1) / _steps.length;
 
   String? _validatePhone(String value) {
     final normalized = value.replaceAll(RegExp(r'[^0-9+]'), '');
     if (normalized.isEmpty) return 'Phone number is required.';
     final digits = normalized.replaceAll(RegExp(r'[^0-9]'), '');
-    if (digits.length < 10 || digits.length > 15) {
-      return 'Enter a valid phone number.';
-    }
+    if (digits.length < 10 || digits.length > 15) return 'Enter a valid phone number.';
     return null;
   }
 
   String? _validateNin(String value) {
     final normalized = value.replaceAll(' ', '').trim().toUpperCase();
     if (normalized.isEmpty) return 'NIN is required.';
-    if (normalized.length < 6 || normalized.length > 64) {
-      return 'Enter a valid NIN.';
-    }
+    if (normalized.length < 6 || normalized.length > 64) return 'Enter a valid NIN.';
+    return null;
+  }
+
+  String? _validateBank(String value) {
+    if (value.trim().isEmpty) return 'Bank name is required.';
+    return null;
+  }
+
+  String? _validateAccount(String value) {
+    if (value.trim().isEmpty) return 'Account number is required.';
+    if (value.trim().length < 10) return 'Account number too short.';
+    return null;
+  }
+
+  String? _validateModel(String value) {
+    if (value.trim().isEmpty) return 'Vehicle model is required.';
     return null;
   }
 
   void _showInlineError(String message) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(message)),
-    );
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
   }
 
-  int _imageQualityFor(DriverUploadSlot slot) {
-    switch (slot.group) {
-      case _UploadGroup.identity:
-        return 76;
-      case _UploadGroup.vehicle:
-        return 72;
-    }
-  }
-
-  double _maxWidthFor(DriverUploadSlot slot) {
-    switch (slot.group) {
-      case _UploadGroup.identity:
-        return 1680;
-      case _UploadGroup.vehicle:
-        return 1440;
-    }
-  }
-
-  int _previewCacheWidthFor(DriverUploadSlot slot) {
-    switch (slot.group) {
-      case _UploadGroup.identity:
-        return 960;
-      case _UploadGroup.vehicle:
-        return 1280;
-    }
-  }
+  int _imageQualityFor(DriverUploadSlot slot) => slot.group == _UploadGroup.identity ? 76 : 72;
+  double _maxWidthFor(DriverUploadSlot slot) => slot.group == _UploadGroup.identity ? 1680 : 1440;
+  int _previewCacheWidthFor(DriverUploadSlot slot) => slot.group == _UploadGroup.identity ? 960 : 1280;
 
   String _formatBytes(int bytes) {
     if (bytes <= 0) return '0 B';
     const units = ['B', 'KB', 'MB', 'GB'];
     double value = bytes.toDouble();
     var unitIndex = 0;
-    while (value >= 1024 && unitIndex < units.length - 1) {
-      value /= 1024;
-      unitIndex++;
-    }
+    while (value >= 1024 && unitIndex < units.length - 1) { value /= 1024; unitIndex++; }
     final decimals = value >= 100 || unitIndex == 0 ? 0 : 1;
     return '${value.toStringAsFixed(decimals)} ${units[unitIndex]}';
   }
 
   Future<ImageSource?> _selectSource() async {
     final cs = widget.cs;
-
     return showModalBottomSheet<ImageSource>(
       context: context,
       backgroundColor: Colors.transparent,
@@ -2475,34 +2007,14 @@ class _ApplicationModalState extends State<_ApplicationModal> {
         return SafeArea(
           child: Container(
             margin: const EdgeInsets.all(12),
-            decoration: BoxDecoration(
-              color: Theme.of(context).scaffoldBackgroundColor,
-              borderRadius: BorderRadius.circular(24),
-            ),
+            decoration: BoxDecoration(color: Theme.of(context).scaffoldBackgroundColor, borderRadius: BorderRadius.circular(24)),
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
                 const SizedBox(height: 8),
-                Container(
-                  width: 42,
-                  height: 5,
-                  decoration: BoxDecoration(
-                    color: cs.onSurface.withOpacity(0.14),
-                    borderRadius: BorderRadius.circular(999),
-                  ),
-                ),
-                ListTile(
-                  leading: const Icon(Icons.photo_camera_outlined),
-                  title: const Text('Take Photo'),
-                  subtitle: const Text('Use the camera'),
-                  onTap: () => Navigator.of(context).pop(ImageSource.camera),
-                ),
-                ListTile(
-                  leading: const Icon(Icons.photo_library_outlined),
-                  title: const Text('Choose from Gallery'),
-                  subtitle: const Text('Pick an existing image'),
-                  onTap: () => Navigator.of(context).pop(ImageSource.gallery),
-                ),
+                Container(width: 42, height: 5, decoration: BoxDecoration(color: cs.onSurface.withOpacity(0.14), borderRadius: BorderRadius.circular(999))),
+                ListTile(leading: const Icon(Icons.photo_camera_outlined), title: const Text('Take Photo'), subtitle: const Text('Use the camera'), onTap: () => Navigator.of(context).pop(ImageSource.camera)),
+                ListTile(leading: const Icon(Icons.photo_library_outlined), title: const Text('Choose from Gallery'), subtitle: const Text('Pick an existing image'), onTap: () => Navigator.of(context).pop(ImageSource.gallery)),
                 const SizedBox(height: 8),
               ],
             ),
@@ -2514,7 +2026,6 @@ class _ApplicationModalState extends State<_ApplicationModal> {
 
   Future<void> _pickUpload(DriverUploadSlot slot) async {
     FocusManager.instance.primaryFocus?.unfocus();
-
     final source = await _selectSource();
     if (source == null) return;
 
@@ -2523,18 +2034,13 @@ class _ApplicationModalState extends State<_ApplicationModal> {
         source: source,
         imageQuality: _imageQualityFor(slot),
         maxWidth: _maxWidthFor(slot),
-        preferredCameraDevice: CameraDevice.rear,
+        preferredCameraDevice: slot.guideKind == _GuideKind.face ? CameraDevice.front : CameraDevice.rear,
       );
-
       if (picked == null) return;
-
       final sizeBytes = await picked.length();
       if (!mounted) return;
 
-      setState(() {
-        _uploads[slot] = _PickedUpload(file: picked, sizeBytes: sizeBytes);
-      });
-
+      setState(() => _uploads[slot] = _PickedUpload(file: picked, sizeBytes: sizeBytes));
       HapticFeedback.selectionClick();
     } catch (_) {
       if (!mounted) return;
@@ -2543,20 +2049,60 @@ class _ApplicationModalState extends State<_ApplicationModal> {
   }
 
   void _removeUpload(DriverUploadSlot slot) {
-    setState(() {
-      _uploads[slot] = null;
-    });
+    setState(() => _uploads[slot] = null);
     HapticFeedback.lightImpact();
+  }
+
+  void _openImageFullScreen(String filePath, String heroTag) {
+    Navigator.of(context).push(
+      PageRouteBuilder(
+        opaque: false,
+        barrierColor: Colors.black.withOpacity(0.95),
+        barrierDismissible: true,
+        transitionDuration: const Duration(milliseconds: 300),
+        pageBuilder: (BuildContext context, _, __) {
+          return Scaffold(
+            backgroundColor: Colors.transparent,
+            appBar: AppBar(
+              backgroundColor: Colors.transparent,
+              elevation: 0,
+              iconTheme: const IconThemeData(color: Colors.white),
+              actions: [
+                IconButton(
+                  icon: const Icon(Icons.close_rounded, size: 28),
+                  onPressed: () => Navigator.pop(context),
+                )
+              ],
+            ),
+            body: Center(
+              child: InteractiveViewer(
+                panEnabled: true,
+                minScale: 0.5,
+                maxScale: 4.0,
+                child: Hero(
+                  tag: heroTag,
+                  child: Image.file(
+                    File(filePath),
+                    fit: BoxFit.contain,
+                    width: double.infinity,
+                    height: double.infinity,
+                    errorBuilder: (_, __, ___) => const Center(
+                      child: Icon(Icons.broken_image_rounded, color: Colors.white54, size: 64),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          );
+        },
+      ),
+    );
   }
 
   Future<void> _goToStep(int step) async {
     if (!mounted) return;
     setState(() => _currentStep = step);
-    await _pageController.animateToPage(
-      step,
-      duration: const Duration(milliseconds: 260),
-      curve: Curves.easeOutCubic,
-    );
+    await _pageController.animateToPage(step, duration: const Duration(milliseconds: 260), curve: Curves.easeOutCubic);
   }
 
   Future<void> _nextStep() async {
@@ -2564,26 +2110,27 @@ class _ApplicationModalState extends State<_ApplicationModal> {
 
     if (_currentStep == 0) {
       setState(() => _showAccountErrors = true);
-      final phoneError = _validatePhone(_phoneCtrl.text.trim());
-      if (phoneError != null) {
-        _showInlineError(phoneError);
-        return;
-      }
-
-      final ninError = _validateNin(_ninCtrl.text.trim());
-      if (ninError != null) {
-        _showInlineError(ninError);
+      if (_validatePhone(_phoneCtrl.text) != null || _validateNin(_ninCtrl.text) != null || _validateBank(_bankNameCtrl.text) != null || _validateAccount(_accountNumCtrl.text) != null) {
+        _showInlineError('Please fix the errors to continue.');
         return;
       }
     }
 
-    if (_currentStep == 1 && !_identityComplete) {
+    if (_currentStep == 1) {
+      setState(() => _showAccountErrors = true);
+      if (_validateModel(_vehicleModelCtrl.text) != null) {
+        _showInlineError('Please enter your vehicle model.');
+        return;
+      }
+    }
+
+    if (_currentStep == 2 && !_identityComplete) {
       setState(() => _showMissingState = true);
-      _showInlineError('Upload all 4 identity images to continue.');
+      _showInlineError('Upload all identity images (including your photo) to continue.');
       return;
     }
 
-    if (_currentStep == 2 && !_vehicleComplete) {
+    if (_currentStep == 3 && !_vehicleComplete) {
       setState(() => _showMissingState = true);
       _showInlineError('Upload all 4 vehicle images to continue.');
       return;
@@ -2608,27 +2155,10 @@ class _ApplicationModalState extends State<_ApplicationModal> {
   Future<void> _submit() async {
     FocusManager.instance.primaryFocus?.unfocus();
 
-    final phone = _phoneCtrl.text.trim();
-    final nin = _ninCtrl.text.trim().toUpperCase();
-
-    final phoneError = _validatePhone(phone);
-    if (phoneError != null) {
-      _showInlineError(phoneError);
-      await _goToStep(0);
-      return;
-    }
-
-    final ninError = _validateNin(nin);
-    if (ninError != null) {
-      _showInlineError(ninError);
-      await _goToStep(0);
-      return;
-    }
-
     if (!_allUploadsComplete) {
       setState(() => _showMissingState = true);
       _showInlineError('Please complete all required uploads before submitting.');
-      await _goToStep(!_identityComplete ? 1 : 2);
+      await _goToStep(!_identityComplete ? 2 : 3);
       return;
     }
 
@@ -2638,17 +2168,16 @@ class _ApplicationModalState extends State<_ApplicationModal> {
     try {
       _prefs ??= await SharedPreferences.getInstance();
       final uid = _prefs?.getString('user_id')?.trim() ?? '';
-      if (uid.isEmpty) {
-        throw Exception('User ID missing');
-      }
+      if (uid.isEmpty) throw Exception('User ID missing');
 
       final files = <String, File>{};
       for (final entry in _uploadFieldMap.entries) {
         final picked = _uploads[entry.key];
-        if (picked != null) {
-          files[entry.value] = File(picked.file.path);
-        }
+        if (picked != null) files[entry.value] = File(picked.file.path);
       }
+
+      // Package the single selected ride type into a JSON array for the backend
+      final selectedRideTypes = [_selectedRideType];
 
       final res = await _api.request(
         ApiConstants.upgradeToDriverEndpoint,
@@ -2658,8 +2187,13 @@ class _ApplicationModalState extends State<_ApplicationModal> {
           'user': uid,
           'legal_full_name': widget.legalFullName,
           'email': widget.email,
-          'phone': phone,
-          'nin': nin,
+          'phone': _phoneCtrl.text.trim(),
+          'nin': _ninCtrl.text.trim().toUpperCase(),
+          'bank_name': _bankNameCtrl.text.trim(),
+          'account_number': _accountNumCtrl.text.trim(),
+          'vehicle_type': _vehicleType,
+          'vehicle_model': _vehicleModelCtrl.text.trim(),
+          'allowed_ride_types': jsonEncode(selectedRideTypes),
         },
         files: files,
       );
@@ -2668,32 +2202,16 @@ class _ApplicationModalState extends State<_ApplicationModal> {
       if (!mounted) return;
 
       if (res.statusCode == 200 && body is Map && body['error'] == false) {
-        showToastNotification(
-          context: context,
-          title: 'Success',
-          message: (body['message'] ?? 'Driver application submitted successfully.')
-              .toString(),
-          isSuccess: true,
-        );
+        showToastNotification(context: context, title: 'Success', message: (body['message'] ?? 'Driver application submitted.').toString(), isSuccess: true);
         Navigator.of(context).pop(true);
       } else {
-        throw Exception(
-          (body is Map ? (body['message'] ?? body['error_msg']) : null) ??
-              'Unable to submit driver application.',
-        );
+        throw Exception((body is Map ? (body['message'] ?? body['error_msg']) : null) ?? 'Unable to submit driver application.');
       }
     } catch (e) {
       if (!mounted) return;
-      showToastNotification(
-        context: context,
-        title: 'Submission Failed',
-        message: e.toString().replaceFirst('Exception: ', ''),
-        isSuccess: false,
-      );
+      showToastNotification(context: context, title: 'Submission Failed', message: e.toString().replaceFirst('Exception: ', ''), isSuccess: false);
     } finally {
-      if (mounted) {
-        setState(() => _submitting = false);
-      }
+      if (mounted) setState(() => _submitting = false);
     }
   }
 
@@ -2702,6 +2220,9 @@ class _ApplicationModalState extends State<_ApplicationModal> {
     _pageController.dispose();
     _phoneCtrl.dispose();
     _ninCtrl.dispose();
+    _bankNameCtrl.dispose();
+    _accountNumCtrl.dispose();
+    _vehicleModelCtrl.dispose();
     super.dispose();
   }
 
@@ -2725,44 +2246,16 @@ class _ApplicationModalState extends State<_ApplicationModal> {
           return Container(
             decoration: BoxDecoration(
               color: Theme.of(context).scaffoldBackgroundColor,
-              borderRadius: BorderRadius.vertical(
-                top: Radius.circular(
-                  ui.radius(28).clamp(24.0, 32.0).toDouble(),
-                ),
-              ),
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withOpacity(isDark ? 0.28 : 0.10),
-                  blurRadius: 26,
-                  offset: const Offset(0, -8),
-                ),
-              ],
+              borderRadius: BorderRadius.vertical(top: Radius.circular(ui.radius(28).clamp(24.0, 32.0).toDouble())),
+              boxShadow: [BoxShadow(color: Colors.black.withOpacity(isDark ? 0.28 : 0.10), blurRadius: 26, offset: const Offset(0, -8))],
             ),
             child: Column(
               children: [
                 SizedBox(height: ui.gap(10).clamp(8.0, 12.0).toDouble()),
-                Container(
-                  width: 48,
-                  height: 5,
-                  decoration: BoxDecoration(
-                    color: cs.onSurface.withOpacity(0.12),
-                    borderRadius: BorderRadius.circular(999),
-                  ),
-                ),
+                Container(width: 48, height: 5, decoration: BoxDecoration(color: cs.onSurface.withOpacity(0.12), borderRadius: BorderRadius.circular(999))),
                 Padding(
-                  padding: EdgeInsets.fromLTRB(
-                    ui.inset(18).clamp(16.0, 22.0).toDouble(),
-                    ui.gap(14).clamp(12.0, 16.0).toDouble(),
-                    ui.inset(18).clamp(16.0, 22.0).toDouble(),
-                    ui.gap(8).clamp(6.0, 10.0).toDouble(),
-                  ),
-                  child: _WizardHeader(
-                    ui: ui,
-                    cs: cs,
-                    currentStep: _currentStep,
-                    progress: _progress,
-                    steps: _steps,
-                  ),
+                  padding: EdgeInsets.fromLTRB(ui.inset(18).clamp(16.0, 22.0).toDouble(), ui.gap(14).clamp(12.0, 16.0).toDouble(), ui.inset(18).clamp(16.0, 22.0).toDouble(), ui.gap(8).clamp(6.0, 10.0).toDouble()),
+                  child: _WizardHeader(ui: ui, cs: cs, currentStep: _currentStep, progress: _progress, steps: _steps),
                 ),
                 Expanded(
                   child: PageView(
@@ -2770,39 +2263,16 @@ class _ApplicationModalState extends State<_ApplicationModal> {
                     physics: const NeverScrollableScrollPhysics(),
                     children: [
                       _buildProfileStep(ui, cs),
-                      _buildUploadStep(
-                        ui: ui,
-                        cs: cs,
-                        title: 'Identity Verification',
-                        subtitle: 'Upload the front and back of your driver license and NIN card.',
-                        slots: _identitySlots,
-                        accent: const Color(0xFF1A73E8),
-                      ),
-                      _buildUploadStep(
-                        ui: ui,
-                        cs: cs,
-                        title: 'Vehicle Capture',
-                        subtitle: 'Upload the required vehicle angles. Plate must be readable on front and back shots.',
-                        slots: _vehicleSlots,
-                        accent: const Color(0xFF1E8E3E),
-                      ),
-                      _buildReviewStep(ui, cs),
+                      _buildServiceStep(ui, cs, isDark),
+                      _buildUploadStep(ui: ui, cs: cs, title: 'Identity & Photo', subtitle: 'Upload your photo, and the front/back of your license and NIN.', slots: _identitySlots, accent: const Color(0xFF1A73E8)),
+                      _buildUploadStep(ui: ui, cs: cs, title: 'Vehicle Capture', subtitle: 'Upload the required vehicle angles. Plate must be readable.', slots: _vehicleSlots, accent: const Color(0xFF1E8E3E)),
+                      _buildReviewStep(ui, cs, isDark),
                     ],
                   ),
                 ),
                 Container(
-                  padding: EdgeInsets.fromLTRB(
-                    ui.inset(16).clamp(14.0, 18.0).toDouble(),
-                    ui.gap(10).clamp(8.0, 12.0).toDouble(),
-                    ui.inset(16).clamp(14.0, 18.0).toDouble(),
-                    ui.gap(14).clamp(12.0, 16.0).toDouble(),
-                  ),
-                  decoration: BoxDecoration(
-                    color: cs.surface,
-                    border: Border(
-                      top: BorderSide(color: cs.onSurface.withOpacity(0.08)),
-                    ),
-                  ),
+                  padding: EdgeInsets.fromLTRB(ui.inset(16).clamp(14.0, 18.0).toDouble(), ui.gap(10).clamp(8.0, 12.0).toDouble(), ui.inset(16).clamp(14.0, 18.0).toDouble(), ui.gap(14).clamp(12.0, 16.0).toDouble()),
+                  decoration: BoxDecoration(color: cs.surface, border: Border(top: BorderSide(color: cs.onSurface.withOpacity(0.08)))),
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
                     children: [
@@ -2811,21 +2281,9 @@ class _ApplicationModalState extends State<_ApplicationModal> {
                           Expanded(
                             child: OutlinedButton.icon(
                               onPressed: _submitting ? null : _backStep,
-                              icon: Icon(
-                                _currentStep == 0
-                                    ? Icons.close_rounded
-                                    : Icons.arrow_back_rounded,
-                                size: ui.icon(18),
-                              ),
+                              icon: Icon(_currentStep == 0 ? Icons.close_rounded : Icons.arrow_back_rounded, size: ui.icon(18)),
                               label: Text(_currentStep == 0 ? 'Cancel' : 'Back'),
-                              style: OutlinedButton.styleFrom(
-                                minimumSize: Size(0, ui.buttonHeight),
-                                shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(
-                                    ui.radius(14).clamp(12.0, 16.0).toDouble(),
-                                  ),
-                                ),
-                              ),
+                              style: OutlinedButton.styleFrom(minimumSize: Size(0, ui.buttonHeight), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(ui.radius(14).clamp(12.0, 16.0).toDouble()))),
                             ),
                           ),
                           SizedBox(width: ui.gap(12).clamp(10.0, 14.0).toDouble()),
@@ -2833,36 +2291,9 @@ class _ApplicationModalState extends State<_ApplicationModal> {
                             flex: 2,
                             child: ElevatedButton.icon(
                               onPressed: _submitting ? null : _nextStep,
-                              icon: _submitting
-                                  ? SizedBox(
-                                width: ui.icon(18),
-                                height: ui.icon(18),
-                                child: const CircularProgressIndicator(
-                                  strokeWidth: 2,
-                                  valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
-                                ),
-                              )
-                                  : Icon(
-                                _currentStep == _steps.length - 1
-                                    ? Icons.cloud_upload_rounded
-                                    : Icons.arrow_forward_rounded,
-                                size: ui.icon(18),
-                              ),
-                              label: Text(
-                                _currentStep == _steps.length - 1
-                                    ? 'Submit Application'
-                                    : 'Next',
-                              ),
-                              style: ElevatedButton.styleFrom(
-                                minimumSize: Size(0, ui.buttonHeight),
-                                backgroundColor: AppColors.primary,
-                                foregroundColor: Colors.white,
-                                shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(
-                                    ui.radius(14).clamp(12.0, 16.0).toDouble(),
-                                  ),
-                                ),
-                              ),
+                              icon: _submitting ? SizedBox(width: ui.icon(18), height: ui.icon(18), child: const CircularProgressIndicator(strokeWidth: 2, valueColor: AlwaysStoppedAnimation<Color>(Colors.white))) : Icon(_currentStep == _steps.length - 1 ? Icons.cloud_upload_rounded : Icons.arrow_forward_rounded, size: ui.icon(18)),
+                              label: Text(_currentStep == _steps.length - 1 ? 'Submit Application' : 'Next'),
+                              style: ElevatedButton.styleFrom(minimumSize: Size(0, ui.buttonHeight), backgroundColor: AppColors.primary, foregroundColor: Colors.white, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(ui.radius(14).clamp(12.0, 16.0).toDouble()))),
                             ),
                           ),
                         ],
@@ -2871,14 +2302,8 @@ class _ApplicationModalState extends State<_ApplicationModal> {
                       Align(
                         alignment: Alignment.centerLeft,
                         child: Text(
-                          _currentStep == _steps.length - 1
-                              ? 'Review complete. Submit once. Pending and activated users cannot upload again.'
-                              : 'Step ${_currentStep + 1} of ${_steps.length}',
-                          style: TextStyle(
-                            fontSize: ui.font(10.8).clamp(10.3, 11.4).toDouble(),
-                            fontWeight: FontWeight.w600,
-                            color: cs.onSurface.withOpacity(0.62),
-                          ),
+                          _currentStep == _steps.length - 1 ? 'Review complete. Submit once.' : 'Step ${_currentStep + 1} of ${_steps.length}',
+                          style: TextStyle(fontSize: ui.font(10.8).clamp(10.3, 11.4).toDouble(), fontWeight: FontWeight.w600, color: cs.onSurface.withOpacity(0.62)),
                         ),
                       ),
                     ],
@@ -2893,140 +2318,102 @@ class _ApplicationModalState extends State<_ApplicationModal> {
   }
 
   Widget _buildProfileStep(UIScale ui, ColorScheme cs) {
-    final phoneError = _showAccountErrors ? _validatePhone(_phoneCtrl.text.trim()) : null;
-    final ninError = _showAccountErrors ? _validateNin(_ninCtrl.text.trim()) : null;
-
     return SingleChildScrollView(
-      padding: EdgeInsets.fromLTRB(
-        ui.inset(18).clamp(16.0, 22.0).toDouble(),
-        ui.gap(8).clamp(6.0, 10.0).toDouble(),
-        ui.inset(18).clamp(16.0, 22.0).toDouble(),
-        ui.gap(16).clamp(14.0, 18.0).toDouble(),
-      ),
+      padding: EdgeInsets.fromLTRB(ui.inset(18), ui.gap(8), ui.inset(18), ui.gap(16)),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           _WizardIntroCard(
-            ui: ui,
-            cs: cs,
-            icon: Icons.badge_rounded,
-            title: 'Step 1 — Account & Contact',
-            subtitle:
-            'Your full name and email address are automatically pulled from your account. Please enter the phone number and National Identification Number (NIN) you wish to use for your driver application.\n'
-                '\nImportant: The name registered to your NIN must exactly match the full name on your account. If the names do not match, your application will be rejected.',
+            ui: ui, cs: cs, icon: Icons.badge_rounded, title: 'Step 1 — Identity & Payout',
+            subtitle: 'Provide your contact details and bank account for payouts. Your bank account name must strictly match your legal name.',
           ),
-          SizedBox(height: ui.gap(14).clamp(12.0, 16.0).toDouble()),
-          _LockedProfileField(
-            ui: ui,
-            cs: cs,
-            label: 'Legal Full Name',
-            value: widget.legalFullName,
-            icon: Icons.person_outline_rounded,
-          ),
-          SizedBox(height: ui.gap(12).clamp(10.0, 14.0).toDouble()),
-          _LockedProfileField(
-            ui: ui,
-            cs: cs,
-            label: 'Email Address',
-            value: widget.email,
-            icon: Icons.email_outlined,
-          ),
-          SizedBox(height: ui.gap(12).clamp(10.0, 14.0).toDouble()),
-          _WizardInputField(
-            ui: ui,
-            cs: cs,
-            controller: _phoneCtrl,
-            label: 'Phone Number',
-            hint: 'e.g. 08031234567',
-            icon: Icons.phone_rounded,
-            keyboardType: TextInputType.phone,
-            errorText: phoneError,
-          ),
-          SizedBox(height: ui.gap(12).clamp(10.0, 14.0).toDouble()),
-          _WizardInputField(
-            ui: ui,
-            cs: cs,
-            controller: _ninCtrl,
-            label: 'National Identification Number (NIN)',
-            hint: 'Enter your NIN',
-            icon: Icons.perm_identity_rounded,
-            textCapitalization: TextCapitalization.characters,
-            errorText: ninError,
-          ),
-          SizedBox(height: ui.gap(16).clamp(14.0, 18.0).toDouble()),
-          _ChecklistBox(
-            ui: ui,
-            cs: cs,
-            title: 'Before you continue',
-            items: const [
-              'Use a reachable phone number.',
-              'Use the NIN that matches your uploaded ID.',
-              'All 8 uploads are still required in the next steps.',
-            ],
-          ),
+          SizedBox(height: ui.gap(14)),
+          _LockedProfileField(ui: ui, cs: cs, label: 'Legal Full Name (Must Match Bank)', value: widget.legalFullName, icon: Icons.person_outline_rounded),
+          SizedBox(height: ui.gap(12)),
+          _LockedProfileField(ui: ui, cs: cs, label: 'Email Address', value: widget.email, icon: Icons.email_outlined),
+          SizedBox(height: ui.gap(12)),
+          _WizardInputField(ui: ui, cs: cs, controller: _phoneCtrl, label: 'Phone Number', hint: 'e.g. 08031234567', icon: Icons.phone_rounded, keyboardType: TextInputType.phone, errorText: _showAccountErrors ? _validatePhone(_phoneCtrl.text) : null),
+          SizedBox(height: ui.gap(12)),
+          _WizardInputField(ui: ui, cs: cs, controller: _ninCtrl, label: 'National ID (NIN)', hint: 'Enter your NIN', icon: Icons.perm_identity_rounded, textCapitalization: TextCapitalization.characters, errorText: _showAccountErrors ? _validateNin(_ninCtrl.text) : null),
+          SizedBox(height: ui.gap(20)),
+          Text('Payout Information', style: TextStyle(fontWeight: FontWeight.w900, color: cs.primary, fontSize: ui.font(14))),
+          SizedBox(height: ui.gap(10)),
+          _WizardInputField(ui: ui, cs: cs, controller: _bankNameCtrl, label: 'Bank Name', hint: 'e.g. Access Bank', icon: Icons.account_balance_rounded, textCapitalization: TextCapitalization.words, errorText: _showAccountErrors ? _validateBank(_bankNameCtrl.text) : null),
+          SizedBox(height: ui.gap(12)),
+          _WizardInputField(ui: ui, cs: cs, controller: _accountNumCtrl, label: 'Account Number', hint: '10 digit account number', icon: Icons.numbers_rounded, keyboardType: TextInputType.number, errorText: _showAccountErrors ? _validateAccount(_accountNumCtrl.text) : null),
         ],
       ),
     );
   }
 
-  Widget _buildUploadStep({
-    required UIScale ui,
-    required ColorScheme cs,
-    required String title,
-    required String subtitle,
-    required List<DriverUploadSlot> slots,
-    required Color accent,
-  }) {
-    final completed = slots.where((slot) => _uploads[slot] != null).length;
-    final total = slots.length;
-
+  Widget _buildServiceStep(UIScale ui, ColorScheme cs, bool isDark) {
     return SingleChildScrollView(
-      padding: EdgeInsets.fromLTRB(
-        ui.inset(18).clamp(16.0, 22.0).toDouble(),
-        ui.gap(8).clamp(6.0, 10.0).toDouble(),
-        ui.inset(18).clamp(16.0, 22.0).toDouble(),
-        ui.gap(16).clamp(14.0, 18.0).toDouble(),
-      ),
+      padding: EdgeInsets.fromLTRB(ui.inset(18), ui.gap(8), ui.inset(18), ui.gap(16)),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           _WizardIntroCard(
-            ui: ui,
-            cs: cs,
-            icon: _currentStep == 1
-                ? Icons.credit_card_rounded
-                : Icons.directions_car_filled_rounded,
-            title: title,
-            subtitle: subtitle,
-            trailing: _CompactStatPill(
-              ui: ui,
-              bg: accent.withOpacity(0.10),
-              fg: accent,
-              label: '$completed / $total uploaded',
+            ui: ui, cs: cs, icon: Icons.settings_applications_rounded, title: 'Step 2 — Vehicle & Services',
+            subtitle: 'Select your vehicle type, model, and the primary category of requests you want to receive.',
+          ),
+          SizedBox(height: ui.gap(20)),
+          Text('Vehicle Details', style: TextStyle(fontWeight: FontWeight.w900, color: cs.primary, fontSize: ui.font(14))),
+          SizedBox(height: ui.gap(10)),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            decoration: BoxDecoration(color: cs.surface, borderRadius: BorderRadius.circular(ui.radius(16)), border: Border.all(color: cs.onSurface.withOpacity(0.10))),
+            child: DropdownButtonHideUnderline(
+              child: DropdownButton<String>(
+                value: _vehicleType,
+                isExpanded: true,
+                dropdownColor: cs.surface,
+                icon: Icon(Icons.arrow_drop_down_rounded, color: AppColors.primary),
+                items: const [
+                  DropdownMenuItem(value: 'car', child: Text('Car', style: TextStyle(fontWeight: FontWeight.w700))),
+                  DropdownMenuItem(value: 'bike', child: Text('Bike', style: TextStyle(fontWeight: FontWeight.w700))),
+                  DropdownMenuItem(value: 'tricycle', child: Text('Tricycle (Keke)', style: TextStyle(fontWeight: FontWeight.w700))),
+                ],
+                onChanged: (v) => setState(() => _vehicleType = v!),
+              ),
             ),
           ),
-          SizedBox(height: ui.gap(14).clamp(12.0, 16.0).toDouble()),
+          SizedBox(height: ui.gap(12)),
+          _WizardInputField(ui: ui, cs: cs, controller: _vehicleModelCtrl, label: 'Vehicle Model & Year', hint: 'e.g. Toyota Corolla 2018', icon: Icons.directions_car_rounded, textCapitalization: TextCapitalization.words, errorText: _showAccountErrors ? _validateModel(_vehicleModelCtrl.text) : null),
+          SizedBox(height: ui.gap(24)),
+          Text('Select Ride Type', style: TextStyle(fontWeight: FontWeight.w900, color: cs.primary, fontSize: ui.font(14))),
+          SizedBox(height: ui.gap(10)),
+          ..._availableRideTypes.map((key) {
+            String label = key.replaceAll('_', ' ').split(' ').map((w) => w[0].toUpperCase() + w.substring(1)).join(' ');
+            return RadioListTile<String>(
+              title: Text(label, style: TextStyle(fontWeight: FontWeight.w700, fontSize: ui.font(13), color: cs.onSurface)),
+              value: key,
+              groupValue: _selectedRideType,
+              activeColor: AppColors.primary,
+              contentPadding: EdgeInsets.zero,
+              onChanged: (v) => setState(() => _selectedRideType = v!),
+            );
+          }).toList(),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildUploadStep({required UIScale ui, required ColorScheme cs, required String title, required String subtitle, required List<DriverUploadSlot> slots, required Color accent}) {
+    final completed = slots.where((slot) => _uploads[slot] != null).length;
+    final total = slots.length;
+    return SingleChildScrollView(
+      padding: EdgeInsets.fromLTRB(ui.inset(18), ui.gap(8), ui.inset(18), ui.gap(16)),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _WizardIntroCard(ui: ui, cs: cs, icon: _currentStep == 2 ? Icons.credit_card_rounded : Icons.directions_car_filled_rounded, title: title, subtitle: subtitle, trailing: _CompactStatPill(ui: ui, bg: accent.withOpacity(0.10), fg: accent, label: '$completed / $total uploaded')),
+          SizedBox(height: ui.gap(14)),
           GridView.builder(
-            shrinkWrap: true,
-            physics: const NeverScrollableScrollPhysics(),
-            itemCount: slots.length,
-            gridDelegate: SliverGridDelegateWithMaxCrossAxisExtent(
-              maxCrossAxisExtent: ui.width > 680 ? 320 : 420,
-              mainAxisSpacing: ui.gap(12).clamp(10.0, 14.0).toDouble(),
-              crossAxisSpacing: ui.gap(12).clamp(10.0, 14.0).toDouble(),
-              childAspectRatio: ui.width > 680 ? 0.96 : 1.18,
-            ),
+            shrinkWrap: true, physics: const NeverScrollableScrollPhysics(), itemCount: slots.length,
+            gridDelegate: SliverGridDelegateWithMaxCrossAxisExtent(maxCrossAxisExtent: ui.width > 680 ? 320 : 420, mainAxisSpacing: ui.gap(12), crossAxisSpacing: ui.gap(12), childAspectRatio: ui.width > 680 ? 0.96 : 1.18),
             itemBuilder: (context, index) {
               final slot = slots[index];
-              return _WizardUploadTile(
-                ui: ui,
-                cs: cs,
-                slot: slot,
-                upload: _uploads[slot],
-                highlightMissing: _showMissingState && _uploads[slot] == null,
-                onPick: () => _pickUpload(slot),
-                onRemove: () => _removeUpload(slot),
-              );
+              return _WizardUploadTile(ui: ui, cs: cs, slot: slot, upload: _uploads[slot], highlightMissing: _showMissingState && _uploads[slot] == null, onPick: () => _pickUpload(slot), onRemove: () => _removeUpload(slot));
             },
           ),
         ],
@@ -3034,133 +2421,123 @@ class _ApplicationModalState extends State<_ApplicationModal> {
     );
   }
 
-  Widget _buildReviewStep(UIScale ui, ColorScheme cs) {
-    final phone = _phoneCtrl.text.trim();
-    final nin = _ninCtrl.text.trim().toUpperCase();
-
+  Widget _buildReviewStep(UIScale ui, ColorScheme cs, bool isDark) {
     return SingleChildScrollView(
-      padding: EdgeInsets.fromLTRB(
-        ui.inset(18).clamp(16.0, 22.0).toDouble(),
-        ui.gap(8).clamp(6.0, 10.0).toDouble(),
-        ui.inset(18).clamp(16.0, 22.0).toDouble(),
-        ui.gap(16).clamp(14.0, 18.0).toDouble(),
-      ),
+      padding: EdgeInsets.fromLTRB(ui.inset(18), ui.gap(8), ui.inset(18), ui.gap(16)),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          _WizardIntroCard(
-            ui: ui,
-            cs: cs,
-            icon: Icons.verified_user_rounded,
-            title: 'Step 4 — Review & Submit',
-            subtitle:
-            'Confirm the data below. When you submit, the onboarding record is sent to the backend and the page status becomes pending.',
+          _WizardIntroCard(ui: ui, cs: cs, icon: Icons.verified_user_rounded, title: 'Step 5 — Review & Submit', subtitle: 'Confirm the data below. Tap on any image to view it full screen. When you submit, the onboarding record is sent to the backend.'),
+          SizedBox(height: ui.gap(14)),
+
+          // Data Summary
+          Container(
+            padding: EdgeInsets.all(ui.inset(14)),
+            decoration: BoxDecoration(color: cs.surface, borderRadius: BorderRadius.circular(ui.radius(18)), border: Border.all(color: cs.onSurface.withOpacity(0.10))),
+            child: Column(
+              children: [
+                _ReviewRow(label: 'Legal Name', value: widget.legalFullName),
+                _ReviewRow(label: 'Phone', value: _phoneCtrl.text.isEmpty ? '—' : _phoneCtrl.text),
+                _ReviewRow(label: 'Bank Name', value: _bankNameCtrl.text.isEmpty ? '—' : _bankNameCtrl.text),
+                _ReviewRow(label: 'Account', value: _accountNumCtrl.text.isEmpty ? '—' : _accountNumCtrl.text),
+                _ReviewRow(label: 'Vehicle', value: '${_vehicleType.toUpperCase()} - ${_vehicleModelCtrl.text}'),
+                _ReviewRow(label: 'Ride Type', value: _selectedRideType.split('_').map((w) => w[0].toUpperCase() + w.substring(1)).join(' ')),
+                _ReviewRow(label: 'Uploads', value: '$_uploadedCount / $_totalUploads complete', isLast: true),
+              ],
+            ),
           ),
-          SizedBox(height: ui.gap(14).clamp(12.0, 16.0).toDouble()),
-          _ReviewSummaryCard(
-            ui: ui,
-            cs: cs,
-            fullName: widget.legalFullName,
-            email: widget.email,
-            phone: phone.isEmpty ? '—' : phone,
-            nin: nin.isEmpty ? '—' : nin,
-            uploadedCount: _uploadedCount,
-            totalUploads: _totalUploads,
-          ),
-          SizedBox(height: ui.gap(14).clamp(12.0, 16.0).toDouble()),
-          _ChecklistBox(
-            ui: ui,
-            cs: cs,
-            title: 'Submission checklist',
-            items: [
-              'Name is pulled from your account profile.',
-              'Email is pulled from your account profile.',
-              'Phone number is ready: ${phone.isEmpty ? 'No' : 'Yes'}',
-              'NIN is ready: ${nin.isEmpty ? 'No' : 'Yes'}',
-              'Identity uploads complete: ${_identityComplete ? 'Yes' : 'No'}',
-              'Vehicle uploads complete: ${_vehicleComplete ? 'Yes' : 'No'}',
-            ],
+
+          SizedBox(height: ui.gap(20)),
+          Text('Uploaded Images', style: TextStyle(fontWeight: FontWeight.w900, color: cs.primary, fontSize: ui.font(14))),
+          SizedBox(height: ui.gap(10)),
+
+          // Image Review Grid
+          GridView.builder(
+            shrinkWrap: true,
+            physics: const NeverScrollableScrollPhysics(),
+            itemCount: DriverUploadSlot.values.length,
+            gridDelegate: SliverGridDelegateWithMaxCrossAxisExtent(
+                maxCrossAxisExtent: ui.width > 680 ? 200 : 250,
+                mainAxisSpacing: 10,
+                crossAxisSpacing: 10,
+                childAspectRatio: 1.0
+            ),
+            itemBuilder: (context, index) {
+              final slot = DriverUploadSlot.values[index];
+              final upload = _uploads[slot];
+              final heroTag = 'review_image_${slot.name}';
+
+              if (upload == null) return const SizedBox.shrink();
+
+              return GestureDetector(
+                onTap: () => _openImageFullScreen(upload.file.path, heroTag),
+                child: Container(
+                  decoration: BoxDecoration(
+                    color: cs.surface,
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: cs.onSurface.withOpacity(0.1)),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Expanded(
+                        child: Hero(
+                          tag: heroTag,
+                          child: ClipRRect(
+                            borderRadius: const BorderRadius.vertical(top: Radius.circular(11)),
+                            child: Image.file(
+                              File(upload.file.path),
+                              fit: BoxFit.cover,
+                            ),
+                          ),
+                        ),
+                      ),
+                      Padding(
+                        padding: const EdgeInsets.all(8.0),
+                        child: Text(
+                          slot.title,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                            fontSize: 10,
+                            fontWeight: FontWeight.w700,
+                            color: cs.onSurface,
+                          ),
+                        ),
+                      )
+                    ],
+                  ),
+                ),
+              );
+            },
           ),
         ],
       ),
     );
   }
-
 }
 
 class _WizardStepMeta {
-  final String title;
-  final String subtitle;
+  final String title, subtitle;
   final IconData icon;
-
-  const _WizardStepMeta({
-    required this.title,
-    required this.subtitle,
-    required this.icon,
-  });
+  const _WizardStepMeta({required this.title, required this.subtitle, required this.icon});
 }
 
 class _WizardHeader extends StatelessWidget {
-  final UIScale ui;
-  final ColorScheme cs;
-  final int currentStep;
-  final double progress;
-  final List<_WizardStepMeta> steps;
-
-  const _WizardHeader({
-    required this.ui,
-    required this.cs,
-    required this.currentStep,
-    required this.progress,
-    required this.steps,
-  });
-
+  final UIScale ui; final ColorScheme cs; final int currentStep; final double progress; final List<_WizardStepMeta> steps;
+  const _WizardHeader({required this.ui, required this.cs, required this.currentStep, required this.progress, required this.steps});
   @override
   Widget build(BuildContext context) {
     final current = steps[currentStep];
-
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Row(
-          children: [
-            Expanded(
-              child: Text(
-                'Driver Onboarding',
-                style: TextStyle(
-                  fontSize: ui.font(20).clamp(18.0, 22.0).toDouble(),
-                  fontWeight: FontWeight.w900,
-                  color: cs.onSurface,
-                  letterSpacing: -0.3,
-                ),
-              ),
-            ),
-            TextButton.icon(
-              onPressed: () => Navigator.of(context).maybePop(),
-              icon: const Icon(Icons.close_rounded),
-              label: const Text('Close'),
-            ),
-          ],
-        ),
-        Text(
-          'Step ${currentStep + 1} of ${steps.length} · ${current.title}',
-          style: TextStyle(
-            fontSize: ui.font(11.6).clamp(11.0, 12.2).toDouble(),
-            fontWeight: FontWeight.w700,
-            color: cs.onSurface.withOpacity(0.64),
-          ),
-        ),
-        SizedBox(height: ui.gap(10).clamp(8.0, 12.0).toDouble()),
-        ClipRRect(
-          borderRadius: BorderRadius.circular(999),
-          child: LinearProgressIndicator(
-            value: progress,
-            minHeight: 8,
-            backgroundColor: cs.onSurface.withOpacity(0.08),
-            valueColor: const AlwaysStoppedAnimation<Color>(AppColors.primary),
-          ),
-        ),
-        SizedBox(height: ui.gap(12).clamp(10.0, 14.0).toDouble()),
+        Row(children: [Expanded(child: Text('Driver Onboarding', style: TextStyle(fontSize: ui.font(20), fontWeight: FontWeight.w900, color: cs.onSurface))), TextButton.icon(onPressed: () => Navigator.of(context).maybePop(), icon: const Icon(Icons.close_rounded), label: const Text('Close'))]),
+        Text('Step ${currentStep + 1} of ${steps.length} · ${current.title}', style: TextStyle(fontSize: ui.font(11.6), fontWeight: FontWeight.w700, color: cs.onSurface.withOpacity(0.64))),
+        SizedBox(height: ui.gap(10)),
+        ClipRRect(borderRadius: BorderRadius.circular(999), child: LinearProgressIndicator(value: progress, minHeight: 8, backgroundColor: cs.onSurface.withOpacity(0.08), valueColor: const AlwaysStoppedAnimation<Color>(AppColors.primary))),
+        SizedBox(height: ui.gap(12)),
         Row(
           children: List.generate(steps.length, (index) {
             final active = index <= currentStep;
@@ -3203,176 +2580,40 @@ class _WizardHeader extends StatelessWidget {
 }
 
 class _WizardIntroCard extends StatelessWidget {
-  final UIScale ui;
-  final ColorScheme cs;
-  final IconData icon;
-  final String title;
-  final String subtitle;
-  final Widget? trailing;
-
-  const _WizardIntroCard({
-    required this.ui,
-    required this.cs,
-    required this.icon,
-    required this.title,
-    required this.subtitle,
-    this.trailing,
-  });
-
+  final UIScale ui; final ColorScheme cs; final IconData icon; final String title, subtitle; final Widget? trailing;
+  const _WizardIntroCard({required this.ui, required this.cs, required this.icon, required this.title, required this.subtitle, this.trailing});
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: EdgeInsets.all(ui.inset(14).clamp(12.0, 16.0).toDouble()),
-      decoration: BoxDecoration(
-        color: AppColors.primary.withOpacity(0.06),
-        borderRadius: BorderRadius.circular(
-          ui.radius(18).clamp(16.0, 20.0).toDouble(),
-        ),
-        border: Border.all(
-          color: AppColors.primary.withOpacity(0.12),
-        ),
-      ),
+      padding: EdgeInsets.all(ui.inset(14)),
+      decoration: BoxDecoration(color: AppColors.primary.withOpacity(0.06), borderRadius: BorderRadius.circular(ui.radius(18)), border: Border.all(color: AppColors.primary.withOpacity(0.12))),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Container(
-            width: ui.inset(42).clamp(38.0, 46.0).toDouble(),
-            height: ui.inset(42).clamp(38.0, 46.0).toDouble(),
-            decoration: BoxDecoration(
-              color: AppColors.primary.withOpacity(0.12),
-              borderRadius: BorderRadius.circular(
-                ui.radius(14).clamp(12.0, 16.0).toDouble(),
-              ),
-            ),
-            child: Icon(
-              icon,
-              color: AppColors.primary,
-              size: ui.icon(22).clamp(20.0, 24.0).toDouble(),
-            ),
-          ),
-          SizedBox(width: ui.gap(12).clamp(10.0, 14.0).toDouble()),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  title,
-                  style: TextStyle(
-                    fontSize: ui.font(14.2).clamp(13.4, 15.2).toDouble(),
-                    fontWeight: FontWeight.w900,
-                    color: cs.onSurface,
-                  ),
-                ),
-                SizedBox(height: ui.gap(4).clamp(2.0, 6.0).toDouble()),
-                Text(
-                  subtitle,
-                  style: TextStyle(
-                    fontSize: ui.font(11.4).clamp(10.9, 12.0).toDouble(),
-                    fontWeight: FontWeight.w600,
-                    color: cs.onSurface.withOpacity(0.68),
-                    height: 1.4,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          if (trailing != null) ...[
-            SizedBox(width: ui.gap(10).clamp(8.0, 12.0).toDouble()),
-            trailing!,
-          ],
+          Container(width: ui.inset(42), height: ui.inset(42), decoration: BoxDecoration(color: AppColors.primary.withOpacity(0.12), borderRadius: BorderRadius.circular(ui.radius(14))), child: Icon(icon, color: AppColors.primary, size: ui.icon(22))),
+          SizedBox(width: ui.gap(12)),
+          Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text(title, style: TextStyle(fontSize: ui.font(14.2), fontWeight: FontWeight.w900, color: cs.onSurface)), SizedBox(height: ui.gap(4)), Text(subtitle, style: TextStyle(fontSize: ui.font(11.4), fontWeight: FontWeight.w600, color: cs.onSurface.withOpacity(0.68), height: 1.4))])),
+          if (trailing != null) ...[SizedBox(width: ui.gap(10)), trailing!],
         ],
       ),
     );
   }
 }
 
-
 class _LockedProfileField extends StatelessWidget {
-  final UIScale ui;
-  final ColorScheme cs;
-  final String label;
-  final String value;
-  final IconData icon;
-
-  const _LockedProfileField({
-    required this.ui,
-    required this.cs,
-    required this.label,
-    required this.value,
-    required this.icon,
-  });
-
+  final UIScale ui; final ColorScheme cs; final String label, value; final IconData icon;
+  const _LockedProfileField({required this.ui, required this.cs, required this.label, required this.value, required this.icon});
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: EdgeInsets.all(ui.inset(14).clamp(12.0, 16.0).toDouble()),
-      decoration: BoxDecoration(
-        color: cs.surface,
-        borderRadius: BorderRadius.circular(
-          ui.radius(16).clamp(14.0, 18.0).toDouble(),
-        ),
-        border: Border.all(color: cs.onSurface.withOpacity(0.10)),
-      ),
+      padding: EdgeInsets.all(ui.inset(14)),
+      decoration: BoxDecoration(color: cs.surface, borderRadius: BorderRadius.circular(ui.radius(16)), border: Border.all(color: cs.onSurface.withOpacity(0.10))),
       child: Row(
         children: [
-          Container(
-            width: ui.inset(40).clamp(36.0, 44.0).toDouble(),
-            height: ui.inset(40).clamp(36.0, 44.0).toDouble(),
-            decoration: BoxDecoration(
-              color: AppColors.primary.withOpacity(0.10),
-              borderRadius: BorderRadius.circular(
-                ui.radius(12).clamp(10.0, 14.0).toDouble(),
-              ),
-            ),
-            child: Icon(
-              icon,
-              color: AppColors.primary,
-              size: ui.icon(20).clamp(18.0, 22.0).toDouble(),
-            ),
-          ),
-          SizedBox(width: ui.gap(12).clamp(10.0, 14.0).toDouble()),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  label,
-                  style: TextStyle(
-                    fontSize: ui.font(11.0).clamp(10.5, 11.5).toDouble(),
-                    fontWeight: FontWeight.w700,
-                    color: cs.onSurface.withOpacity(0.58),
-                  ),
-                ),
-                SizedBox(height: ui.gap(4).clamp(2.0, 6.0).toDouble()),
-                Text(
-                  value,
-                  style: TextStyle(
-                    fontSize: ui.font(13.0).clamp(12.4, 13.8).toDouble(),
-                    fontWeight: FontWeight.w900,
-                    color: cs.onSurface,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          Container(
-            padding: EdgeInsets.symmetric(
-              horizontal: ui.inset(10).clamp(8.0, 12.0).toDouble(),
-              vertical: ui.inset(6).clamp(5.0, 7.0).toDouble(),
-            ),
-            decoration: BoxDecoration(
-              color: cs.onSurface.withOpacity(0.06),
-              borderRadius: BorderRadius.circular(999),
-            ),
-            child: Text(
-              'Locked',
-              style: TextStyle(
-                fontSize: ui.font(9.8).clamp(9.2, 10.3).toDouble(),
-                fontWeight: FontWeight.w900,
-                color: cs.onSurface.withOpacity(0.60),
-              ),
-            ),
-          ),
+          Container(width: ui.inset(40), height: ui.inset(40), decoration: BoxDecoration(color: AppColors.primary.withOpacity(0.10), borderRadius: BorderRadius.circular(ui.radius(12))), child: Icon(icon, color: AppColors.primary, size: ui.icon(20))),
+          SizedBox(width: ui.gap(12)),
+          Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text(label, style: TextStyle(fontSize: ui.font(11.0), fontWeight: FontWeight.w700, color: cs.onSurface.withOpacity(0.58))), SizedBox(height: ui.gap(4)), Text(value, style: TextStyle(fontSize: ui.font(13.0), fontWeight: FontWeight.w900, color: cs.onSurface))])),
+          Container(padding: EdgeInsets.symmetric(horizontal: ui.inset(10), vertical: ui.inset(6)), decoration: BoxDecoration(color: cs.onSurface.withOpacity(0.06), borderRadius: BorderRadius.circular(999)), child: Text('Locked', style: TextStyle(fontSize: ui.font(9.8), fontWeight: FontWeight.w900, color: cs.onSurface.withOpacity(0.60)))),
         ],
       ),
     );
@@ -3380,258 +2621,58 @@ class _LockedProfileField extends StatelessWidget {
 }
 
 class _WizardInputField extends StatelessWidget {
-  final UIScale ui;
-  final ColorScheme cs;
-  final TextEditingController controller;
-  final String label;
-  final String hint;
-  final IconData icon;
-  final TextInputType? keyboardType;
-  final TextCapitalization textCapitalization;
-  final String? errorText;
-
-  const _WizardInputField({
-    required this.ui,
-    required this.cs,
-    required this.controller,
-    required this.label,
-    required this.hint,
-    required this.icon,
-    this.keyboardType,
-    this.textCapitalization = TextCapitalization.none,
-    this.errorText,
-  });
-
+  final UIScale ui; final ColorScheme cs; final TextEditingController controller; final String label, hint; final IconData icon; final TextInputType? keyboardType; final TextCapitalization textCapitalization; final String? errorText;
+  const _WizardInputField({required this.ui, required this.cs, required this.controller, required this.label, required this.hint, required this.icon, this.keyboardType, this.textCapitalization = TextCapitalization.none, this.errorText});
   @override
   Widget build(BuildContext context) {
     return TextField(
-      controller: controller,
-      keyboardType: keyboardType,
-      textCapitalization: textCapitalization,
-      decoration: InputDecoration(
-        labelText: label,
-        hintText: hint,
-        errorText: errorText,
-        prefixIcon: Icon(icon),
-        filled: true,
-        fillColor: cs.surface,
-        border: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(
-            ui.radius(16).clamp(14.0, 18.0).toDouble(),
-          ),
-        ),
-        enabledBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(
-            ui.radius(16).clamp(14.0, 18.0).toDouble(),
-          ),
-          borderSide: BorderSide(color: cs.onSurface.withOpacity(0.10)),
-        ),
-        focusedBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(
-            ui.radius(16).clamp(14.0, 18.0).toDouble(),
-          ),
-          borderSide: const BorderSide(color: AppColors.primary, width: 1.6),
-        ),
-      ),
+      controller: controller, keyboardType: keyboardType, textCapitalization: textCapitalization,
+      decoration: InputDecoration(labelText: label, hintText: hint, errorText: errorText, prefixIcon: Icon(icon), filled: true, fillColor: cs.surface, border: OutlineInputBorder(borderRadius: BorderRadius.circular(ui.radius(16))), enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(ui.radius(16)), borderSide: BorderSide(color: cs.onSurface.withOpacity(0.10))), focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(ui.radius(16)), borderSide: const BorderSide(color: AppColors.primary, width: 1.6))),
     );
   }
 }
 
-int _wizardPreviewCacheWidthFor(DriverUploadSlot slot) {
-  switch (slot.group) {
-    case _UploadGroup.identity:
-      return 960;
-    case _UploadGroup.vehicle:
-      return 1280;
-  }
-}
-
+int _wizardPreviewCacheWidthFor(DriverUploadSlot slot) => slot.group == _UploadGroup.identity ? 960 : 1280;
 String _wizardFormatBytes(int bytes) {
-  if (bytes <= 0) return '0 B';
-  const units = ['B', 'KB', 'MB', 'GB'];
-  double value = bytes.toDouble();
-  var unitIndex = 0;
-  while (value >= 1024 && unitIndex < units.length - 1) {
-    value /= 1024;
-    unitIndex++;
-  }
-  final decimals = value >= 100 || unitIndex == 0 ? 0 : 1;
-  return '${value.toStringAsFixed(decimals)} ${units[unitIndex]}';
+  if (bytes <= 0) return '0 B'; const units = ['B', 'KB', 'MB', 'GB']; double value = bytes.toDouble(); var unitIndex = 0;
+  while (value >= 1024 && unitIndex < units.length - 1) { value /= 1024; unitIndex++; }
+  final decimals = value >= 100 || unitIndex == 0 ? 0 : 1; return '${value.toStringAsFixed(decimals)} ${units[unitIndex]}';
 }
 
 class _WizardUploadTile extends StatelessWidget {
-  final UIScale ui;
-  final ColorScheme cs;
-  final DriverUploadSlot slot;
-  final _PickedUpload? upload;
-  final bool highlightMissing;
-  final VoidCallback onPick;
-  final VoidCallback onRemove;
-
-  const _WizardUploadTile({
-    required this.ui,
-    required this.cs,
-    required this.slot,
-    required this.upload,
-    required this.highlightMissing,
-    required this.onPick,
-    required this.onRemove,
-  });
-
+  final UIScale ui; final ColorScheme cs; final DriverUploadSlot slot; final _PickedUpload? upload; final bool highlightMissing; final VoidCallback onPick, onRemove;
+  const _WizardUploadTile({required this.ui, required this.cs, required this.slot, required this.upload, required this.highlightMissing, required this.onPick, required this.onRemove});
   @override
   Widget build(BuildContext context) {
     final uploaded = upload != null;
-
     return Material(
       color: Colors.transparent,
       child: InkWell(
-        onTap: onPick,
-        borderRadius: BorderRadius.circular(
-          ui.radius(18).clamp(16.0, 20.0).toDouble(),
-        ),
+        onTap: onPick, borderRadius: BorderRadius.circular(ui.radius(18)),
         child: Ink(
-          decoration: BoxDecoration(
-            color: cs.surface,
-            borderRadius: BorderRadius.circular(
-              ui.radius(18).clamp(16.0, 20.0).toDouble(),
-            ),
-            border: Border.all(
-              color: highlightMissing
-                  ? AppColors.error.withOpacity(0.46)
-                  : (uploaded
-                  ? slot.accent.withOpacity(0.28)
-                  : cs.onSurface.withOpacity(0.10)),
-              width: highlightMissing ? 1.6 : 1.2,
-            ),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withOpacity(0.03),
-                blurRadius: 12,
-                offset: const Offset(0, 8),
-              ),
-            ],
-          ),
+          decoration: BoxDecoration(color: cs.surface, borderRadius: BorderRadius.circular(ui.radius(18)), border: Border.all(color: highlightMissing ? AppColors.error.withOpacity(0.46) : (uploaded ? slot.accent.withOpacity(0.28) : cs.onSurface.withOpacity(0.10)), width: highlightMissing ? 1.6 : 1.2), boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.03), blurRadius: 12, offset: const Offset(0, 8))]),
           child: Padding(
-            padding: EdgeInsets.all(ui.inset(12).clamp(10.0, 14.0).toDouble()),
+            padding: EdgeInsets.all(ui.inset(12)),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Row(
-                  children: [
-                    Container(
-                      width: ui.inset(38).clamp(34.0, 42.0).toDouble(),
-                      height: ui.inset(38).clamp(34.0, 42.0).toDouble(),
-                      decoration: BoxDecoration(
-                        color: slot.accent.withOpacity(0.12),
-                        borderRadius: BorderRadius.circular(
-                          ui.radius(12).clamp(10.0, 14.0).toDouble(),
-                        ),
-                      ),
-                      child: Icon(
-                        uploaded ? Icons.check_rounded : Icons.upload_file_rounded,
-                        color: slot.accent,
-                        size: ui.icon(20).clamp(18.0, 22.0).toDouble(),
-                      ),
-                    ),
-                    const Spacer(),
-                    if (uploaded)
-                      IconButton(
-                        onPressed: onRemove,
-                        icon: const Icon(Icons.delete_outline_rounded),
-                        tooltip: 'Remove',
-                        visualDensity: VisualDensity.compact,
-                      ),
-                  ],
-                ),
-                SizedBox(height: ui.gap(10).clamp(8.0, 12.0).toDouble()),
-                Text(
-                  slot.title,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    fontSize: ui.font(12.6).clamp(12.0, 13.4).toDouble(),
-                    fontWeight: FontWeight.w900,
-                    color: cs.onSurface,
-                  ),
-                ),
-                SizedBox(height: ui.gap(4).clamp(2.0, 6.0).toDouble()),
-                Text(
-                  slot.subtitle,
-                  maxLines: 3,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    fontSize: ui.font(10.8).clamp(10.2, 11.4).toDouble(),
-                    fontWeight: FontWeight.w600,
-                    color: cs.onSurface.withOpacity(0.64),
-                    height: 1.35,
-                  ),
-                ),
-                SizedBox(height: ui.gap(10).clamp(8.0, 12.0).toDouble()),
+                Row(children: [Container(width: ui.inset(38), height: ui.inset(38), decoration: BoxDecoration(color: slot.accent.withOpacity(0.12), borderRadius: BorderRadius.circular(ui.radius(12))), child: Icon(uploaded ? Icons.check_rounded : Icons.upload_file_rounded, color: slot.accent, size: ui.icon(20))), const Spacer(), if (uploaded) IconButton(onPressed: onRemove, icon: const Icon(Icons.delete_outline_rounded), tooltip: 'Remove', visualDensity: VisualDensity.compact)]),
+                SizedBox(height: ui.gap(10)),
+                Text(slot.title, maxLines: 2, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: ui.font(12.6), fontWeight: FontWeight.w900, color: cs.onSurface)),
+                SizedBox(height: ui.gap(4)),
+                Text(slot.subtitle, maxLines: 3, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: ui.font(10.8), fontWeight: FontWeight.w600, color: cs.onSurface.withOpacity(0.64), height: 1.35)),
+                SizedBox(height: ui.gap(10)),
                 Expanded(
                   child: ClipRRect(
-                    borderRadius: BorderRadius.circular(
-                      ui.radius(14).clamp(12.0, 16.0).toDouble(),
-                    ),
+                    borderRadius: BorderRadius.circular(ui.radius(14)),
                     child: Container(
-                      width: double.infinity,
-                      color: slot.accent.withOpacity(0.08),
-                      child: uploaded
-                          ? Stack(
-                        fit: StackFit.expand,
-                        children: [
-                          Image.file(
-                            File(upload!.file.path),
-                            fit: BoxFit.cover,
-                            cacheWidth: _wizardPreviewCacheWidthFor(slot),
-                            filterQuality: FilterQuality.low,
-                            gaplessPlayback: true,
-                          ),
-                          Positioned(
-                            right: 8,
-                            bottom: 8,
-                            child: Container(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 8,
-                                vertical: 5,
-                              ),
-                              decoration: BoxDecoration(
-                                color: Colors.black.withOpacity(0.58),
-                                borderRadius: BorderRadius.circular(999),
-                              ),
-                              child: Text(
-                                _wizardFormatBytes(upload!.sizeBytes),
-                                style: TextStyle(
-                                  fontSize: ui.font(9.8).clamp(9.2, 10.4).toDouble(),
-                                  fontWeight: FontWeight.w800,
-                                  color: Colors.white,
-                                ),
-                              ),
-                            ),
-                          ),
-                        ],
-                      )
-                          : Center(
-                        child: Text(
-                          'Tap to upload',
-                          style: TextStyle(
-                            fontSize: ui.font(11.2).clamp(10.6, 11.8).toDouble(),
-                            fontWeight: FontWeight.w800,
-                            color: slot.accent,
-                          ),
-                        ),
-                      ),
+                      width: double.infinity, color: slot.accent.withOpacity(0.08),
+                      child: uploaded ? Stack(fit: StackFit.expand, children: [Image.file(File(upload!.file.path), fit: BoxFit.cover, cacheWidth: _wizardPreviewCacheWidthFor(slot), filterQuality: FilterQuality.low, gaplessPlayback: true), Positioned(right: 8, bottom: 8, child: Container(padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5), decoration: BoxDecoration(color: Colors.black.withOpacity(0.58), borderRadius: BorderRadius.circular(999)), child: Text(_wizardFormatBytes(upload!.sizeBytes), style: TextStyle(fontSize: ui.font(9.8), fontWeight: FontWeight.w800, color: Colors.white))))]) : Center(child: Text('Tap to upload', style: TextStyle(fontSize: ui.font(11.2), fontWeight: FontWeight.w800, color: slot.accent))),
                     ),
                   ),
                 ),
-                SizedBox(height: ui.gap(10).clamp(8.0, 12.0).toDouble()),
-                _CompactStatPill(
-                  ui: ui,
-                  bg: uploaded
-                      ? slot.accent.withOpacity(0.10)
-                      : cs.onSurface.withOpacity(0.06),
-                  fg: uploaded ? slot.accent : cs.onSurface.withOpacity(0.58),
-                  label: uploaded ? 'Uploaded' : 'Required',
-                ),
+                SizedBox(height: ui.gap(10)),
+                _CompactStatPill(ui: ui, bg: uploaded ? slot.accent.withOpacity(0.10) : cs.onSurface.withOpacity(0.06), fg: uploaded ? slot.accent : cs.onSurface.withOpacity(0.58), label: uploaded ? 'Uploaded' : 'Required'),
               ],
             ),
           ),
@@ -3641,172 +2682,33 @@ class _WizardUploadTile extends StatelessWidget {
   }
 }
 
-class _ReviewSummaryCard extends StatelessWidget {
-  final UIScale ui;
-  final ColorScheme cs;
-  final String fullName;
-  final String email;
-  final String phone;
-  final String nin;
-  final int uploadedCount;
-  final int totalUploads;
-
-  const _ReviewSummaryCard({
-    required this.ui,
-    required this.cs,
-    required this.fullName,
-    required this.email,
-    required this.phone,
-    required this.nin,
-    required this.uploadedCount,
-    required this.totalUploads,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: EdgeInsets.all(ui.inset(14).clamp(12.0, 16.0).toDouble()),
-      decoration: BoxDecoration(
-        color: cs.surface,
-        borderRadius: BorderRadius.circular(
-          ui.radius(18).clamp(16.0, 20.0).toDouble(),
-        ),
-        border: Border.all(color: cs.onSurface.withOpacity(0.10)),
-      ),
-      child: Column(
-        children: [
-          _ReviewRow(label: 'Legal Full Name', value: fullName),
-          _ReviewRow(label: 'Email', value: email),
-          _ReviewRow(label: 'Phone', value: phone),
-          _ReviewRow(label: 'NIN', value: nin),
-          _ReviewRow(label: 'Uploads', value: '$uploadedCount / $totalUploads complete', isLast: true),
-        ],
-      ),
-    );
-  }
-}
-
 class _ReviewRow extends StatelessWidget {
-  final String label;
-  final String value;
-  final bool isLast;
-
-  const _ReviewRow({
-    required this.label,
-    required this.value,
-    this.isLast = false,
-  });
-
+  final String label, value; final bool isLast;
+  const _ReviewRow({required this.label, required this.value, this.isLast = false});
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
-
     return Container(
-      padding: EdgeInsets.only(bottom: isLast ? 0 : 12, top: 4),
-      margin: EdgeInsets.only(bottom: isLast ? 0 : 10),
-      decoration: BoxDecoration(
-        border: isLast
-            ? null
-            : Border(
-          bottom: BorderSide(color: cs.onSurface.withOpacity(0.08)),
-        ),
-      ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Expanded(
-            flex: 4,
-            child: Text(
-              label,
-              style: TextStyle(
-                fontWeight: FontWeight.w700,
-                color: cs.onSurface.withOpacity(0.62),
-              ),
-            ),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            flex: 6,
-            child: Text(
-              value,
-              textAlign: TextAlign.right,
-              style: TextStyle(
-                fontWeight: FontWeight.w800,
-                color: cs.onSurface,
-              ),
-            ),
-          ),
-        ],
-      ),
+      padding: EdgeInsets.only(bottom: isLast ? 0 : 12, top: 4), margin: EdgeInsets.only(bottom: isLast ? 0 : 10),
+      decoration: BoxDecoration(border: isLast ? null : Border(bottom: BorderSide(color: cs.onSurface.withOpacity(0.08)))),
+      child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [Expanded(flex: 4, child: Text(label, style: TextStyle(fontWeight: FontWeight.w700, color: cs.onSurface.withOpacity(0.62)))), const SizedBox(width: 12), Expanded(flex: 6, child: Text(value, textAlign: TextAlign.right, style: TextStyle(fontWeight: FontWeight.w800, color: cs.onSurface)))]),
     );
   }
 }
 
 class _ChecklistBox extends StatelessWidget {
-  final UIScale ui;
-  final ColorScheme cs;
-  final String title;
-  final List<String> items;
-
-  const _ChecklistBox({
-    required this.ui,
-    required this.cs,
-    required this.title,
-    required this.items,
-  });
-
+  final UIScale ui; final ColorScheme cs; final String title; final List<String> items;
+  const _ChecklistBox({required this.ui, required this.cs, required this.title, required this.items});
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: EdgeInsets.all(ui.inset(14).clamp(12.0, 16.0).toDouble()),
-      decoration: BoxDecoration(
-        color: cs.surface,
-        borderRadius: BorderRadius.circular(
-          ui.radius(18).clamp(16.0, 20.0).toDouble(),
-        ),
-        border: Border.all(color: cs.onSurface.withOpacity(0.10)),
-      ),
+      padding: EdgeInsets.all(ui.inset(14)), decoration: BoxDecoration(color: cs.surface, borderRadius: BorderRadius.circular(ui.radius(18)), border: Border.all(color: cs.onSurface.withOpacity(0.10))),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
-            title,
-            style: TextStyle(
-              fontSize: ui.font(13.0).clamp(12.4, 13.8).toDouble(),
-              fontWeight: FontWeight.w900,
-              color: cs.onSurface,
-            ),
-          ),
-          SizedBox(height: ui.gap(10).clamp(8.0, 12.0).toDouble()),
-          ...items.map(
-                (item) => Padding(
-              padding: const EdgeInsets.only(bottom: 8),
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Padding(
-                    padding: EdgeInsets.only(top: 2),
-                    child: Icon(
-                      Icons.check_circle_rounded,
-                      size: 16,
-                      color: AppColors.primary,
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      item,
-                      style: TextStyle(
-                        fontWeight: FontWeight.w600,
-                        color: cs.onSurface.withOpacity(0.72),
-                        height: 1.35,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
+          Text(title, style: TextStyle(fontSize: ui.font(13.0), fontWeight: FontWeight.w900, color: cs.onSurface)),
+          SizedBox(height: ui.gap(10)),
+          ...items.map((item) => Padding(padding: const EdgeInsets.only(bottom: 8), child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [const Padding(padding: EdgeInsets.only(top: 2), child: Icon(Icons.check_circle_rounded, size: 16, color: AppColors.primary)), const SizedBox(width: 8), Expanded(child: Text(item, style: TextStyle(fontWeight: FontWeight.w600, color: cs.onSurface.withOpacity(0.72), height: 1.35)))]))),
         ],
       ),
     );
@@ -3814,37 +2716,14 @@ class _ChecklistBox extends StatelessWidget {
 }
 
 class _CompactStatPill extends StatelessWidget {
-  final UIScale ui;
-  final Color bg;
-  final Color fg;
-  final String label;
-
-  const _CompactStatPill({
-    required this.ui,
-    required this.bg,
-    required this.fg,
-    required this.label,
-  });
-
+  final UIScale ui; final Color bg, fg; final String label;
+  const _CompactStatPill({required this.ui, required this.bg, required this.fg, required this.label});
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: EdgeInsets.symmetric(
-        horizontal: ui.inset(10).clamp(8.0, 12.0).toDouble(),
-        vertical: ui.inset(6).clamp(5.0, 7.0).toDouble(),
-      ),
-      decoration: BoxDecoration(
-        color: bg,
-        borderRadius: BorderRadius.circular(999),
-      ),
-      child: Text(
-        label,
-        style: TextStyle(
-          fontSize: ui.font(10.0).clamp(9.5, 10.6).toDouble(),
-          fontWeight: FontWeight.w900,
-          color: fg,
-        ),
-      ),
+      padding: EdgeInsets.symmetric(horizontal: ui.inset(10), vertical: ui.inset(6)),
+      decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(999)),
+      child: Text(label, style: TextStyle(fontSize: ui.font(10.0), fontWeight: FontWeight.w900, color: fg)),
     );
   }
 }

@@ -514,13 +514,63 @@ class _DriverHomePageState extends State<DriverHomePage> with WidgetsBindingObse
     return const LocationSettings(accuracy: LocationAccuracy.best, distanceFilter: 3);
   }
 
+  // --- NEW METHOD FOR PROMINENT DISCLOSURE (DRIVER SPECIFIC) ---
+  Future<bool> _showProminentLocationDisclosure() async {
+    return await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (BuildContext context) {
+        final isDark = Theme.of(context).brightness == Brightness.dark;
+        final cs = Theme.of(context).colorScheme;
+        return AlertDialog(
+          backgroundColor: isDark ? cs.surface : Colors.white,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          title: Text(
+            'Location Data Usage',
+            style: TextStyle(fontWeight: FontWeight.bold, color: isDark ? cs.onSurface : Colors.black87),
+          ),
+          content: Text(
+            'Pick Me collects location data to enable ride tracking, match you with nearby users requesting rides, and calculate accurate trip distances, even when the app is closed or not in use.',
+            style: TextStyle(fontSize: 15, height: 1.4, color: isDark ? cs.onSurfaceVariant : Colors.black54),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              child: const Text('Decline', style: TextStyle(color: Colors.grey, fontWeight: FontWeight.bold)),
+            ),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF1A73E8),
+                foregroundColor: Colors.white,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+              ),
+              onPressed: () => Navigator.of(context).pop(true),
+              child: const Text('I Agree', style: TextStyle(fontWeight: FontWeight.bold)),
+            ),
+          ],
+        );
+      },
+    ) ?? false;
+  }
+
+  // --- UPDATED PERMISSION REQUEST LOGIC ---
   Future<bool> _ensureLocationPermission() async {
     if (!await Geolocator.isLocationServiceEnabled()) {
       if (mounted) await LocationPermissionModal.show(context: context, title: 'Location off', message: 'Turn on location services to go online.', isServiceIssue: true);
       return false;
     }
+
     var perm = await Geolocator.checkPermission();
-    if (perm == LocationPermission.denied) perm = await Geolocator.requestPermission();
+
+    if (perm == LocationPermission.denied) {
+      final userConsented = await _showProminentLocationDisclosure();
+      if (userConsented) {
+        perm = await Geolocator.requestPermission();
+      } else {
+        return false;
+      }
+    }
+
     if (perm == LocationPermission.denied || perm == LocationPermission.deniedForever) {
       if (mounted) await LocationPermissionModal.show(context: context, title: 'Permission needed', message: 'Grant location access to publish your live driver position.', isServiceIssue: false);
       return false;
@@ -968,7 +1018,6 @@ class _DriverHomePageState extends State<DriverHomePage> with WidgetsBindingObse
               bottom: bottomNavH + (_sheetHeight > 0 ? _sheetHeight : 150.0) + uiScale.gap(16),
               child: FloatingActionButton.small(
                 heroTag: 'driver_locate_fab',
-                backgroundColor: cs.surface.withOpacity(0.96),
                 onPressed: () {
                   if (_mapController != null && _currentPosition != null) _mapController!.animateCamera(CameraUpdate.newLatLngZoom(LatLng(_currentPosition!.latitude, _currentPosition!.longitude), 16.4));
                 },
@@ -1028,6 +1077,7 @@ class _DriverHomePageState extends State<DriverHomePage> with WidgetsBindingObse
         ],
       ),
 
+      /*
       bottomNavigationBar: Transform.translate(
         offset: const Offset(0, -1),
         child: CustomBottomNavBar(
@@ -1045,6 +1095,8 @@ class _DriverHomePageState extends State<DriverHomePage> with WidgetsBindingObse
           },
         ),
       ),
+
+       */
     );
   }
 }

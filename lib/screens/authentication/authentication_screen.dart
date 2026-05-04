@@ -20,6 +20,8 @@ import '../../ui/ui_scale.dart';
 // Added imports for correct home routing
 import '../../driver/driver_home_page.dart';
 import '../home_page.dart';
+import '../../screens/main_navigation_screen.dart'; // <-- IMPORT THE NEW SHELL
+
 
 class AuthenticationScreen extends StatefulWidget {
   const AuthenticationScreen({Key? key}) : super(key: key);
@@ -217,7 +219,7 @@ class _AuthenticationScreenState extends State<AuthenticationScreen>
 
         final isDriver = _prefs.getBool('user_is_driver') ?? false;
         final route = MaterialPageRoute<void>(
-          builder: (_) => isDriver ? const DriverHomePage() : const HomePage(),
+          builder: (_) => isDriver ? const MainNavigationScreen() : const MainNavigationScreen(), //const DriverHomePage() : const HomePage(),
         );
         Navigator.of(context).pushAndRemoveUntil(route, (_) => false);
         return;
@@ -237,7 +239,7 @@ class _AuthenticationScreenState extends State<AuthenticationScreen>
 
         final isDriver = _prefs.getBool('user_is_driver') ?? false;
         final route = MaterialPageRoute<void>(
-          builder: (_) => isDriver ? const DriverHomePage() : const HomePage(),
+          builder: (_) => isDriver ? const MainNavigationScreen() : const MainNavigationScreen(), //const DriverHomePage() : const HomePage(),
         );
         Navigator.of(context).pushAndRemoveUntil(route, (_) => false);
       } else {

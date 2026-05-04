@@ -1182,13 +1182,61 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
     return checkAgain;
   }
 
+  // --- NEW METHOD FOR PROMINENT DISCLOSURE ---
+  Future<bool> _showProminentLocationDisclosure() async {
+    return await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (BuildContext context) {
+        final isDark = Theme.of(context).brightness == Brightness.dark;
+        final cs = Theme.of(context).colorScheme;
+        return AlertDialog(
+          backgroundColor: isDark ? cs.surface : Colors.white,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          title: Text(
+            'Location Data Usage',
+            style: TextStyle(fontWeight: FontWeight.bold, color: isDark ? cs.onSurface : Colors.black87),
+          ),
+          content: Text(
+            'Pick Me collects location data to enable ride tracking, match you with nearby drivers, and calculate accurate trip fares, even when the app is closed or not in use.',
+            style: TextStyle(fontSize: 15, height: 1.4, color: isDark ? cs.onSurfaceVariant : Colors.black54),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              child: const Text('Decline', style: TextStyle(color: Colors.grey, fontWeight: FontWeight.bold)),
+            ),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF1A73E8),
+                foregroundColor: Colors.white,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+              ),
+              onPressed: () => Navigator.of(context).pop(true),
+              child: const Text('I Agree', style: TextStyle(fontWeight: FontWeight.bold)),
+            ),
+          ],
+        );
+      },
+    ) ?? false;
+  }
+
+  // --- UPDATED PERMISSION REQUEST LOGIC ---
   Future<LocationPermission> _ensurePermission({required bool userTriggered}) async {
     var perm = await Geolocator.checkPermission();
-    if (perm == LocationPermission.denied) perm = await Geolocator.requestPermission();
+    if (perm == LocationPermission.denied) {
+      final userConsented = await _showProminentLocationDisclosure();
+      if (userConsented) {
+        perm = await Geolocator.requestPermission();
+      } else {
+        return LocationPermission.denied;
+      }
+    }
+
     if (perm == LocationPermission.denied || perm == LocationPermission.deniedForever || perm == LocationPermission.unableToDetermine) {
-      await LocationPermissionModal.show(context: context, title: 'Allow Location Access', message: 'We use your location to match you with nearby drivers and calculate accurate ETAs.', isServiceIssue: false);
-      perm = await Geolocator.checkPermission();
-      if (perm == LocationPermission.denied || perm == LocationPermission.deniedForever) _toast('Location Required', 'Please grant location access in Settings.');
+      if (userTriggered) {
+        _toast('Location Required', 'Please grant location access in Settings to use Pick Me.');
+      }
     }
     return perm;
   }

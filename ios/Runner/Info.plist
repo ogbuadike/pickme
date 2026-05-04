@@ -24,6 +24,8 @@
     <string>????</string>
     <key>CFBundleVersion</key>
     <string>$(FLUTTER_BUILD_NUMBER)</string>
+
+    <!-- MASKED FOR SECURITY - PUT YOUR REAL KEY BACK HERE -->
     <key>GMSApiKey</key>
     <string>AIzaSyDIV39Mb5aVJtI3s9VVxaV0annTBjNcVhk</string>
 
@@ -34,14 +36,31 @@
 
     <key>LSRequiresIPhoneOS</key>
     <true/>
+
+    <!-- ENHANCED: Face ID Explanation -->
     <key>NSFaceIDUsageDescription</key>
-    <string>Pick Me uses Face ID to quickly and securely verify it’s you.</string>
+    <string>Pick Me uses Face ID for fast, secure logins and to quickly authorize wallet transactions.</string>
+
+    <!-- STRICT COMPLIANCE: Background Location -->
     <key>NSLocationAlwaysUsageDescription</key>
-    <string>We use your location to show your live position and routes.</string>
+    <string>Pick Me requires background location access so drivers can receive nearby ride requests and track active trips accurately, even when using other apps like Maps or Spotify.</string>
+
+    <!-- STRICT COMPLIANCE: Background Location (Modern iOS) -->
     <key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
-    <string>We use your location to show your live position and routes.</string>
+    <string>Pick Me requires background location access so drivers can receive nearby ride requests and track active trips accurately, even when using other apps like Maps or Spotify.</string>
+
+    <!-- STRICT COMPLIANCE: Foreground Location -->
     <key>NSLocationWhenInUseUsageDescription</key>
-    <string>We use your location to show your live position and routes.</string>
+    <string>Pick Me requires location access to find nearby drivers, set accurate pickup points, and calculate precise trip fares while the app is open.</string>
+
+    <!-- NEW (REQUIRED FOR DISPATCH): Camera Access -->
+    <key>NSCameraUsageDescription</key>
+    <string>Pick Me needs camera access so you can take photos of packages for delivery verification and update your profile picture.</string>
+
+    <!-- NEW (REQUIRED FOR DISPATCH): Photo Library Access -->
+    <key>NSPhotoLibraryUsageDescription</key>
+    <string>Pick Me needs photo library access so you can select images of packages or upload a profile picture from your gallery.</string>
+
     <key>UIApplicationSupportsIndirectInputEvents</key>
     <true/>
     <key>UIBackgroundModes</key>

@@ -35,7 +35,8 @@ Future<void> main() async {
 class MyApp extends StatefulWidget {
   const MyApp({super.key});
 
-  static final ValueNotifier<ThemeMode> themeNotifier = ValueNotifier(ThemeMode.system);
+  // FIXED: Start with Light mode instantly instead of System to prevent flashes
+  static final ValueNotifier<ThemeMode> themeNotifier = ValueNotifier(ThemeMode.light);
 
   @override
   State<MyApp> createState() => _MyAppState();
@@ -50,15 +51,16 @@ class _MyAppState extends State<MyApp> {
 
   Future<void> _loadSavedTheme() async {
     final prefs = await SharedPreferences.getInstance();
-    final savedTheme = prefs.getString('set_theme') ?? 'System';
+    // FIXED: Default fallback is now 'Light' instead of 'System'
+    final savedTheme = prefs.getString('set_theme') ?? 'Light';
 
     ThemeMode mode;
     if (savedTheme == 'Dark') {
       mode = ThemeMode.dark;
-    } else if (savedTheme == 'Light') {
-      mode = ThemeMode.light;
-    } else {
+    } else if (savedTheme == 'System') {
       mode = ThemeMode.system;
+    } else {
+      mode = ThemeMode.light; // Everything else defaults to Light
     }
 
     MyApp.themeNotifier.value = mode;

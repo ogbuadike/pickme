@@ -17,6 +17,8 @@ import '../../widgets/inner_background.dart';
 import '../../ui/ui_scale.dart';
 import '../../driver/driver_home_page.dart';
 import '../home_page.dart';
+import '../../screens/main_navigation_screen.dart'; // <-- IMPORT THE NEW SHELL
+
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -183,7 +185,7 @@ class _LoginScreenState extends State<LoginScreen>
   Future<void> _goToResolvedHome({required bool isDriver}) async {
     if (!mounted) return;
     final route = MaterialPageRoute<void>(
-      builder: (_) => isDriver ? const DriverHomePage() : const HomePage(),
+      builder: (_) => isDriver ? const MainNavigationScreen() : const MainNavigationScreen(), //const DriverHomePage() : const HomePage(),
     );
     Navigator.of(context).pushAndRemoveUntil(route, (_) => false);
   }

@@ -20,6 +20,9 @@ import '../../ui/ui_scale.dart';
 import '../../driver/driver_home_page.dart';
 import '../home_page.dart';
 
+import '../../screens/main_navigation_screen.dart'; // <-- IMPORT THE NEW SHELL
+
+
 class SetPinScreen extends StatefulWidget {
   const SetPinScreen({super.key});
 
@@ -209,7 +212,7 @@ class _SetPinScreenState extends State<SetPinScreen>
 
         // Push straight to the correct dashboard based on role
         final route = MaterialPageRoute<void>(
-          builder: (_) => isDriver ? const DriverHomePage() : const HomePage(),
+          builder: (_) => isDriver ? const MainNavigationScreen() : const MainNavigationScreen(), //const DriverHomePage() : const HomePage(),
         );
         Navigator.of(context).pushAndRemoveUntil(route, (_) => false);
 

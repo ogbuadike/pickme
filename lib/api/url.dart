@@ -1,5 +1,5 @@
 class ApiConstants {
-  static const String baseUrl = 'https://phantomphones.store/pick_me/';
+  static const String baseUrl = 'https://realpickme.com/endpoint/';
 
   static const String sendTokenEndpoint = 'send_token.php';
   static const String restPwdEndpoint = 'reset_pwd.php';

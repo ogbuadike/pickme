@@ -46,3 +46,4 @@ app.*.map.json
 
 # Build-time keys (flutter run --dart-define-from-file=config/dart_defines.json)
 /config/dart_defines.json
+/store_screenshots/

@@ -18,7 +18,6 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:math' as math;
 import 'dart:ui' show ImageFilter;
-import 'dart:ui' as ui;
 
 import 'package:flutter/foundation.dart' show TargetPlatform, defaultTargetPlatform, kIsWeb;
 import 'package:flutter/material.dart';
@@ -822,11 +821,6 @@ class _CampusRidePageState extends State<CampusRidePage> with WidgetsBindingObse
     } catch (_) {}
   }
 
-  String? _safeAvatarUrl(String? url) {
-    if (url == null || url.isEmpty) return null;
-    if (url.toLowerCase().contains('icon-library.com')) return null;
-    return url.startsWith('http') ? url : null;
-  }
 
   Future<void> _ensurePointIcons() async {
     if (_pickupIcon != null && _dropIcon != null) return;

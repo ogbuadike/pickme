@@ -37,6 +37,11 @@ class BookingFlowManager {
     required Future<Map<String, dynamic>?> Function() snapshotProvider,
     required Future<void> Function() onStartTrip,
     required Future<void> Function() onCancelTrip,
+    /// Planned route length in km (drives server-side fare validation).
+    double? tripKm,
+    /// Controller from a previous booking attempt; disposed before a new one
+    /// is created so no stale poller keeps running.
+    BookingController? previousController,
   }) async {
     final double userBalance = user != null
         ? double.tryParse(user['bal']?.toString() ?? user['user_bal']?.toString() ?? '0.0') ?? 0.0
@@ -143,10 +148,22 @@ class BookingFlowManager {
 
     if (selectedPaymentMethod == null || !context.mounted) return;
 
+    final String riderId = (prefs.getString('user_id') ?? user?['id']?.toString() ?? user?['user_id']?.toString() ?? '').trim();
+    if (riderId.isEmpty || riderId == 'guest') {
+      showToastNotification(
+        context: context,
+        title: 'Sign in required',
+        message: 'We could not identify your account. Please sign in again and retry.',
+        isSuccess: false,
+      );
+      return;
+    }
+
     onStopRideMarket();
 
-    final String riderId = prefs.getString('user_id') ?? user?['id']?.toString() ?? user?['user_id']?.toString() ?? 'guest';
-
+    try {
+      previousController?.dispose();
+    } catch (_) {}
     final booking = BookingController(apiClient);
     onBookingControllerCreated(booking);
 
@@ -162,6 +179,7 @@ class BookingFlowManager {
       payMethod: selectedPaymentMethod,
       rideType: rideType,
       instructions: instructions,
+      tripKm: (tripKm != null && tripKm.isFinite && tripKm > 0) ? tripKm : null,
     );
 
     if (!context.mounted) {
@@ -199,6 +217,14 @@ class BookingFlowManager {
 
     final sub = activeStream?.listen(
           (dynamic event) {
+        if (event is BookingUpdate &&
+            event.rawStatus == RideStatusCode.canceled &&
+            (event.data['cancel_reason'] ?? event.data['reason'])?.toString() == 'no_driver_found') {
+          if (context.mounted) {
+            showToastNotification(context: context, title: 'No driver found', message: 'No driver accepted, try again', isSuccess: false);
+          }
+          return;
+        }
         String statusText = '';
         String msg = '';
         try { statusText = (event?.status ?? event?['status'] ?? '').toString().toLowerCase(); } catch (_) {}

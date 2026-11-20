@@ -47,6 +47,7 @@ import '../services/autocomplete_service.dart';
 import '../services/booking_controller.dart';
 import '../services/ride_market_service.dart';
 import '../models/geo_point.dart';
+import 'trip_navigation_page.dart';
 import '../ui/ui_scale.dart';
 
 import 'state/home_models.dart';
@@ -316,6 +317,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
   void _onActiveChanged() {
     if (!mounted) return;
     if (_active) {
+      if (!_resumeChecked && _prefs != null) _maybeResumeActiveRide();
       _lastFixAt = DateTime.now(); // don't let the watchdog fire immediately
       _resumeDriverPolling();
       if (_marketOpen) _startRideMarket();
@@ -365,7 +367,127 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
 
     await _primeNearbyDriversAsap();
     await Future.wait<void>([_fetchUser(), _loadRecents()]);
+    if (!mounted) return;
     _scheduleMapPaddingUpdate();
+    _maybeResumeActiveRide();
+  }
+
+  String _riderId() => (_prefs?.getString('user_id') ?? _user?['id']?.toString() ?? '').trim();
+
+  /// Trip distance of the planned route (km), when known.
+  double? _tripKm() {
+    final m = _cachedRoute?.route.distanceMeters;
+    return (m == null || m <= 0) ? null : m / 1000.0;
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // Resume an active street ride (app killed / restarted mid-trip)
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  bool _resumeChecked = false;
+
+  /// Runs once, the first time this tab is active after bootstrap.
+  Future<void> _maybeResumeActiveRide() async {
+    if (_resumeChecked || !mounted || !_active || _prefs == null || _bookingInProgress) return;
+    final rider = _riderId();
+    if (rider.isEmpty || rider == 'guest') return;
+    _resumeChecked = true;
+
+    final active = await BookingController.fetchActiveRide(_api, rider);
+    if (!mounted || active == null || _bookingInProgress) return;
+    final rideRaw = active['ride'];
+    if (rideRaw is! Map) return;
+    final ride = rideRaw.cast<String, dynamic>();
+    final type = (ride['ride_type'] ?? '').toString().trim().toLowerCase();
+    if (type.isNotEmpty && type != 'street_ride') return; // other tabs own those
+    final rideId = (ride['id'] ?? active['ride_id'] ?? '').toString();
+    if (rideId.isEmpty) return;
+
+    LatLng? ll(dynamic m) {
+      if (m is! Map) return null;
+      final la = double.tryParse('${m['lat']}');
+      final lo = double.tryParse('${m['lng']}');
+      if (la == null || lo == null || (la == 0 && lo == 0)) return null;
+      return LatLng(la, lo);
+    }
+
+    final pickup = ll(ride['pickup']);
+    final dest = ll(ride['destination']);
+    if (pickup == null || dest == null) return;
+    final driver = active['driver'];
+    final driverId = (ride['driver_id'] ?? '').toString();
+
+    try {
+      _booking?.dispose();
+    } catch (_) {}
+    final booking = BookingController(_api);
+    _booking = booking;
+    booking.attachToRide(
+      rideId: rideId,
+      riderId: rider,
+      driverId: driverId,
+      rideType: 'street_ride',
+      pickup: pickup,
+      destination: dest,
+      pickupText: (ride['pickup'] as Map)['text']?.toString(),
+      destinationText: (ride['destination'] as Map)['text']?.toString(),
+      initialPayload: active,
+    );
+
+    final status = RideStatusCode.normalize(ride['status']);
+    final phase = status == RideStatusCode.inProgress
+        ? TripNavPhase.enRoute
+        : status == RideStatusCode.arrivedDestination
+            ? TripNavPhase.arrivedDestination
+            : status == RideStatusCode.arrivedPickup
+                ? TripNavPhase.waitingPickup
+                : TripNavPhase.driverToPickup;
+    final dLat = double.tryParse('${active['driver_lat']}') ?? 0;
+    final dLng = double.tryParse('${active['driver_lng']}') ?? 0;
+
+    _bookingInProgress = true;
+    _pollingEngine?.stop();
+    try {
+      await Navigator.of(context).push(
+        MaterialPageRoute<void>(
+          builder: (_) => TripNavigationPage(
+            args: TripNavigationArgs(
+              userId: rider,
+              driverId: driverId,
+              tripId: rideId,
+              pickup: pickup,
+              destination: dest,
+              rideType: 'street_ride',
+              originText: (ride['pickup'] as Map)['text']?.toString() ?? '',
+              destinationText: (ride['destination'] as Map)['text']?.toString() ?? '',
+              driverName: driver is Map ? driver['name']?.toString() : null,
+              vehicleType: driver is Map ? driver['vehicle_type']?.toString() : null,
+              carPlate: driver is Map ? driver['car_plate']?.toString() : null,
+              initialDriverLocation: (dLat == 0 && dLng == 0) ? null : LatLng(dLat, dLng),
+              initialPhase: phase,
+              bookingUpdates: booking.updates,
+              liveSnapshotProvider: _bookingLiveSnapshotProvider,
+              onStartTrip: _bookingStartTrip,
+              onCancelTrip: _bookingCancelTrip,
+              role: TripNavigationRole.rider,
+              tickEvery: const Duration(seconds: 2),
+              routeMinGap: const Duration(seconds: 8),
+              arrivalMeters: 35.0,
+              routeMoveThresholdMeters: 8.0,
+              showStartTripButton: true,
+              showCancelButton: true,
+              showMetaCard: true,
+              preserveStopOrder: true,
+              autoCloseOnCancel: true,
+            ),
+          ),
+        ),
+      );
+    } finally {
+      _bookingInProgress = false;
+    }
+    if (!mounted) return;
+    _onBookingFlowFinished();
   }
 
   /// Starts nearby-driver polling from the last known position without any
@@ -1480,9 +1602,12 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
           destination: safeDrop(),
           originProvider: safePickup,
           destinationProvider: safeDrop,
-          userIdProvider: () => _prefs?.getString('user_id') ?? _user?['id']?.toString() ?? '',
+          userIdProvider: _riderId,
           pollInterval: const Duration(seconds: 2),
           rideType: 'street_ride',
+          tripKm: _tripKm(),
+          tripKmProvider: () => _tripKm() ?? 0,
+          radiusKm: kHomeRadiusKm,
         )
         .listen((snap) {
       if (!mounted) return;
@@ -1610,12 +1735,8 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
         onStartRideMarket: () => _startRideMarket(),
         onResetTripState: _onBookingFlowFinished,
         onDriverEngaged: (id, ll) {},
-        onBookingControllerCreated: (controller) {
-          try {
-            _booking?.dispose();
-          } catch (_) {}
-          _booking = controller;
-        },
+        // The previous controller is disposed by BookingFlowManager.
+        onBookingControllerCreated: (controller) => _booking = controller,
         onSubscriptionCreated: (sub) {
           _bookingSub?.cancel();
           _bookingSub = sub;
@@ -1624,6 +1745,8 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
         onStartTrip: _bookingStartTrip,
         onCancelTrip: _bookingCancelTrip,
         rideType: 'street_ride',
+        tripKm: _tripKm(),
+        previousController: _booking,
       );
     } finally {
       // Paths that return early (sheet dismissed / booking failed) never call
@@ -1851,6 +1974,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
                         destinationText: _pts.last.controller.text,
                         distanceText: _distanceText,
                         durationText: _durationText,
+                        tripDistanceKm: _tripKm(),
                         offers: _offers,
                         loading: _offersLoading,
                         drivers: _drivers.values.toList(),

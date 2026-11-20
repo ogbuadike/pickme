@@ -39,6 +39,7 @@ class _RouteFieldState extends State<RouteField> {
   @override
   void initState() {
     super.initState();
+    _lastEmpty = _ctl.text.isEmpty;
     _ctl.addListener(_onCtlChanged);
     _focus.addListener(_onFocusChanged);
   }
@@ -63,8 +64,12 @@ class _RouteFieldState extends State<RouteField> {
     super.dispose();
   }
 
+  // Only the suffix (clear/check icons) depends on the text: rebuild when its
+  // emptiness flips instead of on every keystroke.
+  bool _lastEmpty = true;
   void _onCtlChanged() {
-    if (mounted) setState(() {});
+    final empty = _ctl.text.isEmpty;
+    if (empty != _lastEmpty && mounted) setState(() => _lastEmpty = empty);
   }
 
   void _onFocusChanged() {
@@ -98,12 +103,12 @@ class _RouteFieldState extends State<RouteField> {
 
     // ⬇️ More visible borders (OLED optimized)
     final Color baseBorder = isDark
-        ? cs.outline.withOpacity(0.5)            // Sleek grey line in dark mode
-        : AppColors.mintBgLight.withOpacity(.58);
+        ? cs.outline.withValues(alpha: 0.5)            // Sleek grey line in dark mode
+        : AppColors.mintBgLight.withValues(alpha: .58);
 
     final Color focusBorder = isDark
         ? cs.primary                             // Neon green glow when focused
-        : AppColors.mintBgLight.withOpacity(.95);
+        : AppColors.mintBgLight.withValues(alpha: .95);
 
     final showCheck = widget.point.latLng != null;
     final isStop = widget.point.type == PointType.stop && widget.onRemove != null;
@@ -152,7 +157,7 @@ class _RouteFieldState extends State<RouteField> {
                 Icons.close_rounded,
                 size: 18 * s,
                 // Highly visible grey in dark mode
-                color: isDark ? cs.onSurfaceVariant : AppColors.textSecondary.withOpacity(.85),
+                color: isDark ? cs.onSurfaceVariant : AppColors.textSecondary.withValues(alpha: .85),
               ),
             ),
           ),
@@ -169,7 +174,7 @@ class _RouteFieldState extends State<RouteField> {
         curve: Curves.easeOut,
         decoration: BoxDecoration(
           // Use Surface Variant (dark grey) in dark mode to lift it off the black background
-          color: isDark ? cs.surfaceVariant : theme.cardColor,
+          color: isDark ? cs.surfaceContainerHighest : theme.cardColor,
           borderRadius: BorderRadius.circular(14 * s),
           border: Border.all(
             color: _focus.hasFocus ? focusBorder : baseBorder,
@@ -178,7 +183,7 @@ class _RouteFieldState extends State<RouteField> {
           // Subtle lift for separation from background
           boxShadow: [
             BoxShadow(
-              color: isDark ? Colors.black.withOpacity(0.5) : Colors.black.withOpacity(0.06),
+              color: isDark ? Colors.black.withValues(alpha: 0.5) : Colors.black.withValues(alpha: 0.06),
               blurRadius: 8 * s,
               offset: Offset(0, 2 * s),
             ),
@@ -189,7 +194,11 @@ class _RouteFieldState extends State<RouteField> {
           controller: _ctl,
           focusNode: _focus,
           onChanged: widget.onTyping,
-          onTap: () => widget.onFocused(widget.index),
+          // Focus changes are reported by _onFocusChanged; only re-report a tap
+          // on an already-focused field (e.g. overlay was closed meanwhile).
+          onTap: () {
+            if (_focus.hasFocus) widget.onFocused(widget.index);
+          },
           textInputAction: TextInputAction.search,
           // FIXED: The typed text is now pure white in dark mode
           style: TextStyle(
@@ -207,13 +216,13 @@ class _RouteFieldState extends State<RouteField> {
             labelStyle: TextStyle(
               fontSize: 11 * s,
               fontWeight: FontWeight.w800,
-              color: isDark ? cs.onSurfaceVariant : AppColors.textSecondary.withOpacity(.9),
+              color: isDark ? cs.onSurfaceVariant : AppColors.textSecondary.withValues(alpha: .9),
               letterSpacing: -0.2,
             ),
             hintText: widget.point.hint,
             // FIXED: The hint placeholder text is now crisp grey in dark mode
             hintStyle: TextStyle(
-              color: isDark ? cs.onSurfaceVariant.withOpacity(0.8) : AppColors.textSecondary.withOpacity(.65),
+              color: isDark ? cs.onSurfaceVariant.withValues(alpha: 0.8) : AppColors.textSecondary.withValues(alpha: .65),
               fontSize: 13 * s,
             ),
             suffixIcon: suffix,

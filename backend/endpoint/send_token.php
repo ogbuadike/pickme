@@ -1,115 +1,58 @@
 <?php
-header('Content-Type: application/json');
+declare(strict_types=1);
 
-require_once '../unique/unique_con.php'; 
-require_once 'auth.php';
-require_once '../unique/unique_code.php';
-require_once '../unique/unique_gtm.php';
-require_once '../unique/unique_func.php';
-require_once 'activities.php';
+/**
+ * POST send_token.php — register an FCM device token. PUBLIC (app key) per contract §5.
+ * Params: token (FCM registration token), device (device info JSON), uid (ignored for binding).
+ * The token is bound to a user ONLY when a valid X-Session-Token is presented (the user is taken
+ * from the session, never from `uid`); without a session the device is stored anonymously.
+ */
 
-// Get headers
-$headers = apache_request_headers();
-$authToken = isset($headers['Authorization']) ? $headers['Authorization'] : '';
+require_once __DIR__ . '/security.php';
 
-// Authorization check
-if (!checkAuthorization($authToken)) {
-    $response = [
-        "error" => true,
-        "message" => "Unauthorized access",
-        "data" => null
-    ];
-    http_response_code(401); // Unauthorized
-    echo json_encode($response);
-    exit();
+pm_require_method('POST');
+pm_require_app_key();
+$in = pm_input();
+
+pm_rate_limit('send_token_ip', pm_client_ip(), 60, 60);
+
+$sessionUid = pm_optional_session_uid();
+$claimedUid = pm_in_str($in, 'uid', 64);
+if ($sessionUid !== '' && $claimedUid !== '' && !hash_equals($sessionUid, $claimedUid)) {
+    pm_error('FORBIDDEN', 'You are not allowed to act on behalf of another account.', 403, ['data' => null]);
 }
 
-// Retrieve FCM token, UID, and device info from POST request
-$token = isset($_POST['token']) ? $_POST['token'] : '';
-$token_uid = isset($_POST['uid']) ? $_POST['uid'] : '';
-$device = isset($_POST['device']) ? $_POST['device'] : '';
-
-// Normalize token_uid if 'null'
-if($token_uid === 'null') {
-    $token_uid = '';
+$token = pm_clean_text($in['token'] ?? '', 4096);
+$device = pm_clean_text($in['device'] ?? '', 4000);
+if ($token === '' || $device === '') {
+    pm_error('VALIDATION', 'Token and device info are required', 200, ['data' => null]);
 }
-
-// Ensure token, UID, and device are provided (not empty)
-/*
-if (empty($token) || empty($token_uid) || empty($device)) {
-    $response = [
-        "error" => true,
-        "message" => "Token, UID, and device info are required",
-        "data" => null
-    ];
-    http_response_code(400); // Bad Request
-    echo json_encode($response);
-    exit();
+if (!preg_match('/^[A-Za-z0-9_:\-\.]{20,4096}$/', $token)) {
+    pm_error('VALIDATION', 'Invalid device token', 200, ['data' => null]);
 }
-*/
+$deviceHash = hash('sha256', $device);
 
-// Check if the device already exists in the database
-$deviceCheckQuery = "SELECT * FROM app_users WHERE device_info = '$device'";
-$deviceCheckResult = mysqli_query($dbconn, $deviceCheckQuery);
-
-// If device is found
-if (mysqli_num_rows($deviceCheckResult) > 0) {
-    $deviceRow = mysqli_fetch_assoc($deviceCheckResult);
-    $existingToken = $deviceRow['u_token'];
-    $existingUid = $deviceRow['uid'];
-
-    // Check if either the token or UID has changed and only update if both token and UID are non-empty
-    if (($existingToken !== $token && $token !=='')  || ($existingUid !== $token_uid && $token_uid !=='' )) {
-        // Update the token and UID for this device
-        $updateQuery = "UPDATE app_users SET u_token = '$token', uid = '$token_uid' WHERE device_info = '$device'";
-        $updateResult = mysqli_query($dbconn, $updateQuery);
-
-        if ($updateResult) {
-            $response = [
-                "error" => false,
-                "message" => "Device token and UID updated successfully",
-                "data" => null
-            ];
-            http_response_code(200); // OK
-        } else {
-            $response = [
-                "error" => true,
-                "message" => "Failed to update device token and UID",
-                "data" => null
-            ];
-            http_response_code(500); // Internal Server Error
-        }
-    } else {
-        // No changes detected, no need to update
-        $response = [
-            "error" => false,
-            "message" => "No changes detected. Token and UID are the same.",
-            "data" => null
-        ];
-        http_response_code(200); // OK
+$row = pm_q_one('SELECT id, uid, u_token FROM app_users WHERE device_hash = ? ORDER BY id DESC LIMIT 1', 's', [$deviceHash]);
+if ($row !== null) {
+    $newUid = $sessionUid !== '' ? $sessionUid : (string)$row['uid'];
+    if ($sessionUid === '' && $row['u_token'] !== $token) {
+        $newUid = ''; // a different app install without a session must not inherit the old binding
     }
+    if ($row['u_token'] === $token && $row['uid'] === $newUid) {
+        pm_json(['error' => false, 'message' => 'No changes detected. Token and UID are the same.', 'data' => null]);
+    }
+    pm_exec('UPDATE app_users SET u_token = ?, uid = ?, date_time = NOW() WHERE id = ?', 'ssi', [$token, $newUid, (int)$row['id']]);
+    $message = 'Device token and UID updated successfully';
 } else {
-    // Device not found, insert it
-    $insertQuery = "INSERT INTO app_users (uid, u_token, device_info, date_time) VALUES ('$token_uid', '$token', '$device', NOW())";
-    $insertResult = mysqli_query($dbconn, $insertQuery);
-
-    if ($insertResult) {
-        $response = [
-            "error" => false,
-            "message" => "Device logged successfully",
-            "data" => null
-        ];
-        http_response_code(200); // OK
-    } else {
-        $response = [
-            "error" => true,
-            "message" => "Failed to log the device",
-            "data" => null
-        ];
-        http_response_code(500); // Internal Server Error
-    }
+    pm_exec(
+        'INSERT INTO app_users (uid, u_token, device_info, device_hash, date_time) VALUES (?, ?, ?, ?, NOW())',
+        'ssss',
+        [$sessionUid, $token, $device, $deviceHash]
+    );
+    $message = 'Device logged successfully';
 }
 
-// Output the final response
-echo json_encode($response);
-?>
+// The same FCM token must not stay bound to another account (e.g. shared phone, re-login).
+pm_exec("UPDATE app_users SET uid = '' WHERE u_token = ? AND device_hash <> ?", 'ss', [$token, $deviceHash]);
+
+pm_json(['error' => false, 'message' => $message, 'data' => null]);

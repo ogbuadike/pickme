@@ -1,8 +1,8 @@
-// lib/screens/home/widgets/trip_stats.dart
+// lib/widgets/trip_stats.dart
 // Compact chip displaying distance + duration.
 
 import 'package:flutter/material.dart';
-import '../../../themes/app_theme.dart';
+import '../themes/app_theme.dart';
 
 class TripStats extends StatelessWidget {
   final String distanceText;
@@ -14,7 +14,7 @@ class TripStats extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
       decoration: BoxDecoration(
-        color: AppColors.surface.withOpacity(0.95),
+        color: AppColors.surface.withValues(alpha: 0.95),
         borderRadius: BorderRadius.circular(14),
         border: Border.all(color: AppColors.mintBgLight),
       ),

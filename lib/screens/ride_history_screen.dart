@@ -11,12 +11,15 @@ import 'package:http/http.dart' as http;
 import 'package:intl/intl.dart' hide TextDirection;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'package:uuid/uuid.dart';
 
 import '../api/api_client.dart';
 import '../api/url.dart';
+import '../services/booking_controller.dart' show RideStatusCode;
 import '../themes/app_theme.dart';
 import '../ui/ui_scale.dart';
 import '../widgets/inner_background.dart';
+import '../widgets/ride_market/money.dart';
 import '../utility/notification.dart';
 import 'trip_navigation_page.dart';
 
@@ -97,7 +100,30 @@ class _RideHistoryScreenState extends State<RideHistoryScreen> {
     }
   }
 
-  Future<void> _fetchFromNetwork() async {
+  Future<void>? _fetchInFlight;
+  DateTime _lastFetchAt = DateTime.fromMillisecondsSinceEpoch(0);
+
+  /// Single-flight: pull-to-refresh, countdown expiry and detail-sheet
+  /// changes share one request (several expiring cards used to fire one
+  /// request each).
+  Future<void> _fetchFromNetwork() {
+    final existing = _fetchInFlight;
+    if (existing != null) return existing;
+    final f = _fetchFromNetworkImpl().whenComplete(() {
+      _fetchInFlight = null;
+      _lastFetchAt = DateTime.now();
+    });
+    _fetchInFlight = f;
+    return f;
+  }
+
+  void _onCountdownExpired() {
+    if (DateTime.now().difference(_lastFetchAt) < const Duration(seconds: 5)) return;
+    _fetchFromNetwork();
+  }
+
+  Future<void> _fetchFromNetworkImpl() async {
+    if (_userId.isEmpty) return;
     try {
       final res = await _api.request(
         ApiConstants.rideHistoryEndpoint,
@@ -107,12 +133,16 @@ class _RideHistoryScreenState extends State<RideHistoryScreen> {
           'role': _isDriverMode ? 'driver' : 'rider',
           'limit': '50',
         },
+        idempotent: true,
       );
 
       final body = jsonDecode(res.body);
-      if (res.statusCode == 200 && body['error'] == false) {
-        final data = body['data'] as List<dynamic>;
-        final rides = data.cast<Map<String, dynamic>>();
+      if (body is Map && body['error'] == false && body['data'] is List) {
+        final int fetchedAt = DateTime.now().millisecondsSinceEpoch;
+        final rides = (body['data'] as List)
+            .whereType<Map>()
+            .map((m) => <String, dynamic>{...m.cast<String, dynamic>(), '_fetched_at_ms': fetchedAt})
+            .toList();
 
         final prefs = await SharedPreferences.getInstance();
         await prefs.setString(_cacheKey, jsonEncode(rides));
@@ -189,7 +219,7 @@ class _RideHistoryScreenState extends State<RideHistoryScreen> {
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
-      barrierColor: Colors.black.withOpacity(0.65),
+      barrierColor: Colors.black.withValues(alpha: 0.65),
       builder: (_) => _PremiumRideDetailSheet(
         ride: ride,
         isDriverMode: _isDriverMode,
@@ -248,9 +278,7 @@ class _RideHistoryScreenState extends State<RideHistoryScreen> {
                             ride: displayRides[i],
                             isDriverMode: _isDriverMode,
                             onTap: () => _openDetails(displayRides[i]),
-                            onExpire: () {
-                              _fetchFromNetwork();
-                            },
+                            onExpire: _onCountdownExpired,
                           ),
                         ),
                       ),
@@ -275,7 +303,7 @@ class _RideHistoryScreenState extends State<RideHistoryScreen> {
             child: Container(
               padding: EdgeInsets.all(ui.inset(6)),
               decoration: BoxDecoration(
-                color: cs.primaryContainer.withOpacity(0.4),
+                color: cs.primaryContainer.withValues(alpha: 0.4),
                 borderRadius: BorderRadius.circular(ui.radius(10)),
               ),
               child: Icon(Icons.arrow_back_ios_rounded, size: ui.icon(16), color: cs.onPrimaryContainer),
@@ -304,9 +332,9 @@ class _RideHistoryScreenState extends State<RideHistoryScreen> {
           child: Container(
             height: ui.gap(38),
             decoration: BoxDecoration(
-              color: isDark ? cs.surfaceVariant.withOpacity(0.6) : Colors.white.withOpacity(0.7),
+              color: isDark ? cs.surfaceContainerHighest.withValues(alpha: 0.6) : Colors.white.withValues(alpha: 0.7),
               borderRadius: BorderRadius.circular(ui.radius(12)),
-              border: Border.all(color: isDark ? cs.outlineVariant.withOpacity(0.4) : AppColors.mintBgLight.withOpacity(0.4), width: 1),
+              border: Border.all(color: isDark ? cs.outlineVariant.withValues(alpha: 0.4) : AppColors.mintBgLight.withValues(alpha: 0.4), width: 1),
             ),
             child: TextField(
               controller: _searchController,
@@ -315,7 +343,7 @@ class _RideHistoryScreenState extends State<RideHistoryScreen> {
               style: TextStyle(fontWeight: FontWeight.w600, color: cs.onSurface, fontSize: ui.font(12.5)),
               decoration: InputDecoration(
                 hintText: 'Search destinations, names...',
-                hintStyle: TextStyle(color: cs.onSurfaceVariant.withOpacity(0.7), fontSize: ui.font(12)),
+                hintStyle: TextStyle(color: cs.onSurfaceVariant.withValues(alpha: 0.7), fontSize: ui.font(12)),
                 prefixIcon: Icon(Icons.search_rounded, color: cs.primary, size: ui.icon(16)),
                 suffixIcon: _searchQuery.isNotEmpty
                     ? IconButton(
@@ -360,10 +388,10 @@ class _RideHistoryScreenState extends State<RideHistoryScreen> {
               alignment: Alignment.center,
               padding: EdgeInsets.symmetric(horizontal: ui.inset(12)),
               decoration: BoxDecoration(
-                color: selected ? cs.primary.withOpacity(0.15) : (isDark ? cs.surfaceVariant.withOpacity(0.5) : Colors.white.withOpacity(0.6)),
+                color: selected ? cs.primary.withValues(alpha: 0.15) : (isDark ? cs.surfaceContainerHighest.withValues(alpha: 0.5) : Colors.white.withValues(alpha: 0.6)),
                 borderRadius: BorderRadius.circular(ui.radius(10)),
                 border: Border.all(
-                  color: selected ? cs.primary.withOpacity(0.8) : (isDark ? cs.outlineVariant.withOpacity(0.3) : AppColors.mintBgLight.withOpacity(0.4)),
+                  color: selected ? cs.primary.withValues(alpha: 0.8) : (isDark ? cs.outlineVariant.withValues(alpha: 0.3) : AppColors.mintBgLight.withValues(alpha: 0.4)),
                   width: 1.0,
                 ),
               ),
@@ -387,7 +415,7 @@ class _RideHistoryScreenState extends State<RideHistoryScreen> {
           height: ui.gap(90),
           margin: EdgeInsets.only(bottom: ui.gap(8)),
           decoration: BoxDecoration(
-            color: isDark ? cs.surfaceVariant.withOpacity(0.4) : Colors.black.withOpacity(0.04),
+            color: isDark ? cs.surfaceContainerHighest.withValues(alpha: 0.4) : Colors.black.withValues(alpha: 0.04),
             borderRadius: BorderRadius.circular(ui.radius(14)),
           ),
         ),
@@ -402,8 +430,8 @@ class _RideHistoryScreenState extends State<RideHistoryScreen> {
         children: [
           Container(
             padding: EdgeInsets.all(ui.inset(10)),
-            decoration: BoxDecoration(shape: BoxShape.circle, color: cs.primary.withOpacity(0.1)),
-            child: Icon(Icons.history_toggle_off_rounded, size: ui.icon(32), color: cs.primary.withOpacity(0.6)),
+            decoration: BoxDecoration(shape: BoxShape.circle, color: cs.primary.withValues(alpha: 0.1)),
+            child: Icon(Icons.history_toggle_off_rounded, size: ui.icon(32), color: cs.primary.withValues(alpha: 0.6)),
           ),
           SizedBox(height: ui.gap(12)),
           Text('No rides yet', style: TextStyle(fontSize: ui.font(14), fontWeight: FontWeight.w800, color: cs.onSurface)),
@@ -435,10 +463,7 @@ class _RideCard extends StatelessWidget {
     'in_progress', 'arrived_destination'
   ];
 
-  String _formatCurrency(dynamic amount, String currency) {
-    final n = double.tryParse(amount.toString()) ?? 0.0;
-    return NumberFormat.currency(symbol: '${currency == 'NGN' ? '₦' : '$currency '}', decimalDigits: (n % 1 == 0 ? 0 : 2)).format(n);
-  }
+  String _formatCurrency(dynamic amount, String currency) => formatMoney(parseMoney(amount), currency: currency);
 
   Color _statusColor(String status) {
     if (_activeStatuses.contains(status)) return const Color(0xFF3B82F6);
@@ -487,8 +512,7 @@ class _RideCard extends StatelessWidget {
     String formattedDate = '';
     if (dateStr.toString().isNotEmpty) {
       try {
-        final d = DateTime.parse(dateStr.toString());
-        formattedDate = DateFormat('MMM d, yyyy • h:mm a').format(d);
+        formattedDate = DateFormat('MMM d, yyyy • h:mm a').format(_parseServerTime(dateStr.toString()));
       } catch (_) {}
     }
 
@@ -497,7 +521,7 @@ class _RideCard extends StatelessWidget {
     return Container(
       margin: EdgeInsets.only(bottom: ui.gap(8)),
       child: Material(
-        color: isDark ? cs.surface.withOpacity(0.8) : Theme.of(context).cardColor,
+        color: isDark ? cs.surface.withValues(alpha: 0.8) : Theme.of(context).cardColor,
         borderRadius: BorderRadius.circular(ui.radius(14)),
         child: InkWell(
           borderRadius: BorderRadius.circular(ui.radius(14)),
@@ -507,7 +531,7 @@ class _RideCard extends StatelessWidget {
             decoration: BoxDecoration(
               borderRadius: BorderRadius.circular(ui.radius(14)),
               border: Border.all(
-                color: isActive ? statusColor.withOpacity(0.4) : (isDark ? cs.outlineVariant.withOpacity(0.3) : AppColors.mintBgLight.withOpacity(0.3)),
+                color: isActive ? statusColor.withValues(alpha: 0.4) : (isDark ? cs.outlineVariant.withValues(alpha: 0.3) : AppColors.mintBgLight.withValues(alpha: 0.3)),
                 width: 1,
               ),
             ),
@@ -522,7 +546,7 @@ class _RideCard extends StatelessWidget {
                       children: [
                         if (status == 'searching' && !isDriverMode) ...[
                           _SmartCountdownTimer(
-                            createdAt: dateStr.toString(),
+                            ride: ride,
                             uiScale: ui,
                             onExpire: onExpire,
                           ),
@@ -530,7 +554,7 @@ class _RideCard extends StatelessWidget {
                         ],
                         Container(
                           padding: EdgeInsets.symmetric(horizontal: ui.inset(6), vertical: ui.inset(2)),
-                          decoration: BoxDecoration(color: statusColor.withOpacity(0.15), borderRadius: BorderRadius.circular(ui.radius(6))),
+                          decoration: BoxDecoration(color: statusColor.withValues(alpha: 0.15), borderRadius: BorderRadius.circular(ui.radius(6))),
                           child: Text(_statusLabel(status), style: TextStyle(color: statusColor, fontSize: ui.font(8.5), fontWeight: FontWeight.w900, letterSpacing: 0.2)),
                         ),
                       ],
@@ -544,7 +568,7 @@ class _RideCard extends StatelessWidget {
                       width: ui.gap(32),
                       height: ui.gap(32),
                       alignment: Alignment.center,
-                      decoration: BoxDecoration(borderRadius: BorderRadius.circular(ui.radius(8)), color: typeColor.withOpacity(0.1)),
+                      decoration: BoxDecoration(borderRadius: BorderRadius.circular(ui.radius(8)), color: typeColor.withValues(alpha: 0.1)),
                       child: ClipRRect(
                         borderRadius: BorderRadius.circular(ui.radius(8)),
                         child: avatarUrl.isNotEmpty
@@ -577,7 +601,7 @@ class _RideCard extends StatelessWidget {
                                 style: TextStyle(fontWeight: FontWeight.w900, fontSize: ui.font(11.5), color: cs.primary),
                               ),
                               SizedBox(width: ui.gap(6)),
-                              Container(width: ui.gap(3), height: ui.gap(3), decoration: BoxDecoration(color: cs.onSurfaceVariant.withOpacity(0.5), shape: BoxShape.circle)),
+                              Container(width: ui.gap(3), height: ui.gap(3), decoration: BoxDecoration(color: cs.onSurfaceVariant.withValues(alpha: 0.5), shape: BoxShape.circle)),
                               SizedBox(width: ui.gap(6)),
                               Text(typeLabel, style: TextStyle(color: typeColor, fontSize: ui.font(10), fontWeight: FontWeight.w800)),
                             ],
@@ -586,7 +610,7 @@ class _RideCard extends StatelessWidget {
                       ),
                     ),
                     SizedBox(width: ui.gap(4)),
-                    Icon(Icons.chevron_right_rounded, size: ui.icon(16), color: cs.onSurfaceVariant.withOpacity(0.5)),
+                    Icon(Icons.chevron_right_rounded, size: ui.icon(16), color: cs.onSurfaceVariant.withValues(alpha: 0.5)),
                   ],
                 ),
               ],
@@ -598,13 +622,16 @@ class _RideCard extends StatelessWidget {
   }
 }
 
-// --- HYPER ACCURATE FLUTTER TIMEZONE ERASER TIMER ---
+// --- SEARCH COUNTDOWN ---
+// Uses the server-computed `remaining_seconds` (MySQL clock) anchored at the
+// moment the list was fetched, so device / server timezone and clock skew do
+// not matter.
 class _SmartCountdownTimer extends StatefulWidget {
-  final String createdAt;
+  final Map<String, dynamic> ride;
   final UIScale uiScale;
   final VoidCallback onExpire;
 
-  const _SmartCountdownTimer({required this.createdAt, required this.uiScale, required this.onExpire});
+  const _SmartCountdownTimer({required this.ride, required this.uiScale, required this.onExpire});
 
   @override
   State<_SmartCountdownTimer> createState() => _SmartCountdownTimerState();
@@ -614,48 +641,51 @@ class _SmartCountdownTimerState extends State<_SmartCountdownTimer> {
   Timer? _timer;
   Duration _timeLeft = Duration.zero;
   bool _expired = false;
+  DateTime? _deadline;
 
   @override
   void initState() {
     super.initState();
-    _calculateTime();
-    _timer = Timer.periodic(const Duration(seconds: 1), (_) => _calculateTime());
+    _resolveDeadline();
+    _tick();
+    if (_deadline != null && !_expired) {
+      _timer = Timer.periodic(const Duration(seconds: 1), (_) => _tick());
+    }
   }
 
-  void _calculateTime() {
-    if (widget.createdAt.isEmpty) return;
-    try {
-      String safeDateString = widget.createdAt;
-      if (!safeDateString.contains('Z') && !safeDateString.contains('+')) {
-        safeDateString = safeDateString.replaceAll(' ', 'T');
-      }
+  @override
+  void didUpdateWidget(covariant _SmartCountdownTimer oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!identical(oldWidget.ride, widget.ride)) {
+      _resolveDeadline();
+      _tick();
+    }
+  }
 
-      DateTime created = DateTime.parse(safeDateString);
-      DateTime now = DateTime.now();
+  void _resolveDeadline() {
+    final int? remaining = int.tryParse('${widget.ride['remaining_seconds'] ?? ''}');
+    final int? fetchedAt = int.tryParse('${widget.ride['_fetched_at_ms'] ?? ''}');
+    if (remaining == null) {
+      _deadline = null;
+      return;
+    }
+    final DateTime anchor =
+        fetchedAt == null ? DateTime.now() : DateTime.fromMillisecondsSinceEpoch(fetchedAt);
+    _deadline = anchor.add(Duration(seconds: remaining.clamp(0, 1800)));
+  }
 
-      // TIMEZONE ERASER:
-      int offsetHours = now.difference(created).inHours;
-      if (offsetHours != 0) {
-        created = created.add(Duration(hours: offsetHours));
-      }
-
-      DateTime expires = created.add(const Duration(minutes: 30));
-
-      if (expires.difference(now).inMinutes > 30) {
-        expires = now.add(const Duration(minutes: 30));
-      }
-
-      if (now.isAfter(expires)) {
-        _timer?.cancel();
-        if (!_expired) {
-          if (mounted) setState(() { _expired = true; _timeLeft = Duration.zero; });
-          widget.onExpire();
-        }
-      } else {
-        if (mounted) setState(() => _timeLeft = expires.difference(now));
-      }
-    } catch (_) {
+  void _tick() {
+    final DateTime? deadline = _deadline;
+    if (deadline == null) return;
+    final Duration left = deadline.difference(DateTime.now());
+    if (left <= Duration.zero) {
       _timer?.cancel();
+      if (!_expired) {
+        if (mounted) setState(() { _expired = true; _timeLeft = Duration.zero; });
+        widget.onExpire();
+      }
+    } else if (mounted) {
+      setState(() => _timeLeft = left);
     }
   }
 
@@ -721,10 +751,7 @@ class _PremiumRideDetailSheetState extends State<_PremiumRideDetailSheet> {
     return double.tryParse(v.toString()) ?? 0.0;
   }
 
-  String _formatCurrency(dynamic amount, String currency) {
-    final n = double.tryParse(amount.toString()) ?? 0.0;
-    return NumberFormat.currency(symbol: '${currency == 'NGN' ? '₦' : '$currency '}', decimalDigits: (n % 1 == 0 ? 0 : 2)).format(n);
-  }
+  String _formatCurrency(dynamic amount, String currency) => formatMoney(parseMoney(amount), currency: currency);
 
   TripNavPhase _derivePhase(String status) {
     switch (status) {
@@ -754,16 +781,24 @@ class _PremiumRideDetailSheetState extends State<_PremiumRideDetailSheet> {
           'pickup_lat': act['pickup_lat'], 'pickup_lng': act['pickup_lng'], 'dest_lat': act['dest_lat'], 'dest_lng': act['dest_lng'],
         };
       } else {
-        final res = await widget.apiClient.request(ApiConstants.rideStatusEndpoint, method: 'POST', data: {'rider_id': widget.userId, 'ride_id': widget.ride['id'].toString()});
+        final res = await widget.apiClient.request(ApiConstants.rideStatusEndpoint, method: 'POST', data: {'rider_id': widget.userId, 'ride_id': widget.ride['id'].toString()}, idempotent: true, retryCount: 0);
         final body = jsonDecode(res.body);
         if (body['error'] == true) return null;
-        final ride = body['ride'] as Map<String, dynamic>?;
-        final driver = body['driver'] as Map<String, dynamic>?;
+        final ride = body['ride'] is Map ? (body['ride'] as Map).cast<String, dynamic>() : null;
+        final driver = body['driver'] is Map ? (body['driver'] as Map).cast<String, dynamic>() : null;
         if (ride == null) return null;
+        // ride_status.php nests coordinates: ride.pickup.{lat,lng}, ride.destination.{lat,lng}.
+        final pickup = ride['pickup'] is Map ? ride['pickup'] as Map : const {};
+        final dest = ride['destination'] is Map ? ride['destination'] as Map : const {};
+        final dLat = _d(driver?['lat']), dLng = _d(driver?['lng']);
+        final hasDriverFix = !(dLat == 0 && dLng == 0);
         return {
-          'ride_id': ride['id'].toString(), 'status': ride['status'],
-          'driver_lat': driver?['lat'], 'driver_lng': driver?['lng'], 'driver_heading': driver?['heading'] ?? 0,
-          'pickup_lat': ride['pickup_lat'], 'pickup_lng': ride['pickup_lng'], 'dest_lat': ride['dest_lat'], 'dest_lng': ride['dest_lng'],
+          'ride_id': ride['id'].toString(), 'status': RideStatusCode.normalize(ride['status']),
+          if (hasDriverFix) 'driver_lat': dLat,
+          if (hasDriverFix) 'driver_lng': dLng,
+          'driver_heading': _d(driver?['heading']),
+          'pickup_lat': _d(pickup['lat']), 'pickup_lng': _d(pickup['lng']),
+          'dest_lat': _d(dest['lat']), 'dest_lng': _d(dest['lng']),
         };
       }
     } catch (_) { return null; }
@@ -780,39 +815,58 @@ class _PremiumRideDetailSheetState extends State<_PremiumRideDetailSheet> {
       });
       final body = jsonDecode(res.body);
       if (res.statusCode != 200 || body['error'] == true) throw Exception(body['message'] ?? 'Action failed');
-
+      if (!mounted) return;
       showToastNotification(context: context, title: 'Success', message: 'Trip updated.', isSuccess: true);
       widget.onChanged(true);
     } catch (e) {
-      showToastNotification(context: context, title: 'Error', message: e.toString().replaceFirst('Exception: ', ''), isSuccess: false);
+      if (mounted) showToastNotification(context: context, title: 'Error', message: e.toString().replaceFirst('Exception: ', ''), isSuccess: false);
     } finally {
       if (mounted) setState(() => _actionBusy = false);
     }
   }
 
+  /// Invoked by TripNavigationPage (onCancelTrip). It must not pop: that page
+  /// closes itself (autoCloseOnCancel); popping here closed the wrong route.
+  /// Failures are rethrown so the page can show them and stay open.
   Future<void> _riderCancel() async {
     if (_actionBusy) return;
     setState(() => _actionBusy = true);
     try {
-      final res = await widget.apiClient.request(ApiConstants.rideCancelEndpoint, method: 'POST', data: {'user_id': widget.userId, 'ride_id': widget.ride['id'].toString()});
+      final res = await widget.apiClient.request(
+        ApiConstants.rideCancelEndpoint,
+        method: 'POST',
+        data: {
+          'rider_id': widget.userId,
+          'ride_id': widget.ride['id'].toString(),
+          'reason': 'rider_cancelled',
+          'client_request_id': const Uuid().v4(),
+        },
+        retryCount: 0,
+      );
       final body = jsonDecode(res.body);
       if (res.statusCode != 200 || body['error'] == true) throw Exception(body['message'] ?? 'Cancel failed');
+      if (!mounted) return;
       showToastNotification(context: context, title: 'Cancelled', message: 'Ride has been cancelled.', isSuccess: true);
       widget.onChanged(true);
-      if (mounted) Navigator.pop(context);
     } catch (e) {
-      showToastNotification(context: context, title: 'Error', message: e.toString().replaceFirst('Exception: ', ''), isSuccess: false);
+      if (mounted) showToastNotification(context: context, title: 'Error', message: e.toString().replaceFirst('Exception: ', ''), isSuccess: false);
+      rethrow;
     } finally {
       if (mounted) setState(() => _actionBusy = false);
     }
   }
 
-  void _call(String phone) async {
+  Future<void> _call(String phone) async {
     final clean = phone.replaceAll(RegExp(r'[^\d+]'), '');
     if (clean.isEmpty) return;
-    final uri = Uri.parse('tel:$clean');
-    if (await canLaunchUrl(uri)) await launchUrl(uri);
-    else showToastNotification(context: context, title: 'Error', message: 'Unable to place call.', isSuccess: false);
+    final uri = Uri(scheme: 'tel', path: clean);
+    bool ok = false;
+    try {
+      ok = await launchUrl(uri);
+    } catch (_) {}
+    if (!ok && mounted) {
+      showToastNotification(context: context, title: 'Error', message: 'Unable to place call.', isSuccess: false);
+    }
   }
 
   void _resumeTrip() async {
@@ -885,7 +939,7 @@ class _PremiumRideDetailSheetState extends State<_PremiumRideDetailSheet> {
     Navigator.of(context).push(
       PageRouteBuilder(
         opaque: false,
-        barrierColor: Colors.black.withOpacity(0.9),
+        barrierColor: Colors.black.withValues(alpha: 0.9),
         barrierDismissible: true,
         transitionDuration: const Duration(milliseconds: 300),
         pageBuilder: (BuildContext context, _, __) {
@@ -944,9 +998,9 @@ class _PremiumRideDetailSheetState extends State<_PremiumRideDetailSheet> {
       margin: EdgeInsets.only(bottom: ui.gap(16)),
       padding: EdgeInsets.all(ui.inset(16)),
       decoration: BoxDecoration(
-        color: themeColor.withOpacity(isDark ? 0.15 : 0.08),
+        color: themeColor.withValues(alpha: isDark ? 0.15 : 0.08),
         borderRadius: BorderRadius.circular(ui.radius(16)),
-        border: Border.all(color: themeColor.withOpacity(0.4), width: 1.5),
+        border: Border.all(color: themeColor.withValues(alpha: 0.4), width: 1.5),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -980,7 +1034,7 @@ class _PremiumRideDetailSheetState extends State<_PremiumRideDetailSheet> {
                   decoration: BoxDecoration(
                     color: isDark ? cs.surface : Colors.white,
                     borderRadius: BorderRadius.circular(ui.radius(10)),
-                    boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.05), blurRadius: 4)],
+                    boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.05), blurRadius: 4)],
                   ),
                   child: Icon(Icons.copy_rounded, size: ui.icon(20), color: themeColor),
                 ),
@@ -1008,7 +1062,7 @@ class _PremiumRideDetailSheetState extends State<_PremiumRideDetailSheet> {
                 ),
                 style: OutlinedButton.styleFrom(
                   foregroundColor: themeColor,
-                  side: BorderSide(color: themeColor.withOpacity(0.5)),
+                  side: BorderSide(color: themeColor.withValues(alpha: 0.5)),
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(ui.radius(12))),
                 ),
               ),
@@ -1044,9 +1098,9 @@ class _PremiumRideDetailSheetState extends State<_PremiumRideDetailSheet> {
           width: double.infinity,
           padding: EdgeInsets.all(ui.inset(16)),
           decoration: BoxDecoration(
-            color: isDark ? cs.surfaceVariant.withOpacity(0.2) : const Color(0xFFF8FAFC),
+            color: isDark ? cs.surfaceContainerHighest.withValues(alpha: 0.2) : const Color(0xFFF8FAFC),
             borderRadius: BorderRadius.circular(ui.radius(16)),
-            border: Border.all(color: isDark ? cs.outlineVariant.withOpacity(0.2) : Colors.black12),
+            border: Border.all(color: isDark ? cs.outlineVariant.withValues(alpha: 0.2) : Colors.black12),
           ),
           child: isDispatch
               ? Column(
@@ -1067,17 +1121,17 @@ class _PremiumRideDetailSheetState extends State<_PremiumRideDetailSheet> {
                             width: double.infinity,
                             height: 180,
                             fit: BoxFit.cover,
-                            errorBuilder: (_, __, ___) => Container(height: 120, color: cs.surfaceVariant, child: Center(child: Icon(Icons.broken_image_rounded, color: cs.onSurfaceVariant, size: ui.icon(32)))),
+                            errorBuilder: (_, __, ___) => Container(height: 120, color: cs.surfaceContainerHighest, child: Center(child: Icon(Icons.broken_image_rounded, color: cs.onSurfaceVariant, size: ui.icon(32)))),
                           ),
                           Container(
                             width: double.infinity,
                             height: 180,
-                            color: Colors.black.withOpacity(0.1),
+                            color: Colors.black.withValues(alpha: 0.1),
                           ),
                           Container(
                             padding: EdgeInsets.all(ui.inset(10)),
                             decoration: BoxDecoration(
-                              color: Colors.black.withOpacity(0.6),
+                              color: Colors.black.withValues(alpha: 0.6),
                               shape: BoxShape.circle,
                             ),
                             child: Icon(Icons.zoom_out_map_rounded, color: Colors.white, size: ui.icon(20)),
@@ -1110,7 +1164,7 @@ class _PremiumRideDetailSheetState extends State<_PremiumRideDetailSheet> {
                       width: ui.gap(44),
                       height: ui.gap(44),
                       decoration: BoxDecoration(
-                          color: Colors.amber.shade700.withOpacity(0.15),
+                          color: Colors.amber.shade700.withValues(alpha: 0.15),
                           shape: BoxShape.circle
                       ),
                       child: IconButton(
@@ -1176,9 +1230,9 @@ class _PremiumRideDetailSheetState extends State<_PremiumRideDetailSheet> {
         Container(
           padding: EdgeInsets.fromLTRB(ui.inset(16), ui.inset(20), ui.inset(16), ui.inset(20)),
           decoration: BoxDecoration(
-            color: isDark ? cs.surfaceVariant.withOpacity(0.2) : const Color(0xFFF8FAFC),
+            color: isDark ? cs.surfaceContainerHighest.withValues(alpha: 0.2) : const Color(0xFFF8FAFC),
             borderRadius: BorderRadius.circular(ui.radius(16)),
-            border: Border.all(color: isDark ? cs.outlineVariant.withOpacity(0.2) : Colors.black12, width: 1),
+            border: Border.all(color: isDark ? cs.outlineVariant.withValues(alpha: 0.2) : Colors.black12, width: 1),
           ),
           child: Column(
             children: List.generate(routeNodes.length, (index) {
@@ -1204,9 +1258,9 @@ class _PremiumRideDetailSheetState extends State<_PremiumRideDetailSheet> {
               Container(
                 padding: EdgeInsets.all(ui.inset(6)),
                 decoration: BoxDecoration(
-                    color: color.withOpacity(0.15),
+                    color: color.withValues(alpha: 0.15),
                     shape: BoxShape.circle,
-                    border: Border.all(color: color.withOpacity(0.5), width: 1.5)
+                    border: Border.all(color: color.withValues(alpha: 0.5), width: 1.5)
                 ),
                 child: Icon(icon, size: ui.icon(14), color: color),
               ),
@@ -1214,7 +1268,7 @@ class _PremiumRideDetailSheetState extends State<_PremiumRideDetailSheet> {
                 Expanded(
                   child: CustomPaint(
                     size: const Size(2, double.infinity),
-                    painter: _DashedLinePainter(color: color.withOpacity(0.4)),
+                    painter: _DashedLinePainter(color: color.withValues(alpha: 0.4)),
                   ),
                 ),
             ],
@@ -1258,7 +1312,6 @@ class _PremiumRideDetailSheetState extends State<_PremiumRideDetailSheet> {
     final rideType = widget.ride['ride_type']?.toString().toLowerCase() ?? 'standard';
     final isDispatch = rideType == 'dispatch';
     final isSendMe = rideType == 'send_me';
-    final dateStr = widget.ride['created_at']?.toString() ?? '';
 
     String avatarUrl = widget.ride['peer_avatar']?.toString() ?? '';
     final String avatarHeroTag = 'avatar_image_${widget.ride['id']}';
@@ -1274,7 +1327,7 @@ class _PremiumRideDetailSheetState extends State<_PremiumRideDetailSheet> {
           color: isDark ? cs.surface : Colors.white,
           borderRadius: BorderRadius.circular(ui.radius(28)),
           boxShadow: [
-            BoxShadow(color: Colors.black.withOpacity(0.25), blurRadius: 30, offset: const Offset(0, 15)),
+            BoxShadow(color: Colors.black.withValues(alpha: 0.25), blurRadius: 30, offset: const Offset(0, 15)),
           ],
         ),
         child: ClipRRect(
@@ -1291,7 +1344,7 @@ class _PremiumRideDetailSheetState extends State<_PremiumRideDetailSheet> {
                     width: 50,
                     height: 5,
                     decoration: BoxDecoration(
-                        color: isDark ? cs.surfaceVariant : Colors.grey.shade300,
+                        color: isDark ? cs.surfaceContainerHighest : Colors.grey.shade300,
                         borderRadius: BorderRadius.circular(10)
                     ),
                   ),
@@ -1304,18 +1357,18 @@ class _PremiumRideDetailSheetState extends State<_PremiumRideDetailSheet> {
                     width: double.infinity,
                     padding: EdgeInsets.all(ui.inset(16)),
                     decoration: BoxDecoration(
-                      color: Colors.orange.withOpacity(0.1),
+                      color: Colors.orange.withValues(alpha: 0.1),
                       borderRadius: BorderRadius.circular(ui.radius(16)),
-                      border: Border.all(color: Colors.orange.withOpacity(0.3)),
+                      border: Border.all(color: Colors.orange.withValues(alpha: 0.3)),
                     ),
                     child: Column(
                       children: [
                         Text('FINDING A DRIVER', style: TextStyle(fontWeight: FontWeight.w900, color: Colors.orange.shade800, fontSize: ui.font(10), letterSpacing: 0.5)),
                         SizedBox(height: ui.gap(8)),
                         _SmartCountdownTimer(
-                          createdAt: dateStr,
+                          ride: widget.ride,
                           uiScale: ui,
-                          onExpire: widget.onChanged != null ? () => widget.onChanged(true) : () {},
+                          onExpire: () => widget.onChanged(true),
                         ),
                       ],
                     ),
@@ -1338,9 +1391,9 @@ class _PremiumRideDetailSheetState extends State<_PremiumRideDetailSheet> {
                     Container(
                       padding: EdgeInsets.symmetric(horizontal: ui.inset(12), vertical: ui.inset(8)),
                       decoration: BoxDecoration(
-                        color: _statusColor(status).withOpacity(0.15),
+                        color: _statusColor(status).withValues(alpha: 0.15),
                         borderRadius: BorderRadius.circular(ui.radius(10)),
-                        border: Border.all(color: _statusColor(status).withOpacity(0.3), width: 1),
+                        border: Border.all(color: _statusColor(status).withValues(alpha: 0.3), width: 1),
                       ),
                       child: Text(
                         status.toUpperCase().replaceAll('_', ' '),
@@ -1355,9 +1408,9 @@ class _PremiumRideDetailSheetState extends State<_PremiumRideDetailSheet> {
                 Container(
                   padding: EdgeInsets.all(ui.inset(16)),
                   decoration: BoxDecoration(
-                    color: isDark ? cs.surfaceVariant.withOpacity(0.2) : const Color(0xFFF8FAFC),
+                    color: isDark ? cs.surfaceContainerHighest.withValues(alpha: 0.2) : const Color(0xFFF8FAFC),
                     borderRadius: BorderRadius.circular(ui.radius(16)),
-                    border: Border.all(color: isDark ? cs.outlineVariant.withOpacity(0.2) : Colors.black12, width: 1),
+                    border: Border.all(color: isDark ? cs.outlineVariant.withValues(alpha: 0.2) : Colors.black12, width: 1),
                   ),
                   child: Row(
                     children: [
@@ -1369,9 +1422,9 @@ class _PremiumRideDetailSheetState extends State<_PremiumRideDetailSheet> {
                             width: ui.gap(56),
                             height: ui.gap(56),
                             decoration: BoxDecoration(
-                              color: cs.primary.withOpacity(0.1),
+                              color: cs.primary.withValues(alpha: 0.1),
                               borderRadius: BorderRadius.circular(ui.radius(14)),
-                              border: Border.all(color: cs.primary.withOpacity(0.2), width: 1.5),
+                              border: Border.all(color: cs.primary.withValues(alpha: 0.2), width: 1.5),
                             ),
                             child: ClipRRect(
                               borderRadius: BorderRadius.circular(ui.radius(12)),
@@ -1415,9 +1468,9 @@ class _PremiumRideDetailSheetState extends State<_PremiumRideDetailSheet> {
                                     Container(
                                       padding: EdgeInsets.symmetric(horizontal: ui.inset(8), vertical: ui.inset(4)),
                                       decoration: BoxDecoration(
-                                          color: const Color(0xFFFACC15).withOpacity(0.2),
+                                          color: const Color(0xFFFACC15).withValues(alpha: 0.2),
                                           borderRadius: BorderRadius.circular(ui.radius(6)),
-                                          border: Border.all(color: const Color(0xFFFACC15).withOpacity(0.5))
+                                          border: Border.all(color: const Color(0xFFFACC15).withValues(alpha: 0.5))
                                       ),
                                       child: Text(plate.toUpperCase(), style: TextStyle(color: isDark ? const Color(0xFFFACC15) : Colors.black87, fontWeight: FontWeight.w900, fontSize: ui.font(9), letterSpacing: 0.5)),
                                     ),
@@ -1440,7 +1493,7 @@ class _PremiumRideDetailSheetState extends State<_PremiumRideDetailSheet> {
                         Container(
                           width: ui.gap(44),
                           height: ui.gap(44),
-                          decoration: BoxDecoration(color: cs.primary.withOpacity(0.15), shape: BoxShape.circle),
+                          decoration: BoxDecoration(color: cs.primary.withValues(alpha: 0.15), shape: BoxShape.circle),
                           child: IconButton(
                             padding: EdgeInsets.zero,
                             icon: Icon(Icons.phone_rounded, color: cs.primary, size: ui.icon(20)),
@@ -1472,7 +1525,7 @@ class _PremiumRideDetailSheetState extends State<_PremiumRideDetailSheet> {
                         backgroundColor: cs.primary,
                         foregroundColor: Colors.white,
                         elevation: 6,
-                        shadowColor: cs.primary.withOpacity(0.5),
+                        shadowColor: cs.primary.withValues(alpha: 0.5),
                         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(ui.radius(16))),
                       ),
                     ),
@@ -1504,7 +1557,7 @@ class _DetailRow extends StatelessWidget {
         Container(
           padding: EdgeInsets.all(ui.inset(8)),
           decoration: BoxDecoration(
-              color: cs.onSurfaceVariant.withOpacity(0.1),
+              color: cs.onSurfaceVariant.withValues(alpha: 0.1),
               borderRadius: BorderRadius.circular(ui.radius(8))
           ),
           child: Icon(icon, size: ui.icon(18), color: cs.onSurfaceVariant),
@@ -1579,4 +1632,13 @@ class _DashedLinePainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+}
+
+/// Server timestamps: ISO-8601 with offset/`Z` is converted to local time;
+/// naive MySQL `YYYY-MM-DD HH:MM:SS` values are shown as sent (the backend
+/// does not say which zone they are in - see contract notes).
+DateTime _parseServerTime(String raw) {
+  final String v = raw.trim().replaceFirst(' ', 'T');
+  final DateTime d = DateTime.parse(v);
+  return d.isUtc ? d.toLocal() : d;
 }

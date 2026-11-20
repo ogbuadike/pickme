@@ -3,11 +3,11 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:math' as math;
 import 'dart:ui' as ui;
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:local_auth/local_auth.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:http/http.dart' as http;
 
 import '../../themes/app_theme.dart';
 import '../../utility/notification.dart';
@@ -17,10 +17,7 @@ import '../../routes/routes.dart';
 import '../../widgets/inner_background.dart';
 import '../../ui/ui_scale.dart';
 
-// Added imports for correct home routing
-import '../../driver/driver_home_page.dart';
-import '../home_page.dart';
-import '../../screens/main_navigation_screen.dart'; // <-- IMPORT THE NEW SHELL
+import '../../utility/session_manager.dart';
 
 
 class AuthenticationScreen extends StatefulWidget {
@@ -38,7 +35,7 @@ class _AuthenticationScreenState extends State<AuthenticationScreen>
   int _cursor = 0;
 
   // Services/state
-  late ApiClient _api;
+  final ApiClient _api = ApiClient();
   late SharedPreferences _prefs;
   bool _loading = false;
   String? _username;
@@ -66,7 +63,6 @@ class _AuthenticationScreenState extends State<AuthenticationScreen>
   @override
   void initState() {
     super.initState();
-    _api = ApiClient(http.Client(), context);
 
     // Setup animations
     _dotController = AnimationController(
@@ -122,6 +118,7 @@ class _AuthenticationScreenState extends State<AuthenticationScreen>
 
   Future<void> _init() async {
     _prefs = await SharedPreferences.getInstance();
+    _prefsReady = true;
     _username = _prefs.getString('user_name') ?? 'User';
 
     // Check biometrics
@@ -189,7 +186,17 @@ class _AuthenticationScreenState extends State<AuthenticationScreen>
     _evaluateLock();
   }
 
+  bool _prefsReady = false;
+
+  void _goHome() {
+    _resetPin();
+    if (!mounted) return;
+    // Riders and drivers share one shell that resolves the right home.
+    Navigator.of(context).pushNamedAndRemoveUntil(AppRoutes.home, (_) => false);
+  }
+
   Future<void> _submitPin({bool bypass = false}) async {
+    if (!mounted || !_prefsReady || _loading) return;
     if (_locked) {
       _showLockedMessage();
       return;
@@ -199,32 +206,24 @@ class _AuthenticationScreenState extends State<AuthenticationScreen>
     if (!bypass && full.length < _pinLen) return;
 
     final uid = _prefs.getString('user_id') ?? '';
-    if (uid.isEmpty && !bypass) {
-      showToastNotification(
-        context: context,
-        title: 'Session Expired',
-        message: 'Please sign in again',
-        isSuccess: false,
+    if (uid.isEmpty || !await SessionManager.instance.hasValidSession()) {
+      await SessionManager.instance.wipeLocalData();
+      if (!mounted) return;
+      Navigator.of(context).pushNamedAndRemoveUntil(
+        AppRoutes.login,
+        (_) => false,
+        arguments: const {'reason': 'session_expired'},
       );
-      Navigator.pushReplacementNamed(context, '/login');
+      return;
+    }
+
+    if (bypass) {
+      _goHome();
       return;
     }
 
     setState(() => _loading = true);
-
     try {
-      if (bypass) {
-        _resetPin();
-        if (!mounted) return;
-
-        final isDriver = _prefs.getBool('user_is_driver') ?? false;
-        final route = MaterialPageRoute<void>(
-          builder: (_) => isDriver ? const MainNavigationScreen() : const MainNavigationScreen(), //const DriverHomePage() : const HomePage(),
-        );
-        Navigator.of(context).pushAndRemoveUntil(route, (_) => false);
-        return;
-      }
-
       final res = await _api.request(
         ApiConstants.validatePinEndpoint,
         method: 'POST',
@@ -232,29 +231,40 @@ class _AuthenticationScreenState extends State<AuthenticationScreen>
       );
 
       final data = jsonDecode(res.body);
-      if (res.statusCode == 200 && data['error'] == false) {
-        _prefs.setInt('failed_attempts', 0);
+      if (data is Map && data['error'] == false) {
+        await _prefs.setInt('failed_attempts', 0);
+        _goHome();
+      } else {
+        await _onFailedAttempt();
+      }
+    } on ApiException catch (e) {
+      if (e.isAuthError) return; // global handler signs out
+      if (e.isRateLimited || e.statusCode >= 500) {
         _resetPin();
         if (!mounted) return;
-
-        final isDriver = _prefs.getBool('user_is_driver') ?? false;
-        final route = MaterialPageRoute<void>(
-          builder: (_) => isDriver ? const MainNavigationScreen() : const MainNavigationScreen(), //const DriverHomePage() : const HomePage(),
-        );
-        Navigator.of(context).pushAndRemoveUntil(route, (_) => false);
+        showToastNotification(context: context, title: 'Try again', message: e.message, isSuccess: false);
       } else {
-        _onFailedAttempt();
+        await _onFailedAttempt();
       }
-    } catch (e) {
-      _onFailedAttempt();
+    } catch (_) {
+      // Network problems must not count as wrong PIN attempts.
+      _resetPin();
+      if (!mounted) return;
+      showToastNotification(
+        context: context,
+        title: 'Connection Error',
+        message: 'Please check your internet connection',
+        isSuccess: false,
+      );
     } finally {
       if (mounted) setState(() => _loading = false);
     }
   }
 
-  void _onFailedAttempt() async {
+  Future<void> _onFailedAttempt() async {
     final attempts = (_prefs.getInt('failed_attempts') ?? 0) + 1;
     await _prefs.setInt('failed_attempts', attempts);
+    if (!mounted) return;
     _resetPin();
     HapticFeedback.heavyImpact();
 
@@ -277,6 +287,7 @@ class _AuthenticationScreenState extends State<AuthenticationScreen>
   }
 
   void _resetPin() {
+    if (!mounted) return;
     setState(() {
       for (var i = 0; i < _pinLen; i++) _pin[i] = '';
       _cursor = 0;
@@ -305,7 +316,8 @@ class _AuthenticationScreenState extends State<AuthenticationScreen>
         await _submitPin(bypass: true);
       }
     } on PlatformException catch (e) {
-      debugPrint('local_auth error: code=${e.code}, message=${e.message}');
+      if (kDebugMode) debugPrint('local_auth error: code=${e.code}');
+      if (!mounted) return;
       var message = 'Authentication failed';
       switch (e.code) {
         case 'NotEnrolled':

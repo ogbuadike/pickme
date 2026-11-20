@@ -1,48 +1,37 @@
 <?php
 declare(strict_types=1);
 
-require_once 'ride_api_bootstrap.php';
+/**
+ * POST drivers_update_location.php — driver publishes live GPS (session required, activated driver).
+ * driver_id is resolved from the session (a client-sent driver_id must match or 403).
+ * Single-row upsert on the PK of ride_driver_locations; offline drivers are not published.
+ */
 
-// 1. Authorize should validate the token and Ideally return the Driver ID directly.
-// e.g., $driverId = ride_authorize()['user_id'];
-ride_authorize();
+require_once __DIR__ . '/ride_api_bootstrap.php';
+
+pm_require_method('POST');
+$uid = ride_authorize();
 $in = ride_input();
+$driver = pm_require_driver($uid);
+$driverId = (int)$driver['id'];
 
-$driverId = ride_i($in['driver_id'] ?? 0, 0);
-$lat = ride_f($in['lat'] ?? 0, 0.0);
-$lng = ride_f($in['lng'] ?? 0, 0.0);
-$heading = ride_f($in['heading'] ?? 0, 0.0);
+$lat = pm_in_float($in, 'lat', 0.0);
+$lng = pm_in_float($in, 'lng', 0.0);
+$heading = fmod(max(0.0, pm_in_float($in, 'heading', 0.0)), 360.0);
 
-// Note: 0.0, 0.0 is technically Null Island (coast of Africa), but works as an empty check here.
-if ($driverId <= 0 || $lat == 0.0 || $lng == 0.0) {
-    ride_json(['error' => true, 'message' => 'driver_id, lat and lng are required'], 422);
+if (!pm_valid_lat($lat) || !pm_valid_lng($lng)) {
+    pm_error('VALIDATION', 'lat and lng are required', 422);
+}
+if ((int)$driver['is_online'] !== 1) {
+    ride_json(['error' => false, 'message' => 'ignored: driver offline'], 200);
 }
 
-try {
-    // 2. ONE Single Query. Ultra-fast Upsert.
-    // This updates the live map instantly without locking up the database.
-    ride_exec(
-        $dbconn,
-        "INSERT INTO ride_driver_locations (driver_id, lat, lng, heading)
-         VALUES (?, ?, ?, ?)
-         ON DUPLICATE KEY UPDATE
-            lat = VALUES(lat),
-            lng = VALUES(lng),
-            heading = VALUES(heading),
-            updated_at = CURRENT_TIMESTAMP()",
-        'iddd',
-        [$driverId, $lat, $lng, $heading]
-    );
+pm_exec(
+    'INSERT INTO ride_driver_locations (driver_id, lat, lng, heading)
+     VALUES (?, ?, ?, ?)
+     ON DUPLICATE KEY UPDATE lat = VALUES(lat), lng = VALUES(lng), heading = VALUES(heading), updated_at = CURRENT_TIMESTAMP()',
+    'iddd',
+    [$driverId, $lat, $lng, $heading]
+);
 
-    // 3. Return lightweight OK. 
-    // We do not echo the coordinates back. The client just sent them, so it already knows them! 
-    // Saving JSON payload size saves bandwidth and speeds up the response time.
-    ride_json([
-        'error' => false,
-        'message' => 'ok'
-    ], 200);
-
-} catch (Exception $e) {
-    // Fails silently for the client to prevent UI freezing, but you should log $e internally.
-    ride_json(['error' => true, 'message' => 'Failed to update location'], 500);
-}
+ride_json(['error' => false, 'message' => 'ok'], 200);

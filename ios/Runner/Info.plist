@@ -25,47 +25,55 @@
     <key>CFBundleVersion</key>
     <string>$(FLUTTER_BUILD_NUMBER)</string>
 
-    <!-- MASKED FOR SECURITY - PUT YOUR REAL KEY BACK HERE -->
+    <!-- Google Maps iOS key, injected from ios/Flutter/Secrets.xcconfig
+         (git-ignored; see Secrets.xcconfig.example). Read in AppDelegate. -->
     <key>GMSApiKey</key>
-    <string>AIzaSyDIV39Mb5aVJtI3s9VVxaV0annTBjNcVhk</string>
+    <string>$(GOOGLE_MAPS_IOS_API_KEY)</string>
+
+    <!-- Only standard HTTPS/TLS is used (export-compliance exemption). -->
+    <key>ITSAppUsesNonExemptEncryption</key>
+    <false/>
 
     <key>LSApplicationQueriesSchemes</key>
     <array>
       <string>tel</string>
+      <string>mailto</string>
+      <string>https</string>
     </array>
 
     <key>LSRequiresIPhoneOS</key>
     <true/>
 
-    <!-- ENHANCED: Face ID Explanation -->
+    <!-- local_auth: unlock with Face ID instead of typing the PIN. -->
     <key>NSFaceIDUsageDescription</key>
-    <string>Pick Me uses Face ID for fast, secure logins and to quickly authorize wallet transactions.</string>
+    <string>Pick Me uses Face ID so you can unlock the app and approve wallet payments without typing your PIN.</string>
 
-    <!-- STRICT COMPLIANCE: Background Location -->
-    <key>NSLocationAlwaysUsageDescription</key>
-    <string>Pick Me requires background location access so drivers can receive nearby ride requests and track active trips accurately, even when using other apps like Maps or Spotify.</string>
-
-    <!-- STRICT COMPLIANCE: Background Location (Modern iOS) -->
-    <key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
-    <string>Pick Me requires background location access so drivers can receive nearby ride requests and track active trips accurately, even when using other apps like Maps or Spotify.</string>
-
-    <!-- STRICT COMPLIANCE: Foreground Location -->
+    <!-- Riders and drivers: pickup point, nearby drivers, fares. -->
     <key>NSLocationWhenInUseUsageDescription</key>
-    <string>Pick Me requires location access to find nearby drivers, set accurate pickup points, and calculate precise trip fares while the app is open.</string>
+    <string>Pick Me uses your location to set your pickup point, show nearby drivers and calculate trip fares. Drivers' locations are shared with their rider during an active trip.</string>
 
-    <!-- NEW (REQUIRED FOR DISPATCH): Camera Access -->
+    <!-- Required by App Store static checks because the location plugin can
+         request "Always". The app only asks for "While Using"; drivers'
+         active trips continue in the background via UIBackgroundModes. -->
+    <key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+    <string>Drivers: Pick Me keeps sharing your location with your rider while a trip you accepted is in progress, even if you switch to another app. Location is not tracked when you are offline.</string>
+
+    <!-- image_picker: package photo (Send Me / Dispatch) and driver documents. -->
     <key>NSCameraUsageDescription</key>
-    <string>Pick Me needs camera access so you can take photos of packages for delivery verification and update your profile picture.</string>
+    <string>Pick Me uses the camera so you can photograph a package for delivery or capture your driver documents.</string>
 
-    <!-- NEW (REQUIRED FOR DISPATCH): Photo Library Access -->
+    <!-- image_picker: profile picture, package photo, driver documents. -->
     <key>NSPhotoLibraryUsageDescription</key>
-    <string>Pick Me needs photo library access so you can select images of packages or upload a profile picture from your gallery.</string>
+    <string>Pick Me lets you choose a photo for your profile picture, a package for delivery, or your driver documents.</string>
 
     <key>UIApplicationSupportsIndirectInputEvents</key>
     <true/>
+    <!-- location: drivers' active-trip tracking only.
+         remote-notification: FCM data messages (trip status updates). -->
     <key>UIBackgroundModes</key>
     <array>
        <string>location</string>
+       <string>remote-notification</string>
     </array>
     <key>UILaunchStoryboardName</key>
     <string>LaunchScreen</string>

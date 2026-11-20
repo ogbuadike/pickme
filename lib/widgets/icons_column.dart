@@ -29,10 +29,10 @@ class IconsColumn extends StatelessWidget {
             height: 28,
             margin: const EdgeInsets.only(top: 14),
             decoration: BoxDecoration(
-              color: p.type.color.withOpacity(bgOpacity),
+              color: p.type.color.withValues(alpha: bgOpacity),
               shape: BoxShape.circle,
               border: Border.all(
-                color: p.type.color.withOpacity(isDark ? 0.8 : 1.0),
+                color: p.type.color.withValues(alpha: isDark ? 0.8 : 1.0),
                 width: 2,
               ),
             ),
@@ -45,7 +45,7 @@ class IconsColumn extends StatelessWidget {
             margin: const EdgeInsets.symmetric(vertical: 4),
             decoration: BoxDecoration(
               // Uses a sleek dark outline in Dark Mode instead of bright hardcoded grey
-              color: isDark ? cs.outline.withOpacity(0.5) : const Color(0xFFE0E0E0),
+              color: isDark ? cs.outline.withValues(alpha: 0.5) : const Color(0xFFE0E0E0),
               borderRadius: BorderRadius.circular(1),
             ),
           );

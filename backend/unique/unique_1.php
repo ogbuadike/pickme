@@ -1,134 +1,87 @@
 <?php
+declare(strict_types=1);
 
+/**
+ * Environment loader.
+ *
+ * Secrets live in "<DOCUMENT_ROOT>/.required/.env" (one KEY=VALUE per line,
+ * '#' comments allowed). The file is parsed once per request and cached.
+ * If DOCUMENT_ROOT is unavailable (CLI / cron) PICKME_ENV_FILE may point at
+ * the file explicitly. Real process environment variables are used as a
+ * fallback so containerised deployments also work.
+ */
 
-/*
-function env_data($͏_) {
-    // Build "file_get_contents" by concatenating hex escapes.
-    $__ = "\x66" . "\x69\x6c" . "\x65" . "\x5f" . "\x67\x65\x74\x5f\x63\x6f\x6e\x74\x65\x6e\x74\x73";
-    
-    // Decode the file path suffix (this decodes to "/.required/.env")
-    $ϟ = base64_decode('Ly5yZXF1aXJlZC8uZW52');
-    
-    // Read the contents of the .env file by concatenating DOCUMENT_ROOT and the decoded suffix.
-    $͟_ = $__(
-        $_SERVER[("\x44\x4f\x43\x55\x4d\x45\x4e\x54\x5f\x52\x4f\x4f\x54")] . $ϟ
-    );
-    
-    // Obfuscate by calling explode() via call_user_func.
-    // The delimiter is produced by a callback that returns a computed character.
-    $̿_ = call_user_func(
-        (function(){ return explode; }),
-        (function($̉_){ return $̉_ ? (chr(010+2) . chr(0x4B-3)) : null; })(1),
-        preg_replace_callback(
-            '/./',
-            function($͌_){ return chr(ord($͌_[0]) ^ 0x0F); },
-            base64_decode('FhUYBA==')
-        )
-    );
-    
-    // Split the file content into lines.
-    $̿_ = explode(
-        chr(0x50-40),
-        str_replace(["\r", "\n", "\t", "\0"], (('') . chr(010*1.2)), $͟_)
-    );
-    
-    $ͯ_ = '';
-    // Process each line.
-    foreach ($̿_ as $̐_) {
-        // Skip lines that are empty or start with '#' (using an obfuscated callback).
-        if (
-            (function($ͥ_){
-                return !$ͥ_ || (strpos(ltrim($ͥ_), call_user_func((function(){ return '#'; }))) === 0);
-            })(call_user_func('trim', $̐_))
-        )
-            continue;
-        
-        // Split the line on the first '=' using preg_split
-        // The '=' delimiter is decoded from Base64.
-        $ͫ_ = preg_split(
-            '/' . base64_decode('PQ==') . '/',
-            $̐_,
-            2,
-            PREG_SPLIT_NO_EMPTY
-        );
-        if (($ͦ_ = count($ͫ_)) !== 2 || $ͦ_ >> 1 !== 1)
-            continue;
-        
-        // Destructure the key/value pair (both parts are trimmed).
-        list($ͨ_, $ͩ_) = [
-            trim($ͫ_[0]),
-            trim(implode(('' . chr(0144-133)), array_slice($ͫ_, 1)))
-        ];
-        
-        // If the key matches the input parameter, process the value with extra reversals.
-        $ͯ_ = ($ͨ_ == $͏_)
-            ? strrev(
-                  str_rot13(
-                      str_replace(['',''], '', base64_decode(strrev('dlYzVjRwRlY=')))
-                  )
-              ) . $ͩ_
-            : $ͯ_;
-    }
-    
-    // Return the extracted value (or an empty string if not found),
-    // after stripping any stray carriage returns.
-    return $ͯ_ = @$ͯ_ ?: '';
+if (isset($_SERVER['SCRIPT_FILENAME']) && realpath((string)$_SERVER['SCRIPT_FILENAME']) === __FILE__) {
+    http_response_code(404);
+    exit;
 }
-*/
 
-
-
-
-
-
-
-
-function env_data($evn_name){
-    
-    $env = file_get_contents($_SERVER['DOCUMENT_ROOT'] . "/.required/.env");
-
-    // Split the content of the .env file by lines
-    $lines = explode("\n", $env);
-    
-    $data = '';
-    // Loop through each line
-    foreach ($lines as $line) {
-        // Skip empty lines or lines that start with a #
-        if (empty($line) || strpos($line, '#') === 0) {
-            continue;
+if (!function_exists('env_data')) {
+    function pm_env_file_path(): string
+    {
+        $explicit = getenv('PICKME_ENV_FILE');
+        if (is_string($explicit) && $explicit !== '') {
+            return $explicit;
         }
-        
-        // Split the line by the '=' sign
-        $parts = explode('=', $line, 2);
-        
-        // If the line does not contain '=', continue to the next line
-        if (count($parts) !== 2) {
-            continue;
+        $root = (string)($_SERVER['DOCUMENT_ROOT'] ?? '');
+        if ($root === '') {
+            // backend/unique -> backend -> (document root when deployed as-is)
+            $root = dirname(__DIR__);
         }
-        
-        // Trim whitespace from the variable name and value
-        $variable = trim($parts[0]);
-        $value = trim($parts[1]);
-        
-        if($variable == $evn_name){
-            
-            $data = $value;
-        }
-        // Output the variable name and its corresponding value
-        //echo "Variable: $variable, Value: $value <br>";
+        return rtrim($root, '/') . '/.required/.env';
     }
-    
-    return $data;
-}     
 
+    function pm_env_all(): array
+    {
+        static $cache = null;
+        if ($cache !== null) {
+            return $cache;
+        }
+        $cache = [];
+        $path = pm_env_file_path();
+        $raw = is_readable($path) ? (string)@file_get_contents($path) : '';
+        foreach (preg_split('/\r\n|\r|\n/', $raw) ?: [] as $line) {
+            $line = trim($line);
+            if ($line === '' || $line[0] === '#') {
+                continue;
+            }
+            if (strncmp($line, 'export ', 7) === 0) {
+                $line = trim(substr($line, 7));
+            }
+            $parts = explode('=', $line, 2);
+            if (count($parts) !== 2) {
+                continue;
+            }
+            $key = trim($parts[0]);
+            $value = trim($parts[1]);
+            $len = strlen($value);
+            if ($len >= 2 && (($value[0] === '"' && $value[$len - 1] === '"') || ($value[0] === "'" && $value[$len - 1] === "'"))) {
+                $value = substr($value, 1, -1);
+            }
+            if ($key !== '') {
+                $cache[$key] = $value; // last definition wins (matches legacy behaviour)
+            }
+        }
+        return $cache;
+    }
+
+    /** Returns the value of an .env key, or '' when missing. */
+    function env_data($evn_name): string
+    {
+        $all = pm_env_all();
+        $key = (string)$evn_name;
+        if (array_key_exists($key, $all)) {
+            return (string)$all[$key];
+        }
+        $fromProcess = getenv($key);
+        return is_string($fromProcess) ? $fromProcess : '';
+    }
+}
 
 $db_user = env_data('DATAUSER');
 $db_name = env_data('DATANAME');
 $db_pass = env_data('DATAPASS');
 
-$Host = env_data('HOST');
-$Email= env_data('EMAIL');
-$Passw= env_data('EMAIL_PASSWORD');
-
-
-?>
+$Host  = env_data('HOST');
+$Email = env_data('EMAIL');
+$Passw = env_data('EMAIL_PASSWORD');

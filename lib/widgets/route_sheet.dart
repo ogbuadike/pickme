@@ -1,6 +1,5 @@
 // lib/widgets/route_sheet.dart
 import 'dart:math' as math;
-import 'dart:ui' show ImageFilter;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -152,25 +151,23 @@ class _RouteSheetState extends State<RouteSheet>
             borderRadius: BorderRadius.vertical(
               top: Radius.circular(ui.radius(ui.landscape ? 18 : 24)),
             ),
-            child: BackdropFilter(
-              filter: ImageFilter.blur(
-                sigmaX: ui.reduceFx ? 8 : 16,
-                sigmaY: ui.reduceFx ? 8 : 16,
-              ),
-              child: DecoratedBox(
+            // No BackdropFilter: the surface is ~96% opaque so a blur of the
+            // GoogleMap platform view behind it was invisible yet re-rendered
+            // the map texture every frame (major jank source on Android).
+            child: DecoratedBox(
                 decoration: BoxDecoration(
                   color: isDark
-                      ? cs.surface.withOpacity(0.95)
-                      : Colors.white.withOpacity(0.97),
+                      ? cs.surface.withValues(alpha: 0.95)
+                      : Colors.white.withValues(alpha: 0.97),
                   border: Border(
                     top: BorderSide(
-                      color: isDark ? cs.outline.withOpacity(0.5) : AppColors.mintBgLight.withOpacity(0.30),
+                      color: isDark ? cs.outline.withValues(alpha: 0.5) : AppColors.mintBgLight.withValues(alpha: 0.30),
                       width: 1,
                     ),
                   ),
                   boxShadow: [
                     BoxShadow(
-                      color: Colors.black.withOpacity(isDark ? 0.40 : 0.10),
+                      color: Colors.black.withValues(alpha: isDark ? 0.40 : 0.10),
                       blurRadius: ui.reduceFx ? 12 : 22,
                       offset: const Offset(0, -8),
                     ),
@@ -228,7 +225,6 @@ class _RouteSheetState extends State<RouteSheet>
                   ),
                 ),
               ),
-            ),
           ),
         ),
       ),
@@ -480,7 +476,7 @@ class _SheetHandle extends StatelessWidget {
         width: ui.landscape ? 44 : 50,
         height: 4,
         decoration: BoxDecoration(
-          color: isDark ? cs.onSurfaceVariant.withOpacity(0.5) : AppColors.textSecondary.withOpacity(0.22),
+          color: isDark ? cs.onSurfaceVariant.withValues(alpha: 0.5) : AppColors.textSecondary.withValues(alpha: 0.22),
           borderRadius: BorderRadius.circular(999),
         ),
       ),
@@ -534,7 +530,7 @@ class _TapableTileState extends State<_TapableTile> {
       button: true,
       label: widget.label,
       child: Material(
-        color: isDark ? cs.surfaceVariant.withOpacity(0.5) : Theme.of(context).cardColor,
+        color: isDark ? cs.surfaceContainerHighest.withValues(alpha: 0.5) : Theme.of(context).cardColor,
         borderRadius: BorderRadius.circular(ui.radius(16)),
         child: InkWell(
           borderRadius: BorderRadius.circular(ui.radius(16)),
@@ -549,7 +545,7 @@ class _TapableTileState extends State<_TapableTile> {
               decoration: BoxDecoration(
                 borderRadius: BorderRadius.circular(ui.radius(16)),
                 border: Border.all(
-                  color: isDark ? cs.outline : AppColors.mintBgLight.withOpacity(0.35),
+                  color: isDark ? cs.outline : AppColors.mintBgLight.withValues(alpha: 0.35),
                   width: 1.0,
                 ),
               ),
@@ -558,7 +554,7 @@ class _TapableTileState extends State<_TapableTile> {
                   Icon(
                     widget.icon,
                     size: ui.icon(20),
-                    color: isDark ? cs.primary : AppColors.textPrimary.withOpacity(0.92),
+                    color: isDark ? cs.primary : AppColors.textPrimary.withValues(alpha: 0.92),
                   ),
                   SizedBox(width: ui.gap(10)),
                   Expanded(
@@ -570,7 +566,7 @@ class _TapableTileState extends State<_TapableTile> {
                         fontSize: ui.font(14.5),
                         fontWeight: FontWeight.w800,
                         letterSpacing: -0.15,
-                        color: isDark ? cs.onSurface : AppColors.textPrimary.withOpacity(0.92),
+                        color: isDark ? cs.onSurface : AppColors.textPrimary.withValues(alpha: 0.92),
                       ),
                     ),
                   ),
@@ -582,7 +578,7 @@ class _TapableTileState extends State<_TapableTile> {
                         vertical: ui.inset(4),
                       ),
                       decoration: BoxDecoration(
-                        color: (isDark ? cs.primary : AppColors.primary).withOpacity(0.15),
+                        color: (isDark ? cs.primary : AppColors.primary).withValues(alpha: 0.15),
                         borderRadius: BorderRadius.circular(ui.radius(6)),
                       ),
                       child: Text(
@@ -738,7 +734,7 @@ class _RecentsHeader extends StatelessWidget {
           Container(
             padding: EdgeInsets.all(ui.gap(5)),
             decoration: BoxDecoration(
-              color: (isDark ? cs.primary : AppColors.primary).withOpacity(0.15),
+              color: (isDark ? cs.primary : AppColors.primary).withValues(alpha: 0.15),
               borderRadius: BorderRadius.circular(ui.radius(8)),
             ),
             child: Icon(
@@ -803,7 +799,7 @@ class _RecentTile extends StatelessWidget {
             decoration: BoxDecoration(
               borderRadius: BorderRadius.circular(ui.radius(14)),
               border: Border.all(
-                color: isDark ? cs.outline : AppColors.mintBgLight.withOpacity(0.28),
+                color: isDark ? cs.outline : AppColors.mintBgLight.withValues(alpha: 0.28),
                 width: 1.2,
               ),
             ),
@@ -815,7 +811,7 @@ class _RecentTile extends StatelessWidget {
                   alignment: Alignment.center,
                   decoration: BoxDecoration(
                     borderRadius: BorderRadius.circular(ui.radius(10)),
-                    color: isDark ? cs.surfaceVariant : AppColors.mintBgLight.withOpacity(0.15),
+                    color: isDark ? cs.surfaceContainerHighest : AppColors.mintBgLight.withValues(alpha: 0.15),
                   ),
                   child: Icon(
                     Icons.location_on_rounded,
@@ -849,7 +845,7 @@ class _RecentTile extends StatelessWidget {
                           style: TextStyle(
                             fontSize: ui.font(11.5), // Larger secondary font
                             fontWeight: FontWeight.w600,
-                            color: isDark ? cs.onSurfaceVariant : AppColors.textSecondary.withOpacity(0.80),
+                            color: isDark ? cs.onSurfaceVariant : AppColors.textSecondary.withValues(alpha: 0.80),
                           ),
                         ),
                       ],
@@ -860,7 +856,7 @@ class _RecentTile extends StatelessWidget {
                 Icon(
                   Icons.chevron_right_rounded,
                   size: ui.icon(18),
-                  color: isDark ? cs.onSurfaceVariant : AppColors.textSecondary.withOpacity(0.52),
+                  color: isDark ? cs.onSurfaceVariant : AppColors.textSecondary.withValues(alpha: 0.52),
                 ),
               ],
             ),
@@ -879,7 +875,7 @@ class _MicroRecentTile extends StatelessWidget {
   final VoidCallback onTap;
 
   const _MicroRecentTile({
-    super.key, required this.ui, required this.item, required this.isDark,
+    required this.ui, required this.item, required this.isDark,
     required this.cs, required this.onTap,
   });
 
@@ -899,7 +895,7 @@ class _MicroRecentTile extends StatelessWidget {
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(ui.radius(12)),
             border: Border.all(
-              color: isDark ? cs.outline : AppColors.mintBgLight.withOpacity(0.20),
+              color: isDark ? cs.outline : AppColors.mintBgLight.withValues(alpha: 0.20),
               width: 1,
             ),
           ),
@@ -956,12 +952,12 @@ class _Empty extends StatelessWidget {
               padding: EdgeInsets.all(ui.inset(12)),
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
-                color: (isDark ? cs.primary : AppColors.primary).withOpacity(0.12),
+                color: (isDark ? cs.primary : AppColors.primary).withValues(alpha: 0.12),
               ),
               child: Icon(
                 Icons.explore_off_rounded,
                 size: ui.icon(28),
-                color: (isDark ? cs.primary : AppColors.primary).withOpacity(0.90),
+                color: (isDark ? cs.primary : AppColors.primary).withValues(alpha: 0.90),
               ),
             ),
             SizedBox(height: ui.gap(12)),
@@ -981,7 +977,7 @@ class _Empty extends StatelessWidget {
               style: TextStyle(
                 fontSize: ui.font(11.5),
                 height: 1.4,
-                color: isDark ? cs.onSurfaceVariant : AppColors.textSecondary.withOpacity(0.80),
+                color: isDark ? cs.onSurfaceVariant : AppColors.textSecondary.withValues(alpha: 0.80),
               ),
             ),
             if (hasTrailing) ...[

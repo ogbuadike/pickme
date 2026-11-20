@@ -1,266 +1,162 @@
 <?php
-header('Content-Type: application/json');
+declare(strict_types=1);
 
-require_once '../unique/unique_con.php'; 
-require_once 'auth.php';
-require_once '../unique/unique_code.php';
-require_once '../unique/unique_gtm.php';
-require_once '../unique/unique_func.php';
-require_once 'activities.php';
+/**
+ * POST user_info.php — the session user's profile (session required; `user` param must match or 403).
+ *
+ * No action                      → profile (only the session user's data; never hashes)
+ * action=update_emergency_contact  emergency_contact
+ * action=update_password           old_password, new_password (revokes the user's other sessions)
+ * action=update_transaction_code   old_transaction_code, new_transaction_code (4–6 digits, rate limited)
+ * action=update_profile_picture    multipart profile_picture (re-encoded to WebP)
+ * action=delete_account            password (same as account_delete.php)
+ */
 
-function sanitizeInput($input) {
-    return trim(htmlspecialchars((string)$input, ENT_QUOTES, 'UTF-8'));
+require_once __DIR__ . '/security.php';
+require_once __DIR__ . '/activities.php';
+
+$uid = pm_require_session(['user' => []]);
+$in = pm_input();
+$action = pm_in_str($in, 'action', 40);
+
+function ui_fail(string $message, string $code = 'VALIDATION'): void
+{
+    pm_error($code, $message, 200, ['error_msg' => $message]);
 }
 
-$headers = function_exists('apache_request_headers') ? apache_request_headers() : [];
-$token = isset($headers['Authorization']) ? $headers['Authorization'] : '';
-
-// Check authorization
-$authorized = checkAuthorization($token);
-if (!$authorized) {
-    http_response_code(401);
-    echo json_encode([
-        'error' => true,
-        'message' => 'Unauthorized access',
-        'data' => null
-    ]);
-    exit();
+if ($action !== '') {
+    pm_require_method('POST');
 }
 
-$user_ID = isset($_POST['user']) ? sanitizeInput($_POST['user']) : '';
+switch ($action) {
+    case '':
+        break;
 
-$response = array();
-$response["error"] = false;
-$response["user"] = array();
+    case 'delete_account':
+        pm_json(pm_account_delete($uid, pm_in_raw($in, 'password', 1024)));
+        break;
 
-if ($user_ID != '') {
-    $user_ID = mysqli_real_escape_string($dbconn, $user_ID);
-
-    if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
-        $action = sanitizeInput($_POST['action']);
-
-        if ($action === 'delete_account') {
-            mysqli_begin_transaction($dbconn);
-            try {
-                mysqli_query($dbconn, "DELETE FROM ride_driver_locations WHERE driver_id IN (SELECT id FROM ride_drivers WHERE phone = (SELECT phone FROM unique_user_table WHERE u_uid='$user_ID'))");
-                mysqli_query($dbconn, "DELETE FROM ride_drivers WHERE phone = (SELECT phone FROM unique_user_table WHERE u_uid='$user_ID')");
-                mysqli_query($dbconn, "DELETE FROM ride_driver_onboarding WHERE user_uid='$user_ID'");
-                
-                $del_q = "DELETE FROM unique_user_table WHERE u_uid = '$user_ID'";
-                if (!mysqli_query($dbconn, $del_q)) {
-                    throw new Exception("Failed to delete core user record.");
-                }
-
-                mysqli_commit($dbconn);
-                $response["error"] = false;
-                $response["message"] = "Account completely deleted.";
-            } catch (Exception $e) {
-                mysqli_rollback($dbconn);
-                $response["error"] = true;
-                $response["message"] = "Failed to delete account: " . $e->getMessage();
-            }
+    case 'update_emergency_contact':
+        $emergency = pm_in_str($in, 'emergency_contact', 100);
+        if ($emergency !== '' && pm_normalize_phone($emergency) === '') {
+            ui_fail('Please enter a valid phone number for your emergency contact.');
         }
-        
-        // ---> NEW: DEDICATED EMERGENCY CONTACT HANDLER <---
-        elseif ($action === 'update_emergency_contact') {
-            $emergency = isset($_POST['emergency_contact']) ? sanitizeInput($_POST['emergency_contact']) : '';
-            
-            // Ensure column exists
-            mysqli_query($dbconn, "ALTER TABLE unique_user_table ADD COLUMN IF NOT EXISTS emergency_contact VARCHAR(100) DEFAULT ''");
-            
-            $update_query = "UPDATE unique_user_table SET emergency_contact = '$emergency' WHERE u_uid = '$user_ID'";
-            if (mysqli_query($dbconn, $update_query)) {
-                $response["error"] = false;
-                $response["message"] = "Emergency contact updated successfully!";
-            } else {
-                $response["error"] = true;
-                $response["message"] = "Failed to update emergency contact.";
-            }
+        pm_exec('UPDATE unique_user_table SET emergency_contact = ? WHERE u_uid = ? LIMIT 1', 'ss', [$emergency !== '' ? pm_normalize_phone($emergency) : '', $uid]);
+        pm_json(['error' => false, 'message' => 'Emergency contact updated successfully!']);
+        break;
+
+    case 'update_password':
+        pm_rate_limit('pwd_change', $uid, 5, 900, 'Too many attempts. Please wait 15 minutes.');
+        $old = pm_in_raw($in, 'old_password', 1024);
+        $new = pm_in_raw($in, 'new_password', 1024);
+        if (strlen($new) < 8 || strlen($new) > 128) {
+            ui_fail('New password must be between 8 and 128 characters.');
         }
-        
-        elseif ($action === 'update_password') {
-            function hashpass($code) {
-                return hash('sha256', $code);
-            }
-        
-            $oldPasswordInput = $_POST['old_password'] ?? null;
-            $oldPassword = $oldPasswordInput !== null ? sanitizeInput(hashpass($oldPasswordInput)) : '';
-        
-            $newPasswordInput = $_POST['new_password'] ?? null;
-            $newPassword = $newPasswordInput !== null ? sanitizeInput(hashpass($newPasswordInput)) : '';
-        
-            $user_query = "SELECT pass_code FROM unique_user_table WHERE u_uid = '$user_ID'";
-            $user_result = mysqli_query($dbconn, $user_query);
-            $user_data = mysqli_fetch_assoc($user_result);
-        
-            if ($oldPassword === $user_data['pass_code']) {
-                $update_query = "UPDATE unique_user_table SET pass_code = '$newPassword' WHERE u_uid = '$user_ID'";
-        
-                if (mysqli_query($dbconn, $update_query)) {
-                    $response["error"] = false;
-                    $response["message"] = "Password updated successfully!";
-                } else {
-                    $response["error"] = true;
-                    $response["message"] = "Failed to update password.";
-                }
-            } else {
-                $response["error"] = true;
-                $response["message"] = "Old password is incorrect.";
-            }
-        } 
-        
-        elseif ($action === 'update_transaction_code') {
-            $oldCode = isset($_POST['old_transaction_code']) ? sanitizeInput($_POST['old_transaction_code']) : '';
-            $newCode = isset($_POST['new_transaction_code']) ? sanitizeInput($_POST['new_transaction_code']) : '';
-        
-            $user_query = "SELECT access FROM unique_user_table WHERE u_uid = '$user_ID'";
-            $user_result = mysqli_query($dbconn, $user_query);
-            $user_data = mysqli_fetch_assoc($user_result);
-        
-            if (password_verify($oldCode, $user_data['access'])) {
-                $hashedPin = password_hash($newCode, PASSWORD_BCRYPT);
-                $hashedPinEscaped = mysqli_real_escape_string($dbconn, $hashedPin);
-                
-                $update_query = "UPDATE unique_user_table SET access = '$hashedPinEscaped' WHERE u_uid = '$user_ID'";
-        
-                if (mysqli_query($dbconn, $update_query)) {
-                    $response["error"] = false;
-                    $response["message"] = "Transaction code updated successfully!";
-                } else {
-                    $response["error"] = true;
-                    $response["message"] = "Failed to update transaction code.";
-                }
-            } else {
-                $response["error"] = true;
-                $response["message"] = "Old transaction code is incorrect.";
-            }
-        } 
-        
-        elseif ($action === 'update_profile_picture') {
-             if (isset($_FILES['profile_picture'])) {
-                if ($_FILES["profile_picture"]["size"] > 5 * 1024 * 1024) {
-                    $response["error"] = true;
-                    $response["message"] = "Image size should be less than 5MB.";
-                } else {
-                    $uploadResult = image_upload(
-                        [$_FILES['profile_picture']['name']],   
-                        [$_FILES['profile_picture']['tmp_name']], 
-                        'img/users/',                            
-                        90                                       
-                    );
-            
-                    if (is_numeric($uploadResult)) {
-                        $response["error"] = true;
-                        $response["message"] = $uploadResult == 1 
-                            ? "Image dimensions are too small" 
-                            : "Invalid file format";
-                    } else {
-                        $publicBaseUrl = 'https://realpickme.com/endpoint/img/users/';
-                        $image_link = $publicBaseUrl . $uploadResult;
-            
-                        $update_query = "UPDATE unique_user_table SET b_logo = '$image_link' WHERE u_uid = '$user_ID'";
-                        
-                        if (mysqli_query($dbconn, $update_query)) {
-                            $response["error"] = false;
-                            $response["message"] = "Profile picture updated successfully!";
-                            $response["user_logo"] = $image_link;
-                        } else {
-                            $response["error"] = true;
-                            $response["message"] = "Failed to update profile picture in the database.";
-                        }
-                    }
-                }
-            } else {
-                $response["error"] = true;
-                $response["message"] = "No profile picture uploaded.";
-            }
+        $row = pm_q_one('SELECT pass_code FROM unique_user_table WHERE u_uid = ? LIMIT 1', 's', [$uid]);
+        [$ok] = pm_password_check($old, (string)($row['pass_code'] ?? ''));
+        if (!$ok) {
+            ui_fail('Old password is incorrect.');
         }
-        
-    } else {
-        // GET USER INFO
-        
-        mysqli_query($dbconn, "ALTER TABLE unique_user_table ADD COLUMN IF NOT EXISTS emergency_contact VARCHAR(100) DEFAULT ''");
-        
-        $user_info = "SELECT * FROM unique_user_table WHERE u_uid='$user_ID' ";
-        $user_info_q = mysqli_query($dbconn, $user_info);
-        $user_info_f = mysqli_fetch_assoc($user_info_q);
-        $user_info_n = mysqli_num_rows($user_info_q);
+        pm_tx(function () use ($uid, $new) {
+            pm_exec('UPDATE unique_user_table SET pass_code = ?, reset = 0 WHERE u_uid = ? LIMIT 1', 'ss', [pm_password_hash($new), $uid]);
+            pm_session_revoke_all($uid, 'password_change', (int)pm_current_session()['id']);
+        });
+        pm_rate_limit_clear('pwd_change', $uid);
+        pm_activity($uid, 'Password changed');
+        pm_json(['error' => false, 'message' => 'Password updated successfully!']);
+        break;
 
-        // Fetch driver stats if they are a driver
-        $driver_stats = "SELECT completed_trips FROM ride_drivers WHERE phone = '" . mysqli_real_escape_string($dbconn, $user_info_f['phone'] ?? '') . "' LIMIT 1";
-        $driver_q = mysqli_query($dbconn, $driver_stats);
-        $driver_f = mysqli_fetch_assoc($driver_q);
-        $total_trips = $driver_f ? (int)$driver_f['completed_trips'] : 0;
-
-        $last_tran = "SELECT * FROM unique_account_table WHERE user_uid='$user_ID' ORDER BY id DESC LIMIT 1";
-        $last_tran_q = mysqli_query($dbconn, $last_tran);
-        $last_tran_f = mysqli_fetch_assoc($last_tran_q);
-
-        $user_last_type = '';
-        $user_last_tran = '0.00';
-
-        if (isset($last_tran_f['amount']) && is_numeric($last_tran_f['amount'])) {
-            $user_last_tran = number_format((float) $last_tran_f['amount'], 2, '.', '');
+    case 'update_transaction_code':
+        pm_rate_limit('pin_change', $uid, 5, 900, 'Too many attempts. Please wait 15 minutes.');
+        $oldCode = pm_in_raw($in, 'old_transaction_code', 16);
+        $newCode = pm_in_raw($in, 'new_transaction_code', 16);
+        if (!pm_valid_pin($newCode)) {
+            ui_fail('Transaction code must be 4 to 6 digits.');
         }
-
-        if (($last_tran_f['type'] ?? 'minus') === 'minus') {
-            $user_last_type = '-';
-        } elseif (($last_tran_f['type'] ?? 'plus') === 'plus') {
-            $user_last_type = '+';
+        $row = pm_q_one('SELECT access FROM unique_user_table WHERE u_uid = ? LIMIT 1', 's', [$uid]);
+        [$ok] = pm_password_check($oldCode, (string)($row['access'] ?? ''));
+        if (!$ok) {
+            ui_fail('Old transaction code is incorrect.');
         }
+        pm_exec('UPDATE unique_user_table SET access = ? WHERE u_uid = ? LIMIT 1', 'ss', [pm_password_hash($newCode), $uid]);
+        pm_rate_limit_clear('pin_change', $uid);
+        pm_activity($uid, 'Transaction code changed');
+        pm_json(['error' => false, 'message' => 'Transaction code updated successfully!']);
+        break;
 
-        $user_last_tran = $user_last_type . $user_last_tran;
-        if ($user_last_tran === '' || $user_last_tran === '0.00' || $user_last_tran === '-0.00') {
-            $user_last_tran = '+0.00';
+    case 'update_profile_picture':
+        pm_rate_limit('avatar_upload', $uid, 10, 3600);
+        $old = pm_q_one('SELECT b_logo FROM unique_user_table WHERE u_uid = ? LIMIT 1', 's', [$uid]);
+        try {
+            $url = pm_store_image('profile_picture', 'img/users/' . pm_uid_dir($uid), true, 5 * 1024 * 1024, 1024, 0);
+        } catch (PmHttpError $e) {
+            ui_fail($e->getMessage());
         }
-
-        // Fetch App Settings (Privacy Policy)
-        $privacy_url = "https://realpickme.com/endpoint/privacy"; // Default Fallback
-        $app_settings_q = mysqli_query($dbconn, "SELECT setting_value FROM app_settings WHERE setting_key = 'privacy_policy_url' LIMIT 1");
-        if ($app_settings_q && mysqli_num_rows($app_settings_q) > 0) {
-            $setting_f = mysqli_fetch_assoc($app_settings_q);
-            $privacy_url = $setting_f['setting_value'];
+        pm_exec('UPDATE unique_user_table SET b_logo = ? WHERE u_uid = ? LIMIT 1', 'ss', [$url, $uid]);
+        if ($old && $old['b_logo'] !== $url) {
+            pm_delete_stored_file((string)$old['b_logo']);
         }
+        pm_json(['error' => false, 'message' => 'Profile picture updated successfully!', 'user_logo' => $url]);
+        break;
 
-        if ($user_info_n > 0) {
-            http_response_code(200);
-
-            $userData = array(
-                'user_fname' => $user_info_f['fname'] ?? '',
-                'user_bal' => $user_info_f['bal'] ?? '0.00',
-                'user_lname' => $user_info_f['lname'] ?? '',
-                'user_oname' => $user_info_f['oname'] ?? '',
-                'user_email' => $user_info_f['email'] ?? '',
-                'user_phone' => $user_info_f['phone'] ?? '',
-                'user_base_location' => $user_info_f['base_location'] ?? '',
-                'user_last_location' => $user_info_f['last_location'] ?? '',
-                'user_country' => $user_info_f['country'] ?? '',
-                'user_logo' => $user_info_f['b_logo'] ?? '',
-                'user_date_registered' => $user_info_f['datetime'] ?? '',
-                'emergency_contact' => $user_info_f['emergency_contact'] ?? '',
-                'user_approved_user' => $user_info_f['visibility'] ?? '',
-                'user_last_tran' => $user_last_tran,
-                'user_currency' => "₦",
-                'user_bank' => $user_info_f['Bank_Name'],
-                'user_account_name' => $user_info_f['Account_Name'],
-                'user_account_number' => $user_info_f['Account_Number'],
-                'user_mode' => $user_info_f['user_mode'] ?? '',
-                'total_trips' => $total_trips 
-            );
-
-            $response["error"] = false;
-            $response["user"] = $userData;
-            $response["app_settings"] = [
-                'privacy_policy_url' => $privacy_url
-            ];
-        } else {
-            $response["error"] = true;
-            $response["error_msg"] = "Invalid user ID";
-        }
-    }
-} else {
-    $response["error"] = true;
-    $response["error_msg"] = "User ID is required";
+    default:
+        ui_fail('Invalid action');
 }
 
-echo json_encode($response);
+// ---------------------------------------------------------------------------
+// GET USER INFO (session user only)
+// ---------------------------------------------------------------------------
+$user = pm_q_one(
+    'SELECT fname, lname, oname, email, phone, bal, base_location, last_location, country, b_logo, datetime,
+            emergency_contact, visibility, Bank_Name, Account_Name, Account_Number, user_mode
+     FROM unique_user_table WHERE u_uid = ? LIMIT 1',
+    's',
+    [$uid]
+);
+if ($user === null) {
+    pm_error('NOT_FOUND', 'Invalid user ID', 200, ['error_msg' => 'Invalid user ID', 'user' => []]);
+}
+
+$driver = pm_driver_for_user($uid);
+$totalTrips = ($driver !== null && $driver['id'] !== null) ? (int)$driver['completed_trips'] : 0;
+
+$last = pm_q_one('SELECT amount, type FROM unique_account_table WHERE user_uid = ? ORDER BY id DESC LIMIT 1', 's', [$uid]);
+$lastTran = '+0.00';
+if ($last && is_numeric($last['amount'])) {
+    $sign = ($last['type'] ?? 'minus') === 'plus' ? '+' : '-';
+    $amt = number_format((float)$last['amount'], 2, '.', '');
+    $lastTran = ($amt === '0.00') ? '+0.00' : $sign . $amt;
+}
+
+$privacyUrl = 'https://realpickme.com/endpoint/privacy';
+$setting = pm_q_one("SELECT setting_value FROM app_settings WHERE setting_key = 'privacy_policy_url' LIMIT 1");
+if ($setting) {
+    $privacyUrl = (string)$setting['setting_value'];
+}
+
+pm_json([
+    'error' => false,
+    'user'  => [
+        'user_fname'           => (string)$user['fname'],
+        'user_bal'             => (string)($user['bal'] ?? '0.00'),
+        'user_lname'           => (string)$user['lname'],
+        'user_oname'           => (string)$user['oname'],
+        'user_email'           => (string)$user['email'],
+        'user_phone'           => (string)$user['phone'],
+        'user_base_location'   => (string)$user['base_location'],
+        'user_last_location'   => (string)$user['last_location'],
+        'user_country'         => (string)$user['country'],
+        'user_logo'            => (string)$user['b_logo'],
+        'user_date_registered' => (string)$user['datetime'],
+        'emergency_contact'    => (string)($user['emergency_contact'] ?? ''),
+        'user_approved_user'   => (string)$user['visibility'],
+        'user_last_tran'       => $lastTran,
+        'user_currency'        => '₦',
+        'user_bank'            => (string)$user['Bank_Name'],
+        'user_account_name'    => (string)$user['Account_Name'],
+        'user_account_number'  => (string)$user['Account_Number'],
+        'user_mode'            => (string)$user['user_mode'],
+        'total_trips'          => $totalTrips,
+    ],
+    'app_settings' => ['privacy_policy_url' => $privacyUrl],
+]);

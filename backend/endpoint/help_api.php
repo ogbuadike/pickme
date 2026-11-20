@@ -1,103 +1,40 @@
 <?php
-header('Content-Type: application/json');
+declare(strict_types=1);
 
-require_once '../unique/unique_con.php';
-require_once 'auth.php';
-require_once '../unique/unique_code.php';
-require_once '../unique/unique_gtm.php';
-require_once '../unique/unique_func.php';
-require_once 'activities.php';
+/**
+ * GET|POST help_api.php — PUBLIC (app key). action=get_help (default): support contacts, FAQ categories, FAQs.
+ */
 
-// 1. Authorization Check
-$headers = function_exists('apache_request_headers') ? apache_request_headers() : array();
-$token = isset($headers['Authorization']) ? $headers['Authorization'] : '';
+require_once __DIR__ . '/security.php';
 
-$authorized = checkAuthorization($token);
-if (!$authorized) {
-    http_response_code(401);
-    echo json_encode(array(
-        'error' => true,
-        'message' => 'Unauthorized access',
-        'data' => null,
-    ));
-    exit();
+pm_require_method('GET', 'POST');
+pm_require_app_key();
+
+$action = strtolower(pm_in_str(array_merge($_GET, pm_input()), 'action', 40, 'get_help'));
+if ($action !== 'get_help') {
+    pm_error('VALIDATION', 'Invalid action requested.', 200, ['data' => null]);
 }
 
-// 2. Helper Functions
-function sanitizeInput($input) {
-    return trim(htmlspecialchars((string)$input, ENT_QUOTES, 'UTF-8'));
-}
+$contacts = pm_q_one('SELECT support_email, support_phone, whatsapp_number FROM support_contacts ORDER BY id ASC LIMIT 1');
+$categories = array_map(
+    static fn($r) => ['id' => (int)$r['id'], 'name' => (string)$r['name']],
+    pm_q_all('SELECT id, name FROM faq_categories ORDER BY sort_order ASC, id ASC')
+);
+$faqs = array_map(
+    static fn($r) => ['id' => (int)$r['id'], 'category_id' => (int)$r['category_id'], 'question' => (string)$r['question'], 'answer' => (string)$r['answer']],
+    pm_q_all('SELECT id, category_id, question, answer FROM faqs ORDER BY id ASC')
+);
 
-function jsonResponse($payload, $statusCode = 200) {
-    http_response_code($statusCode);
-    echo json_encode($payload);
-    exit();
-}
-
-// 3. Core Logic
-function fetchHelpData() {
-    global $dbconn;
-
-    // Fetch Support Contacts
-    $contactQ = mysqli_query($dbconn, "SELECT * FROM support_contacts LIMIT 1");
-    $contacts = $contactQ ? mysqli_fetch_assoc($contactQ) : null;
-
-    // Fetch FAQ Categories
-    $catQ = mysqli_query($dbconn, "SELECT id, name FROM faq_categories ORDER BY sort_order ASC");
-    $categories = array();
-    if ($catQ) {
-        while ($row = mysqli_fetch_assoc($catQ)) {
-            $categories[] = array(
-                'id' => (int)$row['id'],
-                'name' => $row['name']
-            );
-        }
-    }
-
-    // Fetch FAQs
-    $faqQ = mysqli_query($dbconn, "SELECT id, category_id, question, answer FROM faqs ORDER BY id ASC");
-    $faqs = array();
-    if ($faqQ) {
-        while ($row = mysqli_fetch_assoc($faqQ)) {
-            $faqs[] = array(
-                'id' => (int)$row['id'],
-                'category_id' => (int)$row['category_id'],
-                'question' => $row['question'],
-                'answer' => $row['answer']
-            );
-        }
-    }
-
-    return array(
-        'error' => false,
-        'message' => 'Help data retrieved successfully.',
-        'data' => array(
-            'contacts' => array(
-                'email' => isset($contacts['support_email']) ? $contacts['support_email'] : 'support@phantomphones.store',
-                'phone' => isset($contacts['support_phone']) ? $contacts['support_phone'] : '+2348000000000',
-                'whatsapp' => isset($contacts['whatsapp_number']) ? $contacts['whatsapp_number'] : '+2348000000000'
-            ),
-            'categories' => $categories,
-            'faqs' => $faqs
-        )
-    );
-}
-
-// 4. Execution block
-try {
-    // Allows the API to be called via POST or GET (e.g. action=get_help)
-    $action = isset($_REQUEST['action']) ? strtolower(sanitizeInput($_REQUEST['action'])) : 'get_help';
-
-    if ($action === 'get_help') {
-        jsonResponse(fetchHelpData(), 200);
-    } else {
-        throw new Exception('Invalid action requested.');
-    }
-
-} catch (Exception $e) {
-    jsonResponse(array(
-        'error' => true,
-        'message' => $e->getMessage(),
-        'data' => null,
-    ), 200);
-}
+pm_json([
+    'error'   => false,
+    'message' => 'Help data retrieved successfully.',
+    'data'    => [
+        'contacts' => [
+            'email'    => (string)($contacts['support_email'] ?? pm_env('SUPPORT_EMAIL', 'support@realpickme.com')),
+            'phone'    => (string)($contacts['support_phone'] ?? ''),
+            'whatsapp' => (string)($contacts['whatsapp_number'] ?? ''),
+        ],
+        'categories' => $categories,
+        'faqs'       => $faqs,
+    ],
+]);

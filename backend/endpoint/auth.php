@@ -1,22 +1,20 @@
 <?php
+declare(strict_types=1);
 
+/**
+ * Backward-compatible wrapper. The app key (Authorization header) only identifies the
+ * app build; user identity comes from pm_require_session() in security.php.
+ * The accepted key hash(es) are configured with APP_KEY_SHA256 in the .env.
+ */
 
-
-function checkAuthorization($token) {
-    
-    $auth_code = 'byco101###!';
-    $hashed_auth_code = hash('sha256', $auth_code);
-
-   
-    $validTokens = [$hashed_auth_code]; 
-
-    if (in_array($token, $validTokens)) {
-        return true; // Authorization successful
-    } else {
-        return false; // Authorization failed
-    }
-    
+if (isset($_SERVER['SCRIPT_FILENAME']) && realpath((string)$_SERVER['SCRIPT_FILENAME']) === __FILE__) {
+    http_response_code(404);
+    exit;
 }
 
+require_once __DIR__ . '/security.php';
 
-
+function checkAuthorization($token): bool
+{
+    return pm_app_key_valid((string)$token);
+}

@@ -1,9 +1,15 @@
-import 'dart:math' as math;
+// lib/screens/ride_options_screen.dart
+//
+// Opened from a push notification (click_action = ride_options). It only
+// shows indicative prices - the real quote comes from the driver market on
+// the Street Ride tab, so the CTA hands over there instead of pretending to
+// book (the old button toasted "driver assigned" without any request).
 import 'package:flutter/material.dart';
-import 'package:google_maps_flutter/google_maps_flutter.dart';
+
+import '../routes/routes.dart';
 import '../themes/app_theme.dart';
-import '../utility/notification.dart';
 import '../widgets/inner_background.dart';
+import '../widgets/ride_market/money.dart';
 
 class RideOptionsScreen extends StatefulWidget {
   const RideOptionsScreen({super.key, this.args});
@@ -14,38 +20,44 @@ class RideOptionsScreen extends StatefulWidget {
 }
 
 class _RideOptionsScreenState extends State<RideOptionsScreen> {
-  late final String pickupText =
-      widget.args?['pickupText'] as String? ?? 'Pickup';
-  late final String dropText =
-      widget.args?['dropText'] as String? ?? 'Destination';
-  late final String distanceText =
-      widget.args?['distance'] as String? ?? '--';
-  late final String durationText =
-      widget.args?['duration'] as String? ?? '--';
-  late final LatLng? pickup = widget.args?['pickup'] as LatLng?;
-  late final LatLng? drop = widget.args?['drop'] as LatLng?;
+  // Push payloads deliver strings; never hard-cast.
+  String _arg(String key, String fallback) {
+    final v = widget.args?[key];
+    final s = v?.toString().trim() ?? '';
+    return s.isEmpty ? fallback : s;
+  }
+
+  late final String pickupText = _arg('pickupText', 'Pickup');
+  late final String dropText = _arg('dropText', 'Destination');
+  late final String distanceText = _arg('distance', '--');
+  late final String durationText = _arg('duration', '--');
 
   int _selectedIndex = 0;
 
   double get _distanceKm {
-    final d = distanceText.toLowerCase();
-    // common formats: "5.2 km", "850 m"
-    if (d.contains('km')) {
-      return double.tryParse(d.replaceAll('km', '').trim()) ?? 0.0;
-    }
-    if (d.contains('m')) {
-      final m = double.tryParse(d.replaceAll('m', '').trim()) ?? 0.0;
-      return m / 1000.0;
-    }
-    return 0.0;
+    final d = distanceText.toLowerCase().replaceAll(',', '');
+    final v = double.tryParse(RegExp(r'[\d.]+').firstMatch(d)?.group(0) ?? '') ?? 0.0;
+    if (v <= 0) return 0.0;
+    if (d.contains('km')) return v;
+    if (RegExp(r'\d\s*m\b').hasMatch(d)) return v / 1000.0;
+    return v;
   }
 
+  /// Indicative only (shown as "est."); 0 when the distance is unknown.
   double _estimate(double base, double perKm, double perMin) {
-    // naive estimate for demo
     final km = _distanceKm;
-    // try extracting mins
+    if (km <= 0) return 0;
     final mins = _extractMins(durationText);
-    return (base + km * perKm + mins * perMin).clamp(500, 200000);
+    return (base + km * perKm + mins * perMin).clamp(500, 200000).toDouble();
+  }
+
+  void _continue() {
+    final nav = Navigator.of(context);
+    if (nav.canPop()) {
+      nav.pop(<String, dynamic>{'ride_option': _selectedIndex});
+    } else {
+      nav.pushReplacementNamed(AppRoutes.home);
+    }
   }
 
   double _extractMins(String t) {
@@ -68,8 +80,6 @@ class _RideOptionsScreenState extends State<RideOptionsScreen> {
           _estimate(500, 260, 10)),
       _RideType('Pick XL', Icons.airport_shuttle_rounded,
           _estimate(800, 320, 12)),
-      _RideType('Dispatch', Icons.pedal_bike_rounded,
-          _estimate(250, 180, 6)),
     ];
 
     return Scaffold(
@@ -110,9 +120,14 @@ class _RideOptionsScreenState extends State<RideOptionsScreen> {
                     ),
                   ),
                 const SizedBox(height: 12),
+                Text(
+                  'Prices are estimates. Final fare is set by the driver you pick.',
+                  style: TextStyle(color: AppColors.textSecondary, fontWeight: FontWeight.w600),
+                ),
+                const SizedBox(height: 12),
                 ElevatedButton.icon(
-                  icon: const Icon(Icons.check_circle),
-                  label: const Text('Request ride',
+                  icon: const Icon(Icons.arrow_forward_rounded),
+                  label: const Text('Choose a driver',
                       style: TextStyle(fontWeight: FontWeight.w800)),
                   style: ElevatedButton.styleFrom(
                     backgroundColor: AppColors.primary,
@@ -123,15 +138,7 @@ class _RideOptionsScreenState extends State<RideOptionsScreen> {
                     ),
                     elevation: 0,
                   ),
-                  onPressed: () {
-                    showToastNotification(
-                      context: context,
-                      title: 'Ride requested',
-                      message: 'Your driver will be assigned shortly.',
-                      isSuccess: true,
-                    );
-                    Navigator.pop(context); // back to Home
-                  },
+                  onPressed: _continue,
                 ),
               ],
             ),
@@ -163,8 +170,8 @@ class _TripSummaryCard extends StatelessWidget {
         borderRadius: BorderRadius.circular(18),
         gradient: LinearGradient(
           colors: [
-            AppColors.surface.withOpacity(.95),
-            AppColors.mintBgLight.withOpacity(.5),
+            AppColors.surface.withValues(alpha: .95),
+            AppColors.mintBgLight.withValues(alpha: .5),
           ],
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
@@ -172,7 +179,7 @@ class _TripSummaryCard extends StatelessWidget {
         border: Border.all(color: AppColors.mintBgLight),
         boxShadow: [
           BoxShadow(
-            color: AppColors.deep.withOpacity(.12),
+            color: AppColors.deep.withValues(alpha: .12),
             blurRadius: 20,
             offset: const Offset(0, 10),
           )
@@ -241,7 +248,7 @@ class _RideOptionTile extends StatelessWidget {
         padding: const EdgeInsets.all(14),
         decoration: BoxDecoration(
           color: selected
-              ? AppColors.primary.withOpacity(.10)
+              ? AppColors.primary.withValues(alpha: .10)
               : AppColors.surface,
           borderRadius: BorderRadius.circular(16),
           border: Border.all(
@@ -251,7 +258,7 @@ class _RideOptionTile extends StatelessWidget {
           children: [
             CircleAvatar(
               radius: 22,
-              backgroundColor: AppColors.primary.withOpacity(.12),
+              backgroundColor: AppColors.primary.withValues(alpha: .12),
               child: Icon(option.icon, color: AppColors.primary),
             ),
             const SizedBox(width: 12),
@@ -261,7 +268,7 @@ class _RideOptionTile extends StatelessWidget {
                       color: AppColors.textPrimary,
                       fontWeight: FontWeight.w800)),
             ),
-            Text('₦${p.toStringAsFixed(0)}',
+            Text(p > 0 ? 'est. ${formatMoney(p)}' : '—',
                 style: TextStyle(
                     color: AppColors.deep,
                     fontSize: 16,

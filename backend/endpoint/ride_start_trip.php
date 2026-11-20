@@ -1,92 +1,77 @@
 <?php
 declare(strict_types=1);
 
-header('Content-Type: application/json');
-require_once 'ride_api_bootstrap.php';
+/**
+ * POST ride_start_trip.php — start a trip (session required; rider of the ride or its assigned driver).
+ * Transition: accepted | enroute_pickup | arrived_pickup → in_progress (idempotent when already in_progress).
+ * Proximity: driver (fresh live fix, or the driver's own client GPS) must be within the pickup radius.
+ * Only the driver's own request may update the driver's live location.
+ */
+
+require_once __DIR__ . '/ride_api_bootstrap.php';
 
 const START_TRIP_MAX_METERS = 150.0;
-const DRIVER_FIX_MAX_AGE_SEC = 180; 
+const DRIVER_FIX_MAX_AGE_SEC = 180;
 
-ride_authorize();
+pm_require_method('POST');
+$uid = ride_authorize();
 $in = ride_input();
 
 $rideId = ride_i($in['ride_id'] ?? $in['trip_id'] ?? $in['id'] ?? 0, 0);
 if ($rideId <= 0) {
-    ride_json(['error' => true, 'message' => 'ride_id is required'], 422);
+    pm_error('VALIDATION', 'ride_id is required', 422);
 }
 
-$ride = ride_fetch_ride($dbconn, $rideId);
-if (!$ride) {
-    ride_json(['error' => true, 'message' => 'Ride not found'], 404);
+$driverRow = null;
+$ride = ride_fetch_owned($rideId, $uid, $driverRow);
+$asDriver = $driverRow !== null && !hash_equals((string)$ride['rider_id'], $uid);
+$status = ride_norm_status((string)$ride['status']);
+
+if ($status === 'in_progress') {
+    ride_json(['error' => false, 'message' => 'Trip already started.', 'data' => ['distance_m' => 0.0], 'status' => 'in_progress'], 200);
 }
-
-$status = strtolower(trim((string)($ride['status'] ?? 'searching')));
-if ($status === 'driver_assigned') $status = 'accepted';
-if ($status === 'in_ride') $status = 'in_progress';
-
-if (!in_array($status, ['accepted', 'enroute_pickup', 'arrived_pickup', 'in_progress'], true)) {
-    ride_json(['error' => true, 'message' => 'Ride is not in a startable state'], 409);
+if (!in_array($status, ['accepted', 'enroute_pickup', 'arrived_pickup'], true)) {
+    pm_error('CONFLICT', 'Ride is not in a startable state', 409, ['status' => $status]);
 }
-
 $driverId = ride_i($ride['driver_id'] ?? 0, 0);
 if ($driverId <= 0) {
-    ride_json(['error' => true, 'message' => 'Driver is not assigned to this ride'], 409);
+    pm_error('CONFLICT', 'Driver is not assigned to this ride', 409);
 }
 
-$clientLat = isset($in['lat']) ? ride_f($in['lat'], 0.0) : null;
-$clientLng = isset($in['lng']) ? ride_f($in['lng'], 0.0) : null;
-// --- HYBRID FIX: FETCH ACCURACY ---
-$clientAccuracy = isset($in['accuracy']) ? ride_f($in['accuracy'], 15.0) : 15.0;
-// ----------------------------------
+$clientLat = pm_in_float($in, 'lat', 0.0);
+$clientLng = pm_in_float($in, 'lng', 0.0);
+$clientAccuracy = min(max(pm_in_float($in, 'accuracy', 15.0), 0.0), 150.0);
 
-$driverLat = null;
-$driverLng = null;
-
-// HYBRID FIX: Prioritize client GPS provided in the request payload
-if ($clientLat !== null && $clientLng !== null && $clientLat != 0.0 && $clientLng != 0.0) {
+if ($asDriver && pm_valid_lat($clientLat) && pm_valid_lng($clientLng)) {
     $driverLat = $clientLat;
     $driverLng = $clientLng;
-    
-    // Update the database to reflect this fresh fallback
-    ride_exec($dbconn, "UPDATE ride_driver_locations SET lat=?, lng=?, updated_at=CURRENT_TIMESTAMP WHERE driver_id=?", 'ddi', [$driverLat, $driverLng, $driverId]);
+    pm_exec('UPDATE ride_driver_locations SET lat = ?, lng = ?, updated_at = CURRENT_TIMESTAMP WHERE driver_id = ?', 'ddi', [$driverLat, $driverLng, $driverId]);
 } else {
-    // HYBRID FIX: Bulletproof Timezone-safe SQL check
-    $live = ride_query_one(
-        $dbconn,
-        "SELECT lat, lng, TIMESTAMPDIFF(SECOND, updated_at, CURRENT_TIMESTAMP) AS db_age_sec
-         FROM ride_driver_locations WHERE driver_id = ? LIMIT 1",
-        'i', [$driverId]
+    $live = pm_q_one(
+        'SELECT lat, lng, TIMESTAMPDIFF(SECOND, updated_at, CURRENT_TIMESTAMP) AS db_age_sec FROM ride_driver_locations WHERE driver_id = ? LIMIT 1',
+        'i',
+        [$driverId]
     );
-
-    if (!$live) ride_json(['error' => true, 'message' => 'Driver location unavailable.'], 409);
-
-    $ageSec = isset($live['db_age_sec']) ? (int)$live['db_age_sec'] : PHP_INT_MAX;
-    if ($ageSec < 0) $ageSec = 0;
-
-    if ($ageSec > DRIVER_FIX_MAX_AGE_SEC) {
-        ride_json(['error' => true, 'message' => 'Driver GPS location is stale (' . $ageSec . 's old). Keep app open.'], 409);
+    if (!$live) {
+        pm_error('CONFLICT', 'Driver location unavailable.', 409);
     }
-
+    $ageSec = max(0, (int)$live['db_age_sec']);
+    if ($ageSec > DRIVER_FIX_MAX_AGE_SEC) {
+        pm_error('CONFLICT', 'Driver GPS location is stale (' . $ageSec . 's old). Keep app open.', 409);
+    }
     $driverLat = (float)$live['lat'];
     $driverLng = (float)$live['lng'];
 }
 
-// --- HYBRID FIX: DYNAMIC ACCURACY COMPENSATION ---
-$compensation = min($clientAccuracy, 150.0);
-$effectiveStartRadius = START_TRIP_MAX_METERS + $compensation;
-
-$metersToPickup = ride_haversine_m($driverLat, $driverLng, ride_f($ride['pickup_lat'] ?? 0, 0), ride_f($ride['pickup_lng'] ?? 0, 0));
-
-if ($metersToPickup > $effectiveStartRadius) {
-    ride_json(['error' => true, 'message' => 'Driver and rider must be together. Current gap: ' . round($metersToPickup) . ' m. (GPS Error Margin: ±' . round($clientAccuracy) . 'm)'], 409);
+$effectiveRadius = START_TRIP_MAX_METERS + $clientAccuracy;
+$metersToPickup = pm_haversine_m($driverLat, $driverLng, (float)$ride['pickup_lat'], (float)$ride['pickup_lng']);
+if ($metersToPickup > $effectiveRadius) {
+    pm_error('CONFLICT', 'Driver and rider must be together. Current gap: ' . round($metersToPickup) . ' m. (GPS Error Margin: ±' . round($clientAccuracy) . 'm)', 409);
 }
-// -------------------------------------------------
 
-try {
-    ride_exec($dbconn, "UPDATE ride_rides SET status = 'in_progress', started_at = IFNULL(started_at, NOW()), updated_at = CURRENT_TIMESTAMP WHERE id = ?", 'i', [$rideId]);
-    ride_exec($dbconn, "UPDATE ride_driver_locations SET phase = 'enroute_destination', updated_at = CURRENT_TIMESTAMP WHERE driver_id = ?", 'i', [$driverId]);
+pm_tx(function () use ($rideId, $driverId) {
+    pm_ride_transition($rideId, 'rider_start_trip', 'driver_id', $driverId, ', started_at = IFNULL(started_at, NOW())');
+    pm_exec("UPDATE ride_driver_locations SET phase = 'enroute_destination', updated_at = CURRENT_TIMESTAMP WHERE driver_id = ?", 'i', [$driverId]);
+});
 
-    ride_json(['error' => false, 'message' => 'Trip started.', 'data' => ['distance_m' => $metersToPickup]], 200);
-} catch (Exception $e) {
-    ride_json(['error' => true, 'message' => 'Failed to start trip.'], 500);
-}
+ride_json(['error' => false, 'message' => 'Trip started.', 'data' => ['distance_m' => $metersToPickup], 'status' => 'in_progress'], 200);

@@ -4,7 +4,6 @@ import 'dart:ui' show FontFeature, ImageFilter;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:http/http.dart' as http;
 // FIXED: Hiding TextDirection from intl to prevent the collision with dart:ui
 import 'package:intl/intl.dart' hide TextDirection;
 import 'package:shared_preferences/shared_preferences.dart';
@@ -31,19 +30,24 @@ class Transaction {
   final DateTime date;
 
   Transaction.fromJson(Map<String, dynamic> json)
-      : id = json['id'] ?? 0,
-        title = json['title'] ?? 'Transaction',
+      : id = int.tryParse(json['id']?.toString() ?? '') ?? 0,
+        title = _str(json['title'], 'Transaction'),
         amount = double.tryParse(json['amount']?.toString() ?? '0') ?? 0.0,
         type = json['type']?.toString().toLowerCase() == 'plus' ? 'credit' : 'debit',
-        paymentMode = json['payment_mode'] ?? 'Wallet',
+        paymentMode = _str(json['payment_mode'], 'Wallet'),
         status = json['status']?.toString().toLowerCase() ?? 'pending',
-        reference = json['reference'] ?? 'N/A',
-        rechargeToken = json['recharge_token'] ?? 'N/A',
-        transactionId = json['transaction_id']?.toString() ?? 'N/A',
-        recipientAccount = json['recipient']?['account'] ?? 'N/A',
-        recipientBank = json['recipient']?['bank'] ?? 'N/A',
-        iconUrl = json['icon'] ?? '',
-        date = DateTime.tryParse(json['datetime'] ?? '') ?? DateTime.now();
+        reference = _str(json['reference'], 'N/A'),
+        rechargeToken = _str(json['recharge_token'], 'N/A'),
+        transactionId = _str(json['transaction_id'], 'N/A'),
+        recipientAccount = _str(json['recipient'] is Map ? json['recipient']['account'] : null, 'N/A'),
+        recipientBank = _str(json['recipient'] is Map ? json['recipient']['bank'] : null, 'N/A'),
+        iconUrl = _str(json['icon'], ''),
+        date = DateTime.tryParse(json['datetime']?.toString() ?? '') ?? DateTime.now();
+
+  static String _str(Object? v, String fallback) {
+    final s = v?.toString();
+    return (s == null || s.isEmpty) ? fallback : s;
+  }
 }
 
 class TransactionHistoryPage extends StatefulWidget {
@@ -54,8 +58,8 @@ class TransactionHistoryPage extends StatefulWidget {
 }
 
 class _TransactionHistoryPageState extends State<TransactionHistoryPage> with SingleTickerProviderStateMixin {
-  late ApiClient _api;
-  late SharedPreferences _prefs;
+  final ApiClient _api = ApiClient();
+  SharedPreferences? _prefs;
 
   bool _isLoading = true;
   bool _hasError = false;
@@ -82,8 +86,7 @@ class _TransactionHistoryPageState extends State<TransactionHistoryPage> with Si
 
   Future<void> _bootstrap() async {
     _prefs = await SharedPreferences.getInstance();
-    _api = ApiClient(http.Client(), context);
-    _fetchTransactions();
+    await _fetchTransactions();
   }
 
   @override
@@ -102,7 +105,8 @@ class _TransactionHistoryPageState extends State<TransactionHistoryPage> with Si
     });
 
     try {
-      final uid = _prefs.getString('user_id');
+      final prefs = _prefs ??= await SharedPreferences.getInstance();
+      final uid = prefs.getString('user_id');
       if (uid == null) throw Exception('User session missing');
 
       final res = await _api.request(
@@ -112,8 +116,13 @@ class _TransactionHistoryPageState extends State<TransactionHistoryPage> with Si
       );
 
       final data = jsonDecode(res.body);
-      if (res.statusCode == 200 && data['error'] == false) {
-        final txList = (data['data']['transactions'] as List).map((e) => Transaction.fromJson(e)).toList();
+      if (!mounted) return;
+      if (data is Map && data['error'] == false && data['data'] is Map) {
+        final rawList = data['data']['transactions'];
+        final txList = (rawList is List ? rawList : const [])
+            .whereType<Map>()
+            .map((e) => Transaction.fromJson(Map<String, dynamic>.from(e)))
+            .toList();
 
         // --- STRICT TIME SORTING APPLIED HERE ---
         // This mathematically forces the absolute newest date to index 0, regardless of AM/PM text
@@ -121,11 +130,12 @@ class _TransactionHistoryPageState extends State<TransactionHistoryPage> with Si
 
         setState(() {
           _transactions = txList;
-          _totalIn = double.tryParse(data['data']['summary']['inflow']?.toString() ?? '0') ?? 0.0;
-          _totalOut = double.tryParse(data['data']['summary']['outflow']?.toString() ?? '0') ?? 0.0;
+          final summary = data['data']['summary'];
+          _totalIn = double.tryParse((summary is Map ? summary['inflow'] : null)?.toString() ?? '0') ?? 0.0;
+          _totalOut = double.tryParse((summary is Map ? summary['outflow'] : null)?.toString() ?? '0') ?? 0.0;
         });
       } else {
-        throw Exception(data['message'] ?? 'Failed to load transactions');
+        throw Exception((data is Map ? data['message'] : null) ?? 'Failed to load transactions');
       }
     } catch (e) {
       if (mounted) setState(() => _hasError = true);
@@ -205,10 +215,14 @@ class _TransactionHistoryPageState extends State<TransactionHistoryPage> with Si
           'Transactions',
           style: TextStyle(fontSize: ui.font(16), fontWeight: FontWeight.w900, letterSpacing: -0.25, color: isDark ? cs.onSurface : AppColors.textPrimary),
         ),
-        leading: IconButton(
-          icon: Icon(Icons.arrow_back_ios_new_rounded, size: ui.icon(16), color: isDark ? cs.onSurface : AppColors.textPrimary),
-          onPressed: () => Navigator.of(context).pop(),
-        ),
+        // Also used as a tab in the driver shell: no back button there.
+        automaticallyImplyLeading: false,
+        leading: Navigator.of(context).canPop()
+            ? IconButton(
+                icon: Icon(Icons.arrow_back_ios_new_rounded, size: ui.icon(16), color: isDark ? cs.onSurface : AppColors.textPrimary),
+                onPressed: () => Navigator.of(context).maybePop(),
+              )
+            : null,
       ),
       body: _isLoading
           ? _buildSkeleton(ui, isDark, cs)

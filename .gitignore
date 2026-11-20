@@ -43,3 +43,6 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+
+# Build-time keys (flutter run --dart-define-from-file=config/dart_defines.json)
+/config/dart_defines.json

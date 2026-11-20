@@ -2,7 +2,6 @@
 // Full-screen autocomplete overlay — tuned to avoid jank while typing.
 
 import 'dart:math' as math;
-import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -118,6 +117,13 @@ class _AutoOverlayState extends State<AutoOverlay>
 
   @override
   Future<bool> didPopRoute() async {
+    // Only consume "back" when this overlay is what the user is looking at:
+    // not when a dialog/sheet/page is above it, and not from a hidden tab of
+    // an IndexedStack.
+    if (!mounted || _closing) return false;
+    final route = ModalRoute.of(context);
+    if (route != null && !route.isCurrent) return false;
+    if (!TickerMode.of(context)) return false;
     await _handleClose();
     return true;
   }
@@ -188,8 +194,8 @@ class _AutoOverlayState extends State<AutoOverlay>
           begin: Alignment.topCenter,
           end: Alignment.bottomCenter,
           colors: isDark
-              ? [bg.withOpacity(.99), bg.withOpacity(.98), bg.withOpacity(.97)]
-              : [bg.withOpacity(.995), bg.withOpacity(.985), bg.withOpacity(.975)],
+              ? [bg.withValues(alpha: .99), bg.withValues(alpha: .98), bg.withValues(alpha: .97)]
+              : [bg.withValues(alpha: .995), bg.withValues(alpha: .985), bg.withValues(alpha: .975)],
         ),
       ),
       child: ScaleTransition(
@@ -283,7 +289,7 @@ class _AutoOverlayState extends State<AutoOverlay>
                   ),
                 ),
               ),
-              Container(width: 1, color: isDark ? cs.outline : AppColors.mintBgLight.withOpacity(.2)),
+              Container(width: 1, color: isDark ? cs.outline : AppColors.mintBgLight.withValues(alpha: .2)),
               Expanded(
                 flex: 55,
                 child: RepaintBoundary(
@@ -312,19 +318,19 @@ class _AutoOverlayState extends State<AutoOverlay>
             button: true,
             label: 'Close search overlay',
             child: Material(
-              color: (isDark ? cs.primary : AppColors.primary).withOpacity(.12),
+              color: (isDark ? cs.primary : AppColors.primary).withValues(alpha: .12),
               borderRadius: BorderRadius.circular(14 * s),
               child: InkWell(
                 onTap: _handleClose,
                 borderRadius: BorderRadius.circular(14 * s),
-                splashColor: (isDark ? cs.primary : AppColors.primary).withOpacity(.2),
+                splashColor: (isDark ? cs.primary : AppColors.primary).withValues(alpha: .2),
                 child: Container(
                   width: 44 * s,
                   height: 44 * s,
                   decoration: BoxDecoration(
                     borderRadius: BorderRadius.circular(14 * s),
                     border: Border.all(
-                      color: (isDark ? cs.primary : AppColors.primary).withOpacity(.2),
+                      color: (isDark ? cs.primary : AppColors.primary).withValues(alpha: .2),
                       width: 1.2,
                     ),
                   ),
@@ -344,7 +350,7 @@ class _AutoOverlayState extends State<AutoOverlay>
                     Container(
                       padding: EdgeInsets.all(5 * s),
                       decoration: BoxDecoration(
-                        color: (isDark ? cs.primary : AppColors.primary).withOpacity(.10),
+                        color: (isDark ? cs.primary : AppColors.primary).withValues(alpha: .10),
                         borderRadius: BorderRadius.circular(6 * s),
                       ),
                       child: Icon(Icons.explore_rounded,
@@ -396,13 +402,13 @@ class _AutoOverlayState extends State<AutoOverlay>
                       mainAxisSize: MainAxisSize.min,
                       children: [
                         Icon(Icons.swap_vert_rounded,
-                            size: 18 * s, color: isDark ? cs.onSurface : AppColors.textPrimary.withOpacity(.9)),
+                            size: 18 * s, color: isDark ? cs.onSurface : AppColors.textPrimary.withValues(alpha: .9)),
                         SizedBox(width: 6 * s),
                         Text('Swap',
                             style: TextStyle(
                               fontSize: 13 * s,
                               fontWeight: FontWeight.w800,
-                              color: isDark ? cs.onSurface : AppColors.textPrimary.withOpacity(.9),
+                              color: isDark ? cs.onSurface : AppColors.textPrimary.withValues(alpha: .9),
                             )),
                       ],
                     ),
@@ -422,9 +428,9 @@ class _AutoOverlayState extends State<AutoOverlay>
       decoration: BoxDecoration(
         color: isDark ? cs.surface : Theme.of(context).cardColor,
         borderRadius: BorderRadius.circular(18 * s),
-        border: Border.all(color: isDark ? cs.outline : AppColors.mintBgLight.withOpacity(.3), width: 1),
+        border: Border.all(color: isDark ? cs.outline : AppColors.mintBgLight.withValues(alpha: .3), width: 1),
         boxShadow: [
-          BoxShadow(color: isDark ? Colors.black.withOpacity(0.5) : Colors.black.withOpacity(.06), blurRadius: 10, offset: Offset(0, 4 * s)),
+          BoxShadow(color: isDark ? Colors.black.withValues(alpha: 0.5) : Colors.black.withValues(alpha: .06), blurRadius: 10, offset: Offset(0, 4 * s)),
         ],
       ),
       child: Padding(
@@ -478,13 +484,34 @@ class _AutoOverlayState extends State<AutoOverlay>
       margin: const EdgeInsets.symmetric(vertical: 6),
       decoration: BoxDecoration(
         gradient: LinearGradient(
-          colors: [Colors.transparent, isDark ? cs.outline : AppColors.mintBgLight.withOpacity(.3), Colors.transparent],
+          colors: [Colors.transparent, isDark ? cs.outline : AppColors.mintBgLight.withValues(alpha: .3), Colors.transparent],
         ),
       ),
     );
   }
 
   Widget _buildSuggestions(bool isDark, ColorScheme cs) {
+    // While a query is in flight keep the current list visible (no flashing)
+    // and show a slim progress bar; only show the big spinner when empty.
+    if (widget.isTyping && widget.suggestions.isNotEmpty) {
+      return Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(2),
+              child: LinearProgressIndicator(minHeight: 2, color: isDark ? cs.primary : AppColors.primary, backgroundColor: Colors.transparent),
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 4),
+            child: _SuggestionsHost(fmtDistance: widget.fmtDistance),
+          ),
+        ],
+      );
+    }
     if (widget.isTyping) {
       return Padding(
         padding: const EdgeInsets.symmetric(vertical: 48),

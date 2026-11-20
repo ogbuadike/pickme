@@ -1,16 +1,14 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:firebase_core/firebase_core.dart';
+import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-import '../services/firebase_service.dart';
-import '../services/push_notification_service.dart';
 import '../services/fcm_service.dart';
 import '../themes/app_theme.dart';
 import '../routes/routes.dart';
 import '../utility/notification.dart';
-import '../firebase_options.dart';
+import '../utility/session_manager.dart';
 
 class SplashScreen extends StatefulWidget {
   const SplashScreen({super.key});
@@ -43,24 +41,11 @@ class _SplashScreenState extends State<SplashScreen>
 
   Future<void> _bootstrap() async {
     try {
-      if (Firebase.apps.isEmpty) {
-        await Firebase.initializeApp(
-          options: DefaultFirebaseOptions.currentPlatform,
-        );
-      }
-
-      await FirebaseService.instance.initialize();
-
-      // Execute push and token sync concurrently.
-      // This ensures the backend gets the token on EVERY load without blocking.
-      await Future.wait<void>([
-        PushNotificationService().initialize().catchError((e, st) {
-          debugPrint('PushNotificationService init warning: $e');
-        }),
-        FCMService(context).initializeFCM().catchError((e, st) {
-          debugPrint('FCMService init warning: $e');
-        }),
-      ], eagerError: false);
+      // Firebase / push listeners are initialised in main(); here we only
+      // decide where to go and (re)register the push token for a signed-in
+      // user without blocking the splash.
+      final hasSession = await SessionManager.instance.hasValidSession();
+      if (hasSession) unawaited(FCMService.instance.syncTokenWithBackend());
 
       final elapsed = DateTime.now().difference(_start);
       if (elapsed < _minSplash) {
@@ -68,9 +53,9 @@ class _SplashScreenState extends State<SplashScreen>
       }
 
       if (!mounted) return;
-      await _navigateNext();
+      await _navigateNext(hasSession: hasSession);
     } catch (e, st) {
-      debugPrint('Splash init error: $e\n$st');
+      if (kDebugMode) debugPrint('Splash init error: $e\n$st');
       if (!mounted) return;
       showRetryNotification(
         context,
@@ -80,22 +65,32 @@ class _SplashScreenState extends State<SplashScreen>
     }
   }
 
-  Future<void> _navigateNext() async {
+  Future<void> _navigateNext({required bool hasSession}) async {
     final prefs = await SharedPreferences.getInstance();
-    final userId = prefs.getString('user_id');
-    final userPin = prefs.getString('user_pin');
-    final isDriver = prefs.getBool('user_is_driver') ?? false;
+    final userId = prefs.getString(PrefKeys.userId);
+    final userPin = prefs.getString(PrefKeys.pinFlag);
+    final isDriver = prefs.getBool(PrefKeys.isDriver) ?? false;
+    final hadAccount = userId != null && userId.isNotEmpty;
 
+    if (!hasSession && hadAccount) {
+      // Signed in with a pre-session build, or the session expired: the old
+      // identity is no longer usable, so drop it and ask for a fresh login.
+      await SessionManager.instance.wipeLocalData();
+    }
     if (!mounted) return;
 
-    if (userId == null || userId.isEmpty) {
-      Navigator.of(context).pushReplacementNamed(AppRoutes.onboarding);
+    final nav = Navigator.of(context);
+    if (!hasSession) {
+      nav.pushReplacementNamed(
+        hadAccount ? AppRoutes.login : AppRoutes.onboarding,
+        arguments: hadAccount ? const {'reason': 'session_expired'} : null,
+      );
     } else if (userPin == null || userPin.isEmpty) {
-      Navigator.of(context).pushReplacementNamed(AppRoutes.set_user_pin);
+      nav.pushReplacementNamed(AppRoutes.set_user_pin);
     } else if (isDriver) {
-      Navigator.of(context).pushReplacementNamed(AppRoutes.authentication);
+      nav.pushReplacementNamed(AppRoutes.authentication);
     } else {
-      Navigator.of(context).pushReplacementNamed(AppRoutes.home);
+      nav.pushReplacementNamed(AppRoutes.home);
     }
   }
 

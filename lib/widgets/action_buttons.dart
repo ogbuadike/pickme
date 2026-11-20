@@ -1,10 +1,10 @@
-// lib/screens/home/widgets/action_buttons.dart
+// lib/widgets/action_buttons.dart
 // Side action buttons: Add Stop + Swap (ultra-responsive, a11y & haptics)
 
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import '../../../themes/app_theme.dart';
+import '../themes/app_theme.dart';
 
 class ActionButtons extends StatelessWidget {
   /// When false, the Add Stop button is visually disabled and ignores taps.
@@ -133,12 +133,12 @@ class _ActionCircleButtonState extends State<_ActionCircleButton> {
 
     final bg = Theme.of(context).cardColor;
     final borderColor = isDark
-        ? Colors.white.withOpacity(.10)
-        : AppColors.mintBgLight.withOpacity(.28);
+        ? Colors.white.withValues(alpha: .10)
+        : AppColors.mintBgLight.withValues(alpha: .28);
 
     final iconColor = widget.enabled
         ? AppColors.deep
-        : AppColors.textSecondary.withOpacity(.45);
+        : AppColors.textSecondary.withValues(alpha: .45);
 
     return Semantics(
       button: true,
@@ -159,7 +159,7 @@ class _ActionCircleButtonState extends State<_ActionCircleButton> {
               shape: const CircleBorder(),
               elevation: widget.enabled ? 4 : 0,
               shadowColor:
-              (isDark ? Colors.black : AppColors.primary).withOpacity(0.18),
+              (isDark ? Colors.black : AppColors.primary).withValues(alpha: 0.18),
               child: InkWell(
                 customBorder: const CircleBorder(),
                 onTap: widget.enabled ? _handleTap : null,

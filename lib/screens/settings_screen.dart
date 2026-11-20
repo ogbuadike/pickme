@@ -5,13 +5,13 @@ import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:http/http.dart' as http;
-import 'package:url_launcher/url_launcher.dart';
 
 import '../api/api_client.dart';
 import '../api/url.dart';
 import '../routes/routes.dart';
 import '../themes/app_theme.dart';
+import '../services/push_notification_service.dart';
+import '../ui/legal_links.dart';
 import '../ui/ui_scale.dart';
 import '../utility/notification.dart';
 import '../widgets/inner_background.dart';
@@ -28,7 +28,7 @@ class SettingsScreen extends StatefulWidget {
 }
 
 class _SettingsScreenState extends State<SettingsScreen> {
-  late ApiClient _api;
+  final ApiClient _api = ApiClient();
   late SharedPreferences _prefs;
   bool _isLoading = true;
 
@@ -46,7 +46,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
   String _selectedTheme = 'System'; // System, Light, Dark
 
   // Dynamic URLs
-  String _termsOfServiceUrl = 'https://phantomphones.store/pick_me/terms';
+  String _termsOfServiceUrl = ApiConstants.termsOfServiceUrl;
+  String _privacyPolicyUrl = ApiConstants.privacyPolicyUrl;
 
   @override
   void initState() {
@@ -57,7 +58,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Future<void> _bootstrap() async {
     try {
       _prefs = await SharedPreferences.getInstance();
-      _api = ApiClient(http.Client(), context);
       await _loadSettings();
     } catch (e) {
       if (mounted) {
@@ -96,20 +96,26 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
       final data = jsonDecode(res.body);
       if (res.statusCode == 200 && data['error'] == false) {
-        final Map<String, dynamic> s = data['settings'];
+        final raw = data['settings'];
+        final Map<String, dynamic> s = raw is Map ? Map<String, dynamic>.from(raw) : <String, dynamic>{};
+        bool on(Object? v) => v == 1 || v == '1' || v == true;
 
         if (mounted) {
           setState(() {
-            _pushNotifications = s['push_notif'] == 1;
-            _smsNotifications = s['sms_notif'] == 1;
-            _emailPromos = s['email_promos'] == 1;
-            _locationAccess = s['loc_access'] == 1;
-            _shareRideStatus = s['share_ride'] == 1;
-            _selectedLanguage = s['language'] ?? 'English';
-            _selectedTheme = s['theme'] ?? 'System';
+            _pushNotifications = on(s['push_notif']);
+            _smsNotifications = on(s['sms_notif']);
+            _emailPromos = on(s['email_promos']);
+            _locationAccess = on(s['loc_access']);
+            _shareRideStatus = on(s['share_ride']);
+            _selectedLanguage = (s['language'] ?? 'English').toString();
+            _selectedTheme = (s['theme'] ?? 'System').toString();
 
-            if (data['app_settings'] != null) {
-              _termsOfServiceUrl = data['app_settings']['terms_of_service_url'] ?? _termsOfServiceUrl;
+            final app = data['app_settings'];
+            if (app is Map) {
+              final t = app['terms_of_service_url'];
+              final p = app['privacy_policy_url'];
+              if (t is String && t.startsWith('https://')) _termsOfServiceUrl = t;
+              if (p is String && p.startsWith('https://')) _privacyPolicyUrl = p;
             }
           });
         }
@@ -157,15 +163,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _updateSettingOnServer(serverKey, value ? 1 : 0);
   }
 
-  Future<void> _launchUrl(String urlString) async {
-    final Uri url = Uri.parse(urlString);
-    try {
-      // This forces the phone to open the link in Chrome/Safari securely
-      await launchUrl(url, mode: LaunchMode.externalApplication);
-    } catch (e) {
-      _showToast('Could not open link.', isSuccess: false);
-    }
-  }
+  Future<void> _launchUrl(String urlString) => openLegalUrl(context, urlString);
 
   void _showToast(String message, {bool isSuccess = true}) {
     if (!mounted) return;
@@ -188,10 +186,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
           'Settings',
           style: TextStyle(fontSize: ui.font(18), fontWeight: FontWeight.w900, color: isDark ? Colors.white : AppColors.textPrimary),
         ),
-        leading: IconButton(
-          icon: Icon(Icons.arrow_back_ios_new_rounded, size: ui.icon(20), color: isDark ? Colors.white : AppColors.textPrimary),
-          onPressed: () => Navigator.of(context).pop(),
-        ),
+        // Also used as a tab in the driver shell: no back button there.
+        automaticallyImplyLeading: false,
+        leading: Navigator.of(context).canPop()
+            ? IconButton(
+                icon: Icon(Icons.arrow_back_ios_new_rounded, size: ui.icon(20), color: isDark ? Colors.white : AppColors.textPrimary),
+                onPressed: () => Navigator.of(context).maybePop(),
+              )
+            : null,
       ),
       body: Stack(
         children: [
@@ -265,7 +267,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   icon: Icons.app_shortcut_rounded,
                   iconColor: isDark ? cs.primary : AppColors.primary,
                   value: _pushNotifications,
-                  onChanged: (v) => _toggleBoolSetting('set_push_notif', 'push_notif', v, (val) => _pushNotifications = val),
+                  onChanged: (v) {
+                    _toggleBoolSetting('set_push_notif', 'push_notif', v, (val) => _pushNotifications = val);
+                    if (v) PushNotificationService.instance.requestPermissionIfAppropriate();
+                  },
                 ),
                 Divider(color: isDark ? cs.outline.withOpacity(0.3) : AppColors.mintBgLight.withOpacity(0.2), height: 1),
                 _buildSwitchTile(
@@ -365,6 +370,44 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   icon: Icons.gavel_rounded,
                   iconColor: isDark ? cs.onSurfaceVariant : AppColors.textSecondary,
                   onTap: () => _launchUrl(_termsOfServiceUrl),
+                ),
+                Divider(color: isDark ? cs.outline.withOpacity(0.3) : AppColors.mintBgLight.withOpacity(0.2), height: 1),
+                _buildNavigationTile(
+                  ui: ui,
+                  cs: cs,
+                  isDark: isDark,
+                  title: 'Privacy Policy',
+                  icon: Icons.privacy_tip_outlined,
+                  iconColor: const Color(0xFF1E8E3E),
+                  onTap: () => _launchUrl(_privacyPolicyUrl),
+                ),
+              ],
+            ),
+          ),
+
+          SizedBox(height: ui.gap(16)),
+
+          _buildCardContainer(
+            ui: ui,
+            cs: cs,
+            isDark: isDark,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                _buildSectionHeader(ui, cs, isDark, 'Account', Icons.manage_accounts_rounded),
+                _buildNavigationTile(
+                  ui: ui,
+                  cs: cs,
+                  isDark: isDark,
+                  title: 'Delete Account',
+                  icon: Icons.delete_forever_rounded,
+                  iconColor: cs.error,
+                  // Single deletion flow lives on the Profile screen.
+                  onTap: () => Navigator.pushNamed(
+                    context,
+                    AppRoutes.profile,
+                    arguments: const {'action': 'delete_account'},
+                  ),
                 ),
               ],
             ),
@@ -526,7 +569,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 setState(() => _selectedLanguage = lang);
                 await _prefs.setString('set_language', lang);
                 _updateSettingOnServer('language', lang);
-                if (mounted) Navigator.pop(c);
+                if (c.mounted) Navigator.pop(c);
               },
             )).toList(),
           ],
@@ -572,7 +615,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   debugPrint('Ensure MyApp.themeNotifier exists in main.dart: $e');
                 }
 
-                if (mounted) Navigator.pop(c);
+                if (c.mounted) Navigator.pop(c);
               },
             )).toList(),
           ],

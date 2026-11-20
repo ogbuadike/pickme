@@ -7,9 +7,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:http/http.dart' as http;
 import 'package:package_info_plus/package_info_plus.dart';
-import 'package:url_launcher/url_launcher.dart';
 // Hiding TextDirection from intl to prevent the dart:ui conflict in the Skeleton Loader!
 import 'package:intl/intl.dart' hide TextDirection;
 
@@ -20,7 +18,8 @@ import '../themes/app_theme.dart';
 import '../ui/ui_scale.dart';
 import '../utility/notification.dart';
 import '../widgets/inner_background.dart';
-import '../widgets/bottom_navigation_bar.dart'; // Implemented Bottom Nav
+import '../ui/legal_links.dart';
+import '../utility/session_manager.dart';
 
 class ProfileScreen extends StatefulWidget {
   const ProfileScreen({Key? key}) : super(key: key);
@@ -30,7 +29,7 @@ class ProfileScreen extends StatefulWidget {
 }
 
 class _ProfileScreenState extends State<ProfileScreen> with SingleTickerProviderStateMixin {
-  late ApiClient _api;
+  final ApiClient _api = ApiClient();
   late SharedPreferences _prefs;
 
   final _picker = ImagePicker();
@@ -41,10 +40,8 @@ class _ProfileScreenState extends State<ProfileScreen> with SingleTickerProvider
 
   Map<String, dynamic> _user = {};
   String _appVersion = '1.0.0';
-  String _privacyPolicyUrl = 'https://phantomphones.store/pick_me/privacy';
+  String _privacyPolicyUrl = ApiConstants.privacyPolicyUrl;
 
-  // Bottom Nav Index for Profile
-  int _currentIndex = 4;
 
   AnimationController? _shimmerController;
 
@@ -61,7 +58,6 @@ class _ProfileScreenState extends State<ProfileScreen> with SingleTickerProvider
   Future<void> _bootstrap() async {
     try {
       _prefs = await SharedPreferences.getInstance();
-      _api = ApiClient(http.Client(), context);
 
       // Fetch App Version safely
       try {
@@ -72,8 +68,13 @@ class _ProfileScreenState extends State<ProfileScreen> with SingleTickerProvider
       }
 
       await _fetchUser();
+      if (!mounted) return;
+      final args = ModalRoute.of(context)?.settings.arguments;
+      if (args is Map && args['action'] == 'delete_account') {
+        _showDeleteAccountBottomSheet();
+      }
     } catch (e) {
-      _fail('Failed to initialize: $e');
+      _fail('Failed to initialize. Please try again.');
     }
   }
 
@@ -107,7 +108,8 @@ class _ProfileScreenState extends State<ProfileScreen> with SingleTickerProvider
                 (k, v) => MapEntry<String, dynamic>(k.toString(), v),
           );
           if (data['app_settings'] != null) {
-            _privacyPolicyUrl = data['app_settings']['privacy_policy_url'] ?? _privacyPolicyUrl;
+            final p = data['app_settings']['privacy_policy_url'];
+            if (p is String && p.startsWith('https://')) _privacyPolicyUrl = p;
           }
         });
       } else {
@@ -148,33 +150,30 @@ class _ProfileScreenState extends State<ProfileScreen> with SingleTickerProvider
     }
   }
 
-  Future<void> _deleteAccount() async {
+  Future<void> _deleteAccount(String password) async {
     if (!mounted) return;
     setState(() => _isLoading = true);
-
     try {
-      final uid = _prefs.getString('user_id');
-      if (uid == null) throw Exception('User ID missing');
-
-      final res = await _api.request(
-        ApiConstants.updateUserInfoEndpoint,
-        method: 'POST',
-        data: {'user': uid, 'action': 'delete_account'},
-      );
-
-      final data = jsonDecode(res.body);
-      if (res.statusCode == 200 && data['error'] == false) {
-        await _prefs.clear();
-        if (!mounted) return;
-        _ok('Account deleted successfully');
-        Navigator.of(context).pushNamedAndRemoveUntil(AppRoutes.login, (route) => false);
-      } else {
-        throw Exception(data['message'] ?? 'Failed to delete account');
-      }
-    } catch (e) {
-      _fail(e.toString().replaceAll('Exception: ', ''));
+      await SessionManager.instance.deleteAccount(password);
+      if (!mounted) return;
+      _ok('Your account has been deleted.');
+      Navigator.of(context).pushNamedAndRemoveUntil(AppRoutes.login, (route) => false);
+    } on ApiException catch (e) {
+      if (e.isAuthError) return; // global handler already signed out
+      _fail(e.message);
+    } catch (_) {
+      _fail('Could not reach the server. Please try again.');
+    } finally {
       if (mounted) setState(() => _isLoading = false);
     }
+  }
+
+  Future<void> _signOut() async {
+    if (!mounted) return;
+    setState(() => _isLoading = true);
+    await SessionManager.instance.logout();
+    if (!mounted) return;
+    Navigator.of(context).pushNamedAndRemoveUntil(AppRoutes.login, (route) => false);
   }
 
   Future<void> _pickAndUploadImage() async {
@@ -220,12 +219,7 @@ class _ProfileScreenState extends State<ProfileScreen> with SingleTickerProvider
     }
   }
 
-  Future<void> _launchUrl(String urlString) async {
-    final Uri url = Uri.parse(urlString);
-    if (!await launchUrl(url)) {
-      _fail('Could not launch $urlString');
-    }
-  }
+  Future<void> _launchUrl(String urlString) => openLegalUrl(context, urlString);
 
   void _fail(String msg) {
     if (!mounted) return;
@@ -264,10 +258,15 @@ class _ProfileScreenState extends State<ProfileScreen> with SingleTickerProvider
             color: isDark ? cs.onSurface : AppColors.textPrimary,
           ),
         ),
-        leading: IconButton(
-          icon: Icon(Icons.arrow_back_ios_new_rounded, size: ui.icon(20), color: isDark ? cs.onSurface : AppColors.textPrimary),
-          onPressed: () => Navigator.of(context).pop(),
-        ),
+        // Shown as a tab inside the home shell too: only offer "back" when
+        // there is somewhere to go back to.
+        automaticallyImplyLeading: false,
+        leading: Navigator.of(context).canPop()
+            ? IconButton(
+                icon: Icon(Icons.arrow_back_ios_new_rounded, size: ui.icon(20), color: isDark ? cs.onSurface : AppColors.textPrimary),
+                onPressed: () => Navigator.of(context).maybePop(),
+              )
+            : null,
         // Added Settings Icon
         actions: [
           IconButton(
@@ -310,39 +309,6 @@ class _ProfileScreenState extends State<ProfileScreen> with SingleTickerProvider
             ),
         ],
       ),
-
-      // Added CustomBottomNavBar
-      /*
-      bottomNavigationBar: CustomBottomNavBar(
-        currentIndex: _currentIndex,
-        onTap: (i) {
-          HapticFeedback.selectionClick();
-          if (i == _currentIndex) return;
-
-          setState(() => _currentIndex = i);
-
-          switch (i) {
-            case 0:
-              Navigator.pushNamed(context, AppRoutes.home);
-              break;
-            case 1:
-              Navigator.pushNamed(context, AppRoutes.campus_ride);
-              break;
-            case 2:
-            // Navigator.pushReplacementNamed(context, AppRoutes.send_me);
-              break;
-            case 3:
-            // Navigator.pushReplacementNamed(context, AppRoutes.dispatch);
-              break;
-            case 4:
-            // Already here
-              break;
-          }
-        },
-      ),
-
-       */
-
     );
   }
 
@@ -623,6 +589,8 @@ class _ProfileScreenState extends State<ProfileScreen> with SingleTickerProvider
         ),
         Divider(color: isDark ? cs.outline.withOpacity(0.3) : AppColors.mintBgLight.withOpacity(0.2), height: 1),
         _buildListTile(ui, cs, isDark, 'Privacy Policy', Icons.privacy_tip_outlined, const Color(0xFF1E8E3E), onTap: () => _launchUrl(_privacyPolicyUrl)),
+        Divider(color: isDark ? cs.outline.withOpacity(0.3) : AppColors.mintBgLight.withOpacity(0.2), height: 1),
+        _buildListTile(ui, cs, isDark, 'Terms of Service', Icons.description_outlined, isDark ? cs.secondary : AppColors.secondary, onTap: () => _launchUrl(ApiConstants.termsOfServiceUrl)),
       ],
     );
   }
@@ -808,7 +776,6 @@ class _ProfileScreenState extends State<ProfileScreen> with SingleTickerProvider
   }
 
   void _showEditBottomSheet({required String title, required String dbKey, required String dbAction, required String initialValue, required String hint, required IconData icon}) {
-    final ctrl = TextEditingController(text: initialValue);
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
     final cs = theme.colorScheme;
@@ -817,7 +784,11 @@ class _ProfileScreenState extends State<ProfileScreen> with SingleTickerProvider
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
-      builder: (c) => Container(
+      builder: (c) => _SheetControllers(
+        count: 1,
+        initial: [initialValue], builder: (c, ctrls) {
+            final ctrl = ctrls[0];
+            return Container(
         decoration: BoxDecoration(color: isDark ? cs.surface : Colors.white, borderRadius: const BorderRadius.vertical(top: Radius.circular(28))),
         padding: EdgeInsets.fromLTRB(24, 16, 24, MediaQuery.of(context).viewInsets.bottom + 24),
         child: Column(
@@ -854,14 +825,13 @@ class _ProfileScreenState extends State<ProfileScreen> with SingleTickerProvider
             ),
           ],
         ),
+      );
+        },
       ),
     );
   }
 
   void _showPasswordBottomSheet() {
-    final oldC = TextEditingController();
-    final newC = TextEditingController();
-    final confC = TextEditingController();
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
     final cs = theme.colorScheme;
@@ -870,7 +840,13 @@ class _ProfileScreenState extends State<ProfileScreen> with SingleTickerProvider
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
-      builder: (c) => Container(
+      builder: (c) => _SheetControllers(
+        count: 3,
+        builder: (c, ctrls) {
+            final oldC = ctrls[0];
+            final newC = ctrls[1];
+            final confC = ctrls[2];
+            return Container(
         decoration: BoxDecoration(color: isDark ? cs.surface : Colors.white, borderRadius: const BorderRadius.vertical(top: Radius.circular(28))),
         padding: EdgeInsets.fromLTRB(24, 16, 24, MediaQuery.of(context).viewInsets.bottom + 24),
         child: Column(
@@ -899,14 +875,13 @@ class _ProfileScreenState extends State<ProfileScreen> with SingleTickerProvider
             ),
           ],
         ),
+      );
+        },
       ),
     );
   }
 
   void _showTransactionCodeBottomSheet() {
-    final oldC = TextEditingController();
-    final newC = TextEditingController();
-    final confC = TextEditingController();
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
     final cs = theme.colorScheme;
@@ -915,7 +890,13 @@ class _ProfileScreenState extends State<ProfileScreen> with SingleTickerProvider
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
-      builder: (c) => Container(
+      builder: (c) => _SheetControllers(
+        count: 3,
+        builder: (c, ctrls) {
+            final oldC = ctrls[0];
+            final newC = ctrls[1];
+            final confC = ctrls[2];
+            return Container(
         decoration: BoxDecoration(color: isDark ? cs.surface : Colors.white, borderRadius: const BorderRadius.vertical(top: Radius.circular(28))),
         padding: EdgeInsets.fromLTRB(24, 16, 24, MediaQuery.of(context).viewInsets.bottom + 24),
         child: Column(
@@ -945,6 +926,8 @@ class _ProfileScreenState extends State<ProfileScreen> with SingleTickerProvider
             ),
           ],
         ),
+      );
+        },
       ),
     );
   }
@@ -976,10 +959,9 @@ class _ProfileScreenState extends State<ProfileScreen> with SingleTickerProvider
                 const SizedBox(width: 16),
                 Expanded(
                   child: ElevatedButton(
-                    onPressed: () async {
+                    onPressed: () {
                       Navigator.pop(c);
-                      await _prefs.clear();
-                      if (mounted) Navigator.of(context).pushNamedAndRemoveUntil(AppRoutes.login, (route) => false);
+                      _signOut();
                     },
                     style: ElevatedButton.styleFrom(backgroundColor: cs.error, foregroundColor: cs.onError, elevation: 0, padding: const EdgeInsets.symmetric(vertical: 16), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16))),
                     child: const Text('Sign Out', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 16)),
@@ -994,7 +976,6 @@ class _ProfileScreenState extends State<ProfileScreen> with SingleTickerProvider
   }
 
   void _showDeleteAccountBottomSheet() {
-    final confC = TextEditingController();
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
     final cs = theme.colorScheme;
@@ -1003,19 +984,27 @@ class _ProfileScreenState extends State<ProfileScreen> with SingleTickerProvider
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
-      builder: (c) => Container(
+      builder: (c) => _SheetControllers(
+        count: 1,
+        builder: (c, ctrls) {
+            final confC = ctrls[0];
+            return Container(
         decoration: BoxDecoration(color: isDark ? cs.surface : Colors.white, borderRadius: const BorderRadius.vertical(top: Radius.circular(28))),
         padding: EdgeInsets.fromLTRB(24, 16, 24, MediaQuery.of(context).viewInsets.bottom + 24),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            _bottomSheetHeader('Delete Account', 'This action is permanent and cannot be undone. All your ride history, wallet balance, and profile data will be permanently wiped.', Icons.warning_amber_rounded, cs.error, isDark, cs),
+            _bottomSheetHeader('Delete Account', 'This is permanent and cannot be undone. Your profile and personal data will be deleted and you will be signed out on all devices. Records we must keep by law (e.g. payment receipts) are retained in anonymised form. Withdraw any wallet balance first.', Icons.warning_amber_rounded, cs.error, isDark, cs),
             TextField(
               controller: confC,
-              style: TextStyle(fontWeight: FontWeight.w900, color: cs.error, letterSpacing: 2),
+              obscureText: true,
+              autofillHints: const [AutofillHints.password],
+              enableSuggestions: false,
+              autocorrect: false,
+              style: TextStyle(fontWeight: FontWeight.w700, color: isDark ? cs.onSurface : AppColors.textPrimary),
               decoration: InputDecoration(
-                hintText: 'Type DELETE to confirm',
-                hintStyle: TextStyle(color: cs.error.withOpacity(0.5), letterSpacing: 0, fontWeight: FontWeight.w600),
+                hintText: 'Enter your password to confirm',
+                hintStyle: TextStyle(color: cs.error.withOpacity(0.6), fontWeight: FontWeight.w600),
                 filled: true,
                 fillColor: cs.error.withOpacity(0.05),
                 border: OutlineInputBorder(borderRadius: BorderRadius.circular(16), borderSide: BorderSide(color: cs.error.withOpacity(0.3))),
@@ -1037,12 +1026,13 @@ class _ProfileScreenState extends State<ProfileScreen> with SingleTickerProvider
                 Expanded(
                   child: ElevatedButton(
                     onPressed: () {
-                      if (confC.text.trim() == 'DELETE') {
-                        Navigator.pop(c);
-                        _deleteAccount();
-                      } else {
-                        _fail('You must type DELETE to confirm.');
+                      final password = confC.text;
+                      if (password.isEmpty) {
+                        _fail('Enter your password to confirm.');
+                        return;
                       }
+                      Navigator.pop(c);
+                      _deleteAccount(password);
                     },
                     style: ElevatedButton.styleFrom(backgroundColor: cs.error, foregroundColor: cs.onError, elevation: 0, padding: const EdgeInsets.symmetric(vertical: 16), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16))),
                     child: const Text('Delete Forever', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 16)),
@@ -1052,6 +1042,8 @@ class _ProfileScreenState extends State<ProfileScreen> with SingleTickerProvider
             ),
           ],
         ),
+      );
+        },
       ),
     );
   }
@@ -1082,4 +1074,35 @@ class SlideGradientTransform extends GradientTransform {
   Matrix4? transform(Rect bounds, {TextDirection? textDirection}) {
     return Matrix4.translationValues(bounds.width * (percent * 2 - 1), 0, 0);
   }
+}
+
+/// Owns the TextEditingControllers of a bottom sheet so they are disposed
+/// together with the sheet (they used to leak on every open).
+class _SheetControllers extends StatefulWidget {
+  const _SheetControllers({required this.count, this.initial = const [], required this.builder});
+
+  final int count;
+  final List<String> initial;
+  final Widget Function(BuildContext context, List<TextEditingController> controllers) builder;
+
+  @override
+  State<_SheetControllers> createState() => _SheetControllersState();
+}
+
+class _SheetControllersState extends State<_SheetControllers> {
+  late final List<TextEditingController> _ctrls = List.generate(
+    widget.count,
+    (i) => TextEditingController(text: i < widget.initial.length ? widget.initial[i] : null),
+  );
+
+  @override
+  void dispose() {
+    for (final c in _ctrls) {
+      c.dispose();
+    }
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => widget.builder(context, _ctrls);
 }

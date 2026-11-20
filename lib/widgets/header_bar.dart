@@ -1,11 +1,14 @@
-// lib/screens/home/widgets/header_bar.dart
+// lib/widgets/header_bar.dart
 //
 // ─── PRODUCTION-GRADE HEADER BAR ───────────────────────────────────────────
 //  • Self-contained active-task detection via SharedPreferences ride cache.
 //    Zero prop-drilling required — reads the EXACT same cache key that
 //    RideHistoryScreen writes, so the alert appears instantly on mount.
-//  • Reactive: refreshes whenever the widget is rebuilt (tab switch, resume)
-//    and every 15 seconds via a background ticker for live accuracy.
+//  • Reactive: refreshes when the user changes, at most every few seconds on
+//    parent rebuilds, and every 15 seconds via a background timer.
+//  • The pulse animation only runs while there is an active task (a
+//    permanently repeating controller forces a new frame 60x per second and
+//    keeps the whole map screen rendering).
 //  • Red pulsing ALERT PILL replaces notification icon when tasks are pending.
 //  • Retains all original functionality: avatar, greeting, wallet button.
 //  • Full a11y, haptics, responsive scaling, dark/light theming.
@@ -19,7 +22,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-import '../../../themes/app_theme.dart';
+import '../themes/app_theme.dart';
 import '../routes/routes.dart';
 
 // ─── Active status set — mirrors RideHistoryScreen exactly ───────────────────
@@ -37,9 +40,6 @@ const _kActiveStatuses = {
 
 // ─── Cache refresh interval ───────────────────────────────────────────────────
 const _kRefreshInterval = Duration(seconds: 15);
-
-// ─── Default logo fallback ────────────────────────────────────────────────────
-const _kDefaultLogoUrl = 'https://phantomphones.store/pick_me/img/logo.png';
 
 // ═════════════════════════════════════════════════════════════════════════════
 //  HeaderBar
@@ -80,6 +80,8 @@ class _HeaderBarState extends State<HeaderBar>
   bool _derivedHasActiveTask = false;
   int  _activeTaskCount       = 0;
   Timer? _refreshTimer;
+  DateTime _lastRefresh = DateTime.fromMillisecondsSinceEpoch(0);
+  bool _refreshing = false;
 
   // ── Unified resolved flag ──────────────────────────────────────────────────
   bool get _hasActiveTask =>
@@ -93,7 +95,8 @@ class _HeaderBarState extends State<HeaderBar>
     _pulseCtrl = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 1400),
-    )..repeat();
+    );
+    _syncPulse();
 
     // Immediate cache read — no await spinner; UI renders default then snaps.
     _refreshFromCache();
@@ -107,8 +110,22 @@ class _HeaderBarState extends State<HeaderBar>
   @override
   void didUpdateWidget(HeaderBar oldWidget) {
     super.didUpdateWidget(oldWidget);
-    // Re-check whenever parent rebuilds (e.g. tab switch returns to home).
-    _refreshFromCache();
+    // Parents rebuild often (map screens): only hit SharedPreferences + JSON
+    // decode when something relevant changed or the data is a few seconds old.
+    final userChanged = !identical(oldWidget.user, widget.user);
+    if (userChanged || DateTime.now().difference(_lastRefresh) > const Duration(seconds: 5)) {
+      _refreshFromCache();
+    }
+    if (oldWidget.hasActiveTask != widget.hasActiveTask) _syncPulse();
+  }
+
+  void _syncPulse() {
+    if (_hasActiveTask) {
+      if (!_pulseCtrl.isAnimating) _pulseCtrl.repeat();
+    } else if (_pulseCtrl.isAnimating || _pulseCtrl.value != 0) {
+      _pulseCtrl.stop();
+      _pulseCtrl.value = 0;
+    }
   }
 
   @override
@@ -121,7 +138,9 @@ class _HeaderBarState extends State<HeaderBar>
   // ─── Cache reader ────────────────────────────────────────────────────────
   Future<void> _refreshFromCache() async {
     // Only runs the autonomous path when parent hasn't provided an override.
-    if (widget.hasActiveTask != null) return;
+    if (widget.hasActiveTask != null || _refreshing) return;
+    _refreshing = true;
+    _lastRefresh = DateTime.now();
 
     try {
       final prefs = await SharedPreferences.getInstance();
@@ -146,6 +165,8 @@ class _HeaderBarState extends State<HeaderBar>
       _applyTaskState(count > 0, count);
     } catch (_) {
       // Silently fail — never crash the header.
+    } finally {
+      _refreshing = false;
     }
   }
 
@@ -156,6 +177,7 @@ class _HeaderBarState extends State<HeaderBar>
       _derivedHasActiveTask = hasTask;
       _activeTaskCount       = count;
     });
+    _syncPulse();
   }
 
   // ─── Metrics ──────────────────────────────────────────────────────────────
@@ -165,7 +187,7 @@ class _HeaderBarState extends State<HeaderBar>
     final base = (shortest / 390.0).clamp(0.75, 1.15);
     return _ResponsiveMetrics(
       scale:       base.toDouble(),
-      textScale:   mq.textScaleFactor.clamp(0.85, 1.25).toDouble(),
+      textScale:   mq.textScaler.scale(1.0).clamp(0.85, 1.25).toDouble(),
       isLandscape: mq.orientation == Orientation.landscape,
       safeTop:     mq.padding.top,
     );
@@ -202,9 +224,9 @@ class _HeaderBarState extends State<HeaderBar>
     final avatarUrl = _safeAvatarUrl(widget.user?['user_logo'] as String?);
 
     final textColor = isDark ? cs.onSurface       : AppColors.textPrimary;
-    final subColor  = isDark ? cs.onSurfaceVariant : AppColors.textSecondary.withOpacity(.90);
+    final subColor  = isDark ? cs.onSurfaceVariant : AppColors.textSecondary.withValues(alpha: .90);
     final bg        = isDark ? cs.surface          : theme.cardColor;
-    final brdr      = isDark ? cs.outline          : AppColors.mintBgLight.withOpacity(.30);
+    final brdr      = isDark ? cs.outline          : AppColors.mintBgLight.withValues(alpha: .30);
 
     return Padding(
       padding: EdgeInsets.fromLTRB(
@@ -220,7 +242,7 @@ class _HeaderBarState extends State<HeaderBar>
           border:       Border.all(color: brdr, width: 1),
           boxShadow: [
             BoxShadow(
-              color:      Colors.black.withOpacity(isDark ? .40 : .08),
+              color:      Colors.black.withValues(alpha: isDark ? .40 : .08),
               blurRadius: 12 * m.scale,
               offset:     Offset(0, 6 * m.scale),
             ),
@@ -415,6 +437,8 @@ class _AvatarButton extends StatelessWidget {
         networkUrl!,
         width:   size,
         height:  size,
+        // Decode at display size instead of the full-resolution upload.
+        cacheWidth: (size * MediaQuery.devicePixelRatioOf(context)).round(),
         fit:     BoxFit.cover,
         errorBuilder: (_, __, ___) =>
             _PlaceholderAvatar(size: size, isDark: isDark, cs: cs),
@@ -436,12 +460,12 @@ class _AvatarButton extends StatelessWidget {
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
                 border: Border.all(
-                  color: isDark ? cs.primary : Colors.white.withOpacity(.9),
+                  color: isDark ? cs.primary : Colors.white.withValues(alpha: .9),
                   width: 1.5,
                 ),
                 boxShadow: [
                   BoxShadow(
-                    color:      Colors.black.withOpacity(isDark ? .40 : .18),
+                    color:      Colors.black.withValues(alpha: isDark ? .40 : .18),
                     blurRadius: 8 * metrics.scale,
                     offset:     Offset(0, 3.5 * metrics.scale),
                   ),
@@ -466,7 +490,7 @@ class _AvatarButton extends StatelessWidget {
                     boxShadow: [
                       BoxShadow(
                         color: (isDark ? cs.primary : AppColors.primary)
-                            .withOpacity(0.45),
+                            .withValues(alpha: 0.45),
                         blurRadius: 3.5 * metrics.scale,
                       ),
                     ],
@@ -495,7 +519,7 @@ class _PlaceholderAvatar extends StatelessWidget {
   Widget build(BuildContext context) {
     return CircleAvatar(
       radius:          size / 2,
-      backgroundColor: isDark ? cs.surfaceVariant : Colors.white.withOpacity(.7),
+      backgroundColor: isDark ? cs.surfaceContainerHighest : Colors.white.withValues(alpha: .7),
       child: Icon(
         Icons.person,
         color: isDark ? cs.onSurfaceVariant : Colors.black54,
@@ -591,19 +615,19 @@ class _ActiveTaskAlertPillState extends State<_ActiveTaskAlertPill>
                     ),
                     borderRadius: BorderRadius.circular(12 * m.scale),
                     border: Border.all(
-                      color: Colors.red.shade200.withOpacity(0.55 + 0.25 * pulse),
+                      color: Colors.red.shade200.withValues(alpha: 0.55 + 0.25 * pulse),
                       width: 1.5,
                     ),
                     boxShadow: [
                       // Inner soft glow
                       BoxShadow(
-                        color:       Colors.red.withOpacity(0.30 + 0.35 * pulse),
+                        color:       Colors.red.withValues(alpha: 0.30 + 0.35 * pulse),
                         blurRadius:  6 + 10 * pulse,
                         spreadRadius: 0 + 2 * pulse,
                       ),
                       // Outer dramatic halo at peak pulse
                       BoxShadow(
-                        color:       Colors.redAccent.withOpacity(0.15 * pulse),
+                        color:       Colors.redAccent.withValues(alpha: 0.15 * pulse),
                         blurRadius:  20 * pulse,
                         spreadRadius: 4 * pulse,
                       ),
@@ -640,10 +664,10 @@ class _ActiveTaskAlertPillState extends State<_ActiveTaskAlertPill>
                             vertical:   1.5 * m.scale,
                           ),
                           decoration: BoxDecoration(
-                            color:        Colors.white.withOpacity(0.25),
+                            color:        Colors.white.withValues(alpha: 0.25),
                             borderRadius: BorderRadius.circular(20),
                             border:       Border.all(
-                              color: Colors.white.withOpacity(0.50),
+                              color: Colors.white.withValues(alpha: 0.50),
                               width: 1,
                             ),
                           ),
@@ -716,11 +740,11 @@ class _HeaderActionState extends State<_HeaderAction>
 
   @override
   Widget build(BuildContext context) {
-    final bg          = widget.isDark ? widget.cs.surfaceVariant : Colors.white;
+    final bg          = widget.isDark ? widget.cs.surfaceContainerHighest : Colors.white;
     final iconColor   = widget.isDark ? widget.cs.primary        : AppColors.deep;
     final borderColor = widget.isDark
         ? widget.cs.outline
-        : AppColors.mintBgLight.withOpacity(.45);
+        : AppColors.mintBgLight.withValues(alpha: .45);
 
     return Tooltip(
       message:      widget.tooltip,
@@ -743,7 +767,7 @@ class _HeaderActionState extends State<_HeaderAction>
               border: Border.all(color: borderColor, width: 1),
               boxShadow: [
                 BoxShadow(
-                  color:      Colors.black.withOpacity(widget.isDark ? .40 : .08),
+                  color:      Colors.black.withValues(alpha: widget.isDark ? .40 : .08),
                   blurRadius: 7 * widget.metrics.scale,
                   offset:     Offset(0, 2.5 * widget.metrics.scale),
                 ),
@@ -808,10 +832,10 @@ class _WalletButtonState extends State<_WalletButton>
 
   @override
   Widget build(BuildContext context) {
-    final bg          = widget.isDark ? widget.cs.surfaceVariant : Colors.white;
+    final bg          = widget.isDark ? widget.cs.surfaceContainerHighest : Colors.white;
     final borderColor = widget.isDark
         ? widget.cs.outline
-        : AppColors.mintBgLight.withOpacity(.45);
+        : AppColors.mintBgLight.withValues(alpha: .45);
     final iconColor   = widget.isDark ? widget.cs.primary : AppColors.deep;
     final ringSize    = widget.size * 0.64;
 
@@ -837,7 +861,7 @@ class _WalletButtonState extends State<_WalletButton>
               border:       Border.all(color: borderColor, width: 1),
               boxShadow: [
                 BoxShadow(
-                  color:      Colors.black.withOpacity(widget.isDark ? .40 : .08),
+                  color:      Colors.black.withValues(alpha: widget.isDark ? .40 : .08),
                   blurRadius: 7 * widget.metrics.scale,
                   offset:     Offset(0, 2.5 * widget.metrics.scale),
                 ),
@@ -863,7 +887,7 @@ class _WalletButtonState extends State<_WalletButton>
                                 color: (widget.isDark
                                     ? widget.cs.primary
                                     : AppColors.primary)
-                                    .withOpacity((1 - t) * 0.40),
+                                    .withValues(alpha: (1 - t) * 0.40),
                                 width: 1.2,
                               ),
                             ),

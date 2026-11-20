@@ -1,9 +1,9 @@
-// lib/screens/home/state/home_models.dart
+// lib/screens/state/home_models.dart
 // Core models + enums (pure & reusable).
 
 import 'package:flutter/material.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
-import '../../../themes/app_theme.dart';
+import '../../themes/app_theme.dart';
 
 enum PointType { pickup, stop, destination }
 

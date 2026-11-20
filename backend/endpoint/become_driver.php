@@ -1,481 +1,207 @@
 <?php
-header('Content-Type: application/json');
-
-require_once '../unique/unique_con.php';
-require_once 'auth.php';
-require_once '../unique/unique_code.php';
-require_once '../unique/unique_gtm.php';
-require_once '../unique/unique_func.php';
-require_once 'activities.php';
-
-$headers = function_exists('apache_request_headers') ? apache_request_headers() : array();
-$token = isset($headers['Authorization']) ? $headers['Authorization'] : '';
-
-$authorized = checkAuthorization($token);
-if (!$authorized) {
-    http_response_code(401);
-    echo json_encode(array(
-        'error' => true,
-        'message' => 'Unauthorized access',
-        'data' => null,
-    ));
-    exit();
-}
-
-function sanitizeInput($input) {
-    return trim(htmlspecialchars((string)$input, ENT_QUOTES, 'UTF-8'));
-}
-
-function jsonResponse($payload, $statusCode = 200) {
-    http_response_code($statusCode);
-    echo json_encode($payload);
-    exit();
-}
-
-function validateRequired($value, $label) {
-    if (trim((string)$value) === '') {
-        throw new Exception($label . ' is required.');
-    }
-}
-
-function normalizeDriverStatus($status) {
-    $value = strtolower(trim((string)$status));
-    if ($value === 'approved' || $value === 'activated') {
-        return 'activated';
-    }
-    if ($value === 'pending') {
-        return 'pending';
-    }
-    if ($value === 'rejected') {
-        return 'rejected';
-    }
-    return 'not_started';
-}
-
-function uploadBaseDir() {
-    return 'uploads/driver_applications';
-}
-
-function uploadRelativeDir() {
-    return 'uploads/driver_applications';
-}
-
-function ensureUploadDir($userUid) {
-    $safeUid = preg_replace('/[^A-Za-z0-9_-]/', '', (string)$userUid);
-    if ($safeUid === '') {
-        $safeUid = 'unknown_user';
-    }
-
-    $absoluteDir = uploadBaseDir() . '/' . $safeUid;
-    if (!is_dir($absoluteDir)) {
-        @mkdir($absoluteDir, 0775, true);
-    }
-
-    if (!is_dir($absoluteDir)) {
-        throw new Exception('Unable to prepare upload directory.');
-    }
-
-    return array(
-        'absolute' => $absoluteDir,
-        'relative' => uploadRelativeDir() . '/' . $safeUid,
-    );
-}
+declare(strict_types=1);
 
 /**
- * Advanced Image Processor: 
- * Resizes to max 1200px, converts to highly compressed WebP, and returns the absolute URL.
+ * POST become_driver.php — driver onboarding for the session user (session required).
+ * action=status : application status
+ * action=submit : multipart application (9 images re-encoded to WebP with random names)
+ *
+ * Security: the onboarding row and driver record are always those of the session user. An existing
+ * ride_drivers row is only re-used if it is already linked to this user's onboarding, or if it is an
+ * unlinked legacy row with the same phone/NIN; a phone/NIN that belongs to ANOTHER user's driver
+ * profile is rejected (prevents hijacking someone else's driver account / wallet).
  */
-function compressAndUploadWebp($fieldName, $userUid, $required = true) {
-    if (!isset($_FILES[$fieldName]) || $_FILES[$fieldName]['error'] !== UPLOAD_ERR_OK) {
-        if ($required) {
-            throw new Exception("Missing required upload: $fieldName.");
-        }
-        return null;
-    }
 
-    $file = $_FILES[$fieldName];
-    $tmpPath = $file['tmp_name'];
-    $info = @getimagesize($tmpPath);
-    
-    if (!$info) {
-        throw new Exception("Invalid image file uploaded for $fieldName.");
-    }
+require_once __DIR__ . '/security.php';
+require_once __DIR__ . '/activities.php';
 
-    $mime = $info['mime'];
-    
-    // Create image resource based on original format
-    switch ($mime) {
-        case 'image/jpeg':
-            $img = imagecreatefromjpeg($tmpPath);
-            break;
-        case 'image/png':
-            $img = imagecreatefrompng($tmpPath);
-            break;
-        case 'image/webp':
-            $img = imagecreatefromwebp($tmpPath);
-            break;
-        default:
-            throw new Exception("Unsupported image format for $fieldName. Please use JPG, PNG, or WEBP.");
-    }
+const DRIVER_IMAGE_FIELDS = ['driver_face', 'license_front', 'license_back', 'nin_front', 'nin_back', 'vehicle_angled', 'vehicle_front', 'vehicle_back', 'vehicle_side'];
+const DRIVER_RIDE_TYPES = ['street_ride', 'campus_ride', 'send_me', 'dispatch'];
+const DRIVER_VEHICLE_TYPES = ['car', 'bike', 'keke', 'tricycle', 'bus', 'van', 'truck', 'bicycle', 'delivery'];
 
-    if (!$img) {
-        throw new Exception("Failed to process image for $fieldName.");
-    }
+pm_require_method('POST');
+$uid = pm_require_session();
+$in = pm_input();
 
-    // Resize logic (Max width/height 1200px)
-    $width = $info[0];
-    $height = $info[1];
-    $maxDim = 1200;
-
-    if ($width > $maxDim || $height > $maxDim) {
-        $ratio = $width / $height;
-        if ($ratio > 1) {
-            $newWidth = $maxDim;
-            $newHeight = (int)($maxDim / $ratio);
-        } else {
-            $newHeight = $maxDim;
-            $newWidth = (int)($maxDim * $ratio);
-        }
-        
-        $newImg = imagecreatetruecolor($newWidth, $newHeight);
-        
-        // Preserve transparency
-        if ($mime === 'image/png' || $mime === 'image/webp') {
-            imagealphablending($newImg, false);
-            imagesavealpha($newImg, true);
-            $transparent = imagecolorallocatealpha($newImg, 255, 255, 255, 127);
-            imagefilledrectangle($newImg, 0, 0, $newWidth, $newHeight, $transparent);
-        }
-        
-        imagecopyresampled($newImg, $img, 0, 0, 0, 0, $newWidth, $newHeight, $width, $height);
-        imagedestroy($img);
-        $img = $newImg;
-    }
-
-    // Save as WebP
-    $dirs = ensureUploadDir($userUid);
-    $safeBase = preg_replace('/[^A-Za-z0-9_-]/', '_', $fieldName);
-    $fileName = $safeBase . '_' . time() . '_' . mt_rand(1000, 9999) . '.webp';
-    $absolutePath = $dirs['absolute'] . '/' . $fileName;
-    $relativePath = $dirs['relative'] . '/' . $fileName;
-
-    // WebP conversion at 80% quality (excellent balance of size vs quality)
-    if (!imagewebp($img, $absolutePath, 80)) {
-        imagedestroy($img);
-        throw new Exception("Failed to save optimized image for $fieldName.");
-    }
-    imagedestroy($img);
-
-    // Return the absolute public URL
-    $baseUrl = 'https://realpickme.com/endpoint/';
-    return $baseUrl . $relativePath;
+function bd_fail(string $message, string $code = 'VALIDATION'): void
+{
+    pm_error($code, $message, 200, ['data' => null]);
 }
 
-function fetchUserAccount($userUid) {
-    global $dbconn;
-    $escapedUid = mysqli_real_escape_string($dbconn, $userUid);
-    $query = "SELECT u_uid, fname, lname, email, phone FROM unique_user_table WHERE u_uid='$escapedUid' LIMIT 1";
-    $result = mysqli_query($dbconn, $query);
-
-    if (!$result || mysqli_num_rows($result) === 0) {
-        throw new Exception('User account not found.');
-    }
-    return mysqli_fetch_assoc($result);
-}
-
-function fetchExistingOnboarding($userUid) {
-    global $dbconn;
-    $escapedUid = mysqli_real_escape_string($dbconn, $userUid);
-    $query = "SELECT * FROM ride_driver_onboarding WHERE user_uid='$escapedUid' LIMIT 1";
-    $result = mysqli_query($dbconn, $query);
-
-    if ($result && mysqli_num_rows($result) > 0) {
-        return mysqli_fetch_assoc($result);
-    }
-    return null;
-}
-
-function buildStatusPayload($row) {
+function buildStatusPayload(?array $row): array
+{
     if (!$row) {
-        return array(
-            'status' => 'not_started',
-            'raw_status' => null,
-            'can_submit' => true,
-            'driver_id' => null,
-            'admin_note' => null,
-            'submitted_at' => null,
-            'updated_at' => null,
-            'message' => 'No driver application found.',
-        );
+        return ['status' => 'not_started', 'raw_status' => null, 'can_submit' => true, 'driver_id' => null, 'admin_note' => null,
+                'submitted_at' => null, 'updated_at' => null, 'message' => 'No driver application found.'];
     }
-
-    $status = normalizeDriverStatus(isset($row['status']) ? $row['status'] : '');
-
-    return array(
-        'status' => $status,
-        'raw_status' => isset($row['status']) ? $row['status'] : null,
-        'can_submit' => !in_array($status, array('pending', 'activated'), true),
-        'driver_id' => isset($row['driver_id']) ? (int)$row['driver_id'] : null,
-        'admin_note' => isset($row['admin_note']) ? $row['admin_note'] : null,
-        'submitted_at' => isset($row['submitted_at']) ? $row['submitted_at'] : null,
-        'updated_at' => isset($row['updated_at']) ? $row['updated_at'] : null,
-        'message' => $status === 'pending'
-            ? 'Your driver application is pending review.'
-            : ($status === 'activated'
-                ? 'Your driver profile is already activated.'
-                : ($status === 'rejected'
-                    ? 'Your previous application was rejected. You may update and resubmit.'
-                    : 'No driver application found.')),
-    );
+    $status = pm_normalize_driver_status((string)$row['status']);
+    $messages = [
+        'pending'   => 'Your driver application is pending review.',
+        'activated' => 'Your driver profile is already activated.',
+        'rejected'  => 'Your previous application was rejected. You may update and resubmit.',
+    ];
+    return [
+        'status'       => $status,
+        'raw_status'   => $row['status'],
+        'can_submit'   => !in_array($status, ['pending', 'activated'], true),
+        'driver_id'    => $row['driver_id'] !== null ? (int)$row['driver_id'] : null,
+        'admin_note'   => $row['admin_note'],
+        'submitted_at' => $row['submitted_at'],
+        'updated_at'   => $row['updated_at'],
+        'message'      => $messages[$status] ?? 'No driver application found.',
+    ];
 }
 
-function getDriverApplicationStatus($userUid) {
-    validateRequired($userUid, 'User ID');
-    $row = fetchExistingOnboarding($userUid);
+$action = strtolower(pm_in_str($in, 'action', 20, 'submit'));
+$existing = pm_q_one(
+    'SELECT id, status, driver_id, admin_note, submitted_at, updated_at FROM ride_driver_onboarding WHERE user_uid = ? LIMIT 1',
+    's',
+    [$uid]
+);
 
-    return array(
-        'error' => false,
-        'message' => 'Driver application status loaded.',
-        'data' => buildStatusPayload($row),
-    );
+if ($action === 'status') {
+    pm_json(['error' => false, 'message' => 'Driver application status loaded.', 'data' => buildStatusPayload($existing)]);
+}
+if ($action !== 'submit') {
+    bd_fail('Unsupported action.');
 }
 
-function saveDriverApplication($userUid, $legalFullName, $email, $phone, $nin, $bankName, $accountNumber, $vehicleType, $vehicleModel, $allowedRideTypesJson) {
-    global $dbconn;
+pm_rate_limit('driver_apply', $uid, 5, 3600, 'Too many submissions. Please try again later.');
 
-    validateRequired($userUid, 'User ID');
-    validateRequired($legalFullName, 'Legal full name');
-    validateRequired($phone, 'Phone number');
-    validateRequired($nin, 'NIN');
-    validateRequired($bankName, 'Bank Name');
-    validateRequired($accountNumber, 'Account Number');
-
-    $user = fetchUserAccount($userUid);
-    $existing = fetchExistingOnboarding($userUid);
-    $existingStatus = normalizeDriverStatus($existing ? $existing['status'] : '');
-
-    if ($existingStatus === 'pending') {
-        throw new Exception('Your driver application is already pending review.');
-    }
-    if ($existingStatus === 'activated') {
-        throw new Exception('Your driver profile is already activated.');
-    }
-
-    // 1. Process all 9 images through the WebP compression engine
-    $driverFace = compressAndUploadWebp('driver_face', $userUid, true);
-    $licenseFront = compressAndUploadWebp('license_front', $userUid, true);
-    $licenseBack = compressAndUploadWebp('license_back', $userUid, true);
-    $ninFront = compressAndUploadWebp('nin_front', $userUid, true);
-    $ninBack = compressAndUploadWebp('nin_back', $userUid, true);
-    $vehicleAngled = compressAndUploadWebp('vehicle_angled', $userUid, true);
-    $vehicleFront = compressAndUploadWebp('vehicle_front', $userUid, true);
-    $vehicleBack = compressAndUploadWebp('vehicle_back', $userUid, true);
-    $vehicleSide = compressAndUploadWebp('vehicle_side', $userUid, true);
-
-    // 2. Format Vehicle Images into standard JSON Array
-    $vehicleImagesArr = [$vehicleAngled, $vehicleFront, $vehicleBack, $vehicleSide];
-    $vehicleImagesJson = json_encode($vehicleImagesArr, JSON_UNESCAPED_SLASHES);
-    
-    // Front car goes to explicit column
-    $carImageUrl = $vehicleFront; 
-
-    // Store tracking data for onboarding table
-    $submittedImagesJson = json_encode(array(
-        'driver_face_url' => $driverFace,
-        'license_front_url' => $licenseFront,
-        'license_back_url' => $licenseBack,
-        'nin_front_url' => $ninFront,
-        'nin_back_url' => $ninBack,
-        'vehicle_angled_url' => $vehicleAngled,
-        'vehicle_front_url' => $vehicleFront,
-        'vehicle_back_url' => $vehicleBack,
-        'vehicle_side_url' => $vehicleSide,
-    ), JSON_UNESCAPED_SLASHES);
-
-    // 3. Process Ride Types (Decode from Flutter's JSON array and comma-separate)
-    $rideTypesDecoded = json_decode($allowedRideTypesJson, true);
-    $rideTypesStr = is_array($rideTypesDecoded) ? implode(',', $rideTypesDecoded) : 'street_ride';
-
-    // 4. Resolve Strings
-    $resolvedName = trim($legalFullName) !== '' ? trim($legalFullName) : trim(($user['fname'] ?? '') . ' ' . ($user['lname'] ?? ''));
-    $resolvedEmail = trim($email) !== '' ? trim($email) : trim($user['email'] ?? '');
-    $resolvedPhone = trim($phone) !== '' ? trim($phone) : trim($user['phone'] ?? '');
-    $resolvedNin = strtoupper(trim($nin));
-
-    // 5. Escaping for SQL
-    $escapedUid = mysqli_real_escape_string($dbconn, $userUid);
-    $escapedName = mysqli_real_escape_string($dbconn, $resolvedName);
-    $escapedEmail = mysqli_real_escape_string($dbconn, $resolvedEmail);
-    $escapedPhone = mysqli_real_escape_string($dbconn, $resolvedPhone);
-    $escapedNin = mysqli_real_escape_string($dbconn, $resolvedNin);
-    $escapedBankName = mysqli_real_escape_string($dbconn, trim($bankName));
-    $escapedAccountNumber = mysqli_real_escape_string($dbconn, trim($accountNumber));
-    $escapedVehicleType = mysqli_real_escape_string($dbconn, trim($vehicleType));
-    $escapedVehicleModel = mysqli_real_escape_string($dbconn, trim($vehicleModel));
-    $escapedRideTypes = mysqli_real_escape_string($dbconn, $rideTypesStr);
-    
-    // Escaping JSON fields
-    $escapedVehicleImagesJson = mysqli_real_escape_string($dbconn, $vehicleImagesJson);
-    $escapedCarImageUrl = mysqli_real_escape_string($dbconn, $carImageUrl);
-    $escapedDriverFace = mysqli_real_escape_string($dbconn, $driverFace);
-    
-    // Onboarding table escape specifics
-    $licenseFrontEsc = mysqli_real_escape_string($dbconn, $licenseFront);
-    $licenseBackEsc = mysqli_real_escape_string($dbconn, $licenseBack);
-    $ninFrontEsc = mysqli_real_escape_string($dbconn, $ninFront);
-    $ninBackEsc = mysqli_real_escape_string($dbconn, $ninBack);
-    $vehicleAngledEsc = mysqli_real_escape_string($dbconn, $vehicleAngled);
-    $vehicleFrontEsc = mysqli_real_escape_string($dbconn, $vehicleFront);
-    $vehicleBackEsc = mysqli_real_escape_string($dbconn, $vehicleBack);
-    $vehicleSideEsc = mysqli_real_escape_string($dbconn, $vehicleSide);
-    $submittedImagesEsc = mysqli_real_escape_string($dbconn, $submittedImagesJson);
-
-    mysqli_begin_transaction($dbconn);
-
-    try {
-        $onboardingId = null;
-        $driverId = null;
-
-        // --- UPDATE PHONE GLOBALLY FOR THIS USER ---
-        $updateUserPhone = "UPDATE unique_user_table SET phone='$escapedPhone' WHERE u_uid='$escapedUid'";
-        if (!mysqli_query($dbconn, $updateUserPhone)) {
-            throw new Exception('Unable to sync phone number to global profile.');
-        }
-
-        // --- HANDLE ONBOARDING RECORD ---
-        if ($existing) {
-            $onboardingId = (int)$existing['id'];
-
-            $updateOnboarding = "UPDATE ride_driver_onboarding SET
-                legal_full_name='$escapedName',
-                email='$escapedEmail',
-                phone='$escapedPhone',
-                nin='$escapedNin',
-                license_front_url='$licenseFrontEsc',
-                license_back_url='$licenseBackEsc',
-                nin_front_url='$ninFrontEsc',
-                nin_back_url='$ninBackEsc',
-                vehicle_angled_url='$vehicleAngledEsc',
-                vehicle_front_url='$vehicleFrontEsc',
-                vehicle_back_url='$vehicleBackEsc',
-                vehicle_side_url='$vehicleSideEsc',
-                submitted_images='$submittedImagesEsc',
-                status='pending',
-                admin_note=NULL,
-                updated_at=NOW()
-                WHERE id='$onboardingId'";
-
-            if (!mysqli_query($dbconn, $updateOnboarding)) {
-                throw new Exception('Unable to update driver onboarding record.');
-            }
-
-            $driverId = isset($existing['driver_id']) && $existing['driver_id'] !== null ? (int)$existing['driver_id'] : null;
-        } else {
-            $insertOnboarding = "INSERT INTO ride_driver_onboarding (
-                user_uid, legal_full_name, email, phone, nin, license_front_url, license_back_url, nin_front_url, nin_back_url, vehicle_angled_url, vehicle_front_url, vehicle_back_url, vehicle_side_url, submitted_images, status
-            ) VALUES (
-                '$escapedUid', '$escapedName', '$escapedEmail', '$escapedPhone', '$escapedNin', '$licenseFrontEsc', '$licenseBackEsc', '$ninFrontEsc', '$ninBackEsc', '$vehicleAngledEsc', '$vehicleFrontEsc', '$vehicleBackEsc', '$vehicleSideEsc', '$submittedImagesEsc', 'pending'
-            )";
-            
-            Activities("Driver application submitted",$escapedUid);
-
-            if (!mysqli_query($dbconn, $insertOnboarding)) {
-                throw new Exception('Unable to create driver onboarding record.');
-            }
-            $onboardingId = mysqli_insert_id($dbconn);
-        }
-
-        // --- HANDLE DRIVER RECORD ---
-        if ($driverId === null) {
-            $driverLookup = "SELECT id FROM ride_drivers WHERE phone='$escapedPhone' OR nin='$escapedNin' LIMIT 1";
-            $driverLookupResult = mysqli_query($dbconn, $driverLookup);
-            if ($driverLookupResult && mysqli_num_rows($driverLookupResult) > 0) {
-                $driverRow = mysqli_fetch_assoc($driverLookupResult);
-                $driverId = (int)$driverRow['id'];
-            }
-        }
-
-        if ($driverId !== null) {
-            $updateDriver = "UPDATE ride_drivers SET
-                name='$escapedName',
-                phone='$escapedPhone',
-                nin='$escapedNin',
-                bank_name='$escapedBankName',
-                account_number='$escapedAccountNumber',
-                vehicle_type='$escapedVehicleType',
-                car_model='$escapedVehicleModel',
-                allowed_ride_types='$escapedRideTypes',
-                vehicle_images='$escapedVehicleImagesJson',
-                car_image_url='$escapedCarImageUrl',
-                avatar_url='$escapedDriverFace',
-                rank='Verified',
-                updated_at=NOW()
-                WHERE id='$driverId'";
-
-            if (!mysqli_query($dbconn, $updateDriver)) {
-                throw new Exception('Unable to update driver record.');
-            }
-        } else {
-            $insertDriver = "INSERT INTO ride_drivers (
-                name, phone, nin, bank_name, account_number, vehicle_type, car_model, 
-                allowed_ride_types, vehicle_images, car_image_url, avatar_url, rank
-            ) VALUES (
-                '$escapedName', '$escapedPhone', '$escapedNin', '$escapedBankName', '$escapedAccountNumber', 
-                '$escapedVehicleType', '$escapedVehicleModel', '$escapedRideTypes', '$escapedVehicleImagesJson',
-                '$escapedCarImageUrl', '$escapedDriverFace', 'Verified'
-            )";
-            if (!mysqli_query($dbconn, $insertDriver)) {
-                throw new Exception('Unable to create driver record: ' . mysqli_error($dbconn));
-            }
-            $driverId = mysqli_insert_id($dbconn);
-        }
-
-        // --- LINK RECORDS ---
-        $linkOnboarding = "UPDATE ride_driver_onboarding SET driver_id='$driverId', updated_at=NOW() WHERE id='$onboardingId'";
-        if (!mysqli_query($dbconn, $linkOnboarding)) {
-            throw new Exception('Unable to link onboarding record to driver record.');
-        }
-
-        mysqli_commit($dbconn);
-
-        return array(
-            'error' => false,
-            'message' => 'Driver application submitted successfully.',
-            'data' => array(
-                'onboarding_id' => $onboardingId,
-                'driver_id' => $driverId,
-                'status' => 'pending',
-            ),
-        );
-    } catch (Exception $e) {
-        mysqli_rollback($dbconn);
-        throw $e;
-    }
+$legalName = pm_in_str($in, 'legal_full_name', 120);
+$email = strtolower(pm_in_str($in, 'email', 120));
+$phone = pm_normalize_phone(pm_in_str($in, 'phone', 32));
+$nin = strtoupper(preg_replace('/\s+/', '', pm_in_str($in, 'nin', 64)) ?? '');
+$bankName = pm_in_str($in, 'bank_name', 150);
+$accountNumber = preg_replace('/\D/', '', pm_in_str($in, 'account_number', 20)) ?? '';
+$vehicleType = pm_in_enum($in, 'vehicle_type', DRIVER_VEHICLE_TYPES, 'car');
+$vehicleModel = pm_in_str($in, 'vehicle_model', 40);
+$rideTypesRaw = json_decode((string)($in['allowed_ride_types'] ?? '["street_ride"]'), true);
+$rideTypes = array_values(array_intersect(DRIVER_RIDE_TYPES, is_array($rideTypesRaw) ? array_map('strval', $rideTypesRaw) : []));
+if (!$rideTypes) {
+    $rideTypes = ['street_ride'];
 }
 
+foreach (['Legal full name' => $legalName, 'Phone number' => $phone, 'NIN' => $nin, 'Bank Name' => $bankName, 'Account Number' => $accountNumber] as $label => $v) {
+    if ($v === '') {
+        bd_fail($label . ' is required.');
+    }
+}
+if ($email !== '' && !filter_var($email, FILTER_VALIDATE_EMAIL)) {
+    bd_fail('Please enter a valid email address.');
+}
+if (!preg_match('/^[A-Z0-9]{8,20}$/', $nin)) {
+    bd_fail('NIN is invalid.');
+}
+if (strlen($accountNumber) < 10) {
+    bd_fail('Account Number is invalid.');
+}
+
+$existingStatus = pm_normalize_driver_status((string)($existing['status'] ?? ''));
+if ($existingStatus === 'pending') {
+    bd_fail('Your driver application is already pending review.', 'CONFLICT');
+}
+if ($existingStatus === 'activated') {
+    bd_fail('Your driver profile is already activated.', 'CONFLICT');
+}
+
+// Phone / NIN already used by another user's onboarding?
+$clash = pm_q_one('SELECT id FROM ride_driver_onboarding WHERE (phone = ? OR nin = ?) AND user_uid <> ? LIMIT 1', 'sss', [$phone, $nin, $uid]);
+if ($clash) {
+    bd_fail('This phone number or NIN is already registered to another driver.', 'CONFLICT');
+}
+
+$user = pm_q_one('SELECT fname, lname, email FROM unique_user_table WHERE u_uid = ? LIMIT 1', 's', [$uid]);
+$resolvedEmail = $email !== '' ? $email : (string)($user['email'] ?? '');
+
+$urls = [];
 try {
-    $action = isset($_POST['action']) ? strtolower(sanitizeInput($_POST['action'])) : 'submit';
-    $userUid = isset($_POST['user']) ? sanitizeInput($_POST['user']) : '';
+    foreach (DRIVER_IMAGE_FIELDS as $field) {
+        $urls[$field] = pm_store_image($field, 'uploads/driver_applications/' . pm_uid_dir($uid), true, 10 * 1024 * 1024, 1200);
+    }
+} catch (PmHttpError $e) {
+    foreach ($urls as $u) {
+        pm_delete_stored_file($u);
+    }
+    bd_fail($e->getMessage());
+}
 
-    if ($action === 'status') {
-        jsonResponse(getDriverApplicationStatus($userUid), 200);
+$vehicleImagesJson = json_encode([$urls['vehicle_angled'], $urls['vehicle_front'], $urls['vehicle_back'], $urls['vehicle_side']], JSON_UNESCAPED_SLASHES);
+$submittedImagesJson = json_encode([
+    'driver_face_url' => $urls['driver_face'], 'license_front_url' => $urls['license_front'], 'license_back_url' => $urls['license_back'],
+    'nin_front_url' => $urls['nin_front'], 'nin_back_url' => $urls['nin_back'], 'vehicle_angled_url' => $urls['vehicle_angled'],
+    'vehicle_front_url' => $urls['vehicle_front'], 'vehicle_back_url' => $urls['vehicle_back'], 'vehicle_side_url' => $urls['vehicle_side'],
+], JSON_UNESCAPED_SLASHES);
+$rideTypesStr = implode(',', $rideTypes);
+
+$result = pm_tx(function () use ($uid, $existing, $legalName, $resolvedEmail, $phone, $nin, $bankName, $accountNumber, $vehicleType, $vehicleModel, $rideTypesStr, $urls, $vehicleImagesJson, $submittedImagesJson) {
+    pm_exec('UPDATE unique_user_table SET phone = ? WHERE u_uid = ? LIMIT 1', 'ss', [$phone, $uid]);
+
+    if ($existing) {
+        $onboardingId = (int)$existing['id'];
+        pm_exec(
+            "UPDATE ride_driver_onboarding SET legal_full_name = ?, email = ?, phone = ?, nin = ?, license_front_url = ?, license_back_url = ?,
+                    nin_front_url = ?, nin_back_url = ?, vehicle_angled_url = ?, vehicle_front_url = ?, vehicle_back_url = ?, vehicle_side_url = ?,
+                    submitted_images = ?, status = 'pending', admin_note = NULL, updated_at = NOW()
+             WHERE id = ? AND user_uid = ?",
+            'sssssssssssssis',
+            [$legalName, $resolvedEmail, $phone, $nin, $urls['license_front'], $urls['license_back'], $urls['nin_front'], $urls['nin_back'],
+             $urls['vehicle_angled'], $urls['vehicle_front'], $urls['vehicle_back'], $urls['vehicle_side'], $submittedImagesJson, $onboardingId, $uid]
+        );
+        $driverId = $existing['driver_id'] !== null ? (int)$existing['driver_id'] : 0;
+    } else {
+        $onboardingId = pm_insert(
+            "INSERT INTO ride_driver_onboarding (user_uid, legal_full_name, email, phone, nin, license_front_url, license_back_url, nin_front_url,
+                    nin_back_url, vehicle_angled_url, vehicle_front_url, vehicle_back_url, vehicle_side_url, submitted_images, status)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')",
+            'ssssssssssssss',
+            [$uid, $legalName, $resolvedEmail, $phone, $nin, $urls['license_front'], $urls['license_back'], $urls['nin_front'], $urls['nin_back'],
+             $urls['vehicle_angled'], $urls['vehicle_front'], $urls['vehicle_back'], $urls['vehicle_side'], $submittedImagesJson]
+        );
+        $driverId = 0;
     }
 
-    $legalFullName = isset($_POST['legal_full_name']) ? sanitizeInput($_POST['legal_full_name']) : '';
-    $email = isset($_POST['email']) ? sanitizeInput($_POST['email']) : '';
-    $phone = isset($_POST['phone']) ? sanitizeInput($_POST['phone']) : '';
-    $nin = isset($_POST['nin']) ? strtoupper(sanitizeInput($_POST['nin'])) : '';
-    $bankName = isset($_POST['bank_name']) ? sanitizeInput($_POST['bank_name']) : '';
-    $accountNumber = isset($_POST['account_number']) ? sanitizeInput($_POST['account_number']) : '';
-    $vehicleType = isset($_POST['vehicle_type']) ? sanitizeInput($_POST['vehicle_type']) : 'car';
-    $vehicleModel = isset($_POST['vehicle_model']) ? sanitizeInput($_POST['vehicle_model']) : '';
-    $allowedRideTypes = isset($_POST['allowed_ride_types']) ? $_POST['allowed_ride_types'] : '["street_ride"]';
+    if ($driverId === 0) {
+        // Only adopt a legacy driver row that no onboarding record (of any user) points at.
+        $legacy = pm_q_one(
+            'SELECT d.id FROM ride_drivers d
+             LEFT JOIN ride_driver_onboarding o ON o.driver_id = d.id
+             WHERE (d.phone = ? OR d.nin = ?) AND o.id IS NULL
+             LIMIT 1 FOR UPDATE',
+            'ss',
+            [$phone, $nin]
+        );
+        $driverId = $legacy ? (int)$legacy['id'] : 0;
+    }
 
-    jsonResponse(saveDriverApplication($userUid, $legalFullName, $email, $phone, $nin, $bankName, $accountNumber, $vehicleType, $vehicleModel, $allowedRideTypes), 200);
-} catch (Exception $e) {
-    jsonResponse(array(
-        'error' => true,
-        'message' => $e->getMessage(),
-        'data' => null,
-    ), 200);
-}
+    if ($driverId > 0) {
+        pm_exec(
+            "UPDATE ride_drivers SET name = ?, phone = ?, nin = ?, bank_name = ?, account_number = ?, vehicle_type = ?, car_model = ?,
+                    allowed_ride_types = ?, vehicle_images = ?, car_image_url = ?, avatar_url = ?, is_online = 0, updated_at = NOW()
+             WHERE id = ?",
+            'sssssssssssi',
+            [$legalName, $phone, $nin, $bankName, $accountNumber, $vehicleType, $vehicleModel, $rideTypesStr, $vehicleImagesJson,
+             $urls['vehicle_front'], $urls['driver_face'], $driverId]
+        );
+    } else {
+        // New profiles start offline; `rank` is assigned by an admin on approval.
+        $driverId = pm_insert(
+            'INSERT INTO ride_drivers (name, phone, nin, bank_name, account_number, vehicle_type, car_model, allowed_ride_types,
+                                       vehicle_images, car_image_url, avatar_url, is_online)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)',
+            'sssssssssss',
+            [$legalName, $phone, $nin, $bankName, $accountNumber, $vehicleType, $vehicleModel, $rideTypesStr, $vehicleImagesJson,
+             $urls['vehicle_front'], $urls['driver_face']]
+        );
+    }
+    pm_exec('UPDATE ride_driver_onboarding SET driver_id = ?, updated_at = NOW() WHERE id = ?', 'ii', [$driverId, $onboardingId]);
+    return ['onboarding_id' => $onboardingId, 'driver_id' => $driverId];
+});
+
+pm_activity($uid, 'Driver application submitted');
+
+pm_json([
+    'error'   => false,
+    'message' => 'Driver application submitted successfully.',
+    'data'    => ['onboarding_id' => $result['onboarding_id'], 'driver_id' => $result['driver_id'], 'status' => 'pending'],
+]);

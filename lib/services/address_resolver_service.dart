@@ -9,33 +9,40 @@ class AddressResolverService {
   static const Duration _ttl = Duration(hours: 6);
   static const int _maxCacheSize = 300;
 
+  /// In-flight lookups, so concurrent callers for the same point share one
+  /// platform geocoder call.
+  static final Map<String, Future<String>> _inflight = <String, Future<String>>{};
+
   static Future<String> detailedAddressFromLatLng(
       double lat,
       double lng, {
         String fallback = 'Unknown location',
-      }) async {
+      }) {
     final key = _key(lat, lng);
-    final now = DateTime.now();
-
     final cached = _cache[key];
-    if (cached != null && now.difference(cached.createdAt) <= _ttl) {
-      return cached.value;
+    if (cached != null && DateTime.now().difference(cached.createdAt) <= _ttl) {
+      return Future<String>.value(cached.value);
     }
+    final pending = _inflight[key];
+    if (pending != null) return pending;
 
-    try {
-      final placemarks = await geo.placemarkFromCoordinates(lat, lng);
-      final text = formatPlacemark(
-        placemarks.isNotEmpty ? placemarks.first : null,
-        fallback: fallback,
-      );
-
-      _put(key, text);
-      return text;
-    } catch (_) {
-      final text = fallback;
-      _put(key, text);
-      return text;
-    }
+    final f = () async {
+      try {
+        final placemarks = await geo.placemarkFromCoordinates(lat, lng);
+        final first = placemarks.isNotEmpty ? placemarks.first : null;
+        final text = formatPlacemark(first, fallback: fallback);
+        // Only cache real results: a transient geocoder/network failure must
+        // not pin "Unknown location" for hours.
+        if (first != null) _put(key, text);
+        return text;
+      } catch (_) {
+        return fallback;
+      }
+    }();
+    _inflight[key] = f;
+    // Registered after insertion so even a synchronously-failing lookup is removed.
+    f.whenComplete(() => _inflight.remove(key)).ignore();
+    return f;
   }
 
   static String formatPlacemark(

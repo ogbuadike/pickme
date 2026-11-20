@@ -1,188 +1,129 @@
 <?php
-header('Content-Type: application/json');
+declare(strict_types=1);
 
-require_once '../unique/unique_con.php'; 
-require_once 'auth.php';
-require_once '../unique/unique_code.php';
-require_once '../unique/unique_gtm.php';
-//require_once '../unique/unique_all_pg.php'; //unique_pg.php';
-require_once '../unique/unique_func.php';
-require_once 'activities.php';
+/**
+ * POST user_login.php — PUBLIC (app key only). Params: email (email or phone), password.
+ * Success: login_msg contains the legacy profile fields + session_token + session_expires_at (contract §2).
+ * Passwords: argon2id/bcrypt; legacy unsalted sha256 hashes are verified once and upgraded.
+ * Rate limited per IP and per identifier.
+ */
 
-$headers = function_exists('apache_request_headers') ? apache_request_headers() : array();
-$token = isset($headers['Authorization']) ? $headers['Authorization'] : '';
+require_once __DIR__ . '/security.php';
+require_once __DIR__ . '/activities.php';
 
-// Check authorization
-$authorized = checkAuthorization($token);
-if (!$authorized) {
-    http_response_code(401);
-    $response = array(
-        'error' => true,
-        'message' => 'Unauthorized access',
-        'data' => null
-    );
+pm_require_method('POST');
+pm_require_app_key();
+$in = pm_input();
 
-    echo json_encode($response);
-    exit();
+function login_failure(string $title, string $body, string $code = 'VALIDATION', int $status = 200): void
+{
+    pm_error($code, $body, $status, ['login_msg' => ['title_msg' => $title, 'title_msg_body' => $body]]);
 }
 
-function sanitizeInput($input) {
-    return trim(htmlspecialchars((string)$input));
-}
-
-function normalizeDriverStatus($status) {
-    $status = strtolower(trim((string)$status));
-
-    if ($status === 'approved' || $status === 'activated') {
-        return 'activated';
-    }
-
-    if ($status === 'pending') {
-        return 'pending';
-    }
-
-    if ($status === 'rejected') {
-        return 'rejected';
-    }
-
-    return 'not_started';
-}
-
-function getDriverLoginMeta($userUid) {
-    global $dbconn;
-
-    $default = array(
-        'is_driver' => false,
-        'driver_status' => 'not_started',
-        'driver_id' => '',
-        'driver_online' => 0,
-        'driver_rank' => '',
-        'driver_category' => '',
-        'driver_car_plate' => '',
-        'post_login_home' => 'home',
-    );
-
-    if (empty($userUid)) {
+function getDriverLoginMeta(string $userUid): array
+{
+    $default = [
+        'is_driver' => false, 'driver_status' => 'not_started', 'driver_id' => '', 'driver_online' => 0,
+        'driver_rank' => '', 'driver_category' => '', 'driver_car_plate' => '', 'post_login_home' => 'home',
+    ];
+    $row = pm_driver_for_user($userUid);
+    if ($row === null) {
         return $default;
     }
-
-    $escapedUid = mysqli_real_escape_string($dbconn, $userUid);
-
-    $driver_sql = "SELECT 
-            o.status AS onboarding_status,
-            o.driver_id AS onboarding_driver_id,
-            d.id AS driver_id,
-            d.is_online,
-            d.rank,
-            d.category,
-            d.car_plate
-        FROM ride_driver_onboarding o
-        LEFT JOIN ride_drivers d ON d.id = o.driver_id
-        WHERE o.user_uid='$escapedUid'
-        ORDER BY o.id DESC
-        LIMIT 1";
-
-    $driver_q = mysqli_query($dbconn, $driver_sql);
-    if (!$driver_q || mysqli_num_rows($driver_q) < 1) {
-        return $default;
-    }
-
-    $driver_fet = mysqli_fetch_assoc($driver_q);
-    $driver_status = normalizeDriverStatus(isset($driver_fet['onboarding_status']) ? $driver_fet['onboarding_status'] : '');
-
-    $resolved_driver_id = '';
-    if (isset($driver_fet['driver_id']) && $driver_fet['driver_id'] !== null && $driver_fet['driver_id'] !== '') {
-        $resolved_driver_id = (string)$driver_fet['driver_id'];
-    } elseif (isset($driver_fet['onboarding_driver_id']) && $driver_fet['onboarding_driver_id'] !== null && $driver_fet['onboarding_driver_id'] !== '') {
-        $resolved_driver_id = (string)$driver_fet['onboarding_driver_id'];
-    }
-
-    $is_driver = ($resolved_driver_id !== '' && ($driver_status === 'activated'));
-
-    return array(
-        'is_driver' => $is_driver,
-        'driver_status' => $driver_status,
-        'driver_id' => $is_driver ? $resolved_driver_id : '',
-        'driver_online' => $is_driver ? (int)$driver_fet['is_online'] : 0,
-        'driver_rank' => $is_driver ? (string)$driver_fet['rank'] : '',
-        'driver_category' => $is_driver ? (string)$driver_fet['category'] : '',
-        'driver_car_plate' => $is_driver ? (string)$driver_fet['car_plate'] : '',
-        'post_login_home' => $is_driver ? 'driver_home' : 'home',
-    );
+    $status = pm_normalize_driver_status((string)$row['onboarding_status']);
+    $driverId = $row['id'] !== null ? (string)$row['id'] : (string)($row['onboarding_driver_id'] ?? '');
+    $isDriver = $driverId !== '' && $status === 'activated';
+    return [
+        'is_driver'        => $isDriver,
+        'driver_status'    => $status,
+        'driver_id'        => $isDriver ? $driverId : '',
+        'driver_online'    => $isDriver ? (int)$row['is_online'] : 0,
+        'driver_rank'      => $isDriver ? (string)$row['rank'] : '',
+        'driver_category'  => $isDriver ? (string)$row['category'] : '',
+        'driver_car_plate' => $isDriver ? (string)$row['car_plate'] : '',
+        'post_login_home'  => $isDriver ? 'driver_home' : 'home',
+    ];
 }
 
-function login($username, $password) {
-    global $dbconn;
+$identifier = pm_in_str($in, 'email', 255);
+$password = pm_in_raw($in, 'password', 1024);
 
-    // Hash the password using SHA-256
-    $hashedPassword = hash('sha256', $password);
-
-    // Escape user input (You can use mysqli_real_escape_string here if needed)
-    $escapedUsername = mysqli_real_escape_string($dbconn, $username);
-
-    $user_login = "SELECT * FROM unique_user_table WHERE (email='$escapedUsername' AND pass_code='$hashedPassword') OR (phone='$escapedUsername' AND pass_code='$hashedPassword') LIMIT 1";
-    $user_login_q = mysqli_query($dbconn, $user_login);
-    $user_login_num = $user_login_q ? mysqli_num_rows($user_login_q) : 0;
-    $user_login_fet = $user_login_q ? mysqli_fetch_assoc($user_login_q) : null;
-
-    if ($user_login_num == 1 && $user_login_fet) {
-        if ((int)$user_login_fet['sta'] == 0) {
-            $driver_meta = getDriverLoginMeta($user_login_fet['u_uid']);
-
-            $my_user_uid = $user_login_fet['u_uid'];
-            
-            Activities("Logged in to account",$my_user_uid);
-
-            return array(
-                'error' => false,
-                'login_msg' => array(
-                    'title_msg' => 'Success!',
-                    'title_msg_body' => 'Congratulations! You have successfully logged in to your account.',
-                    'uid' => $user_login_fet['u_uid'],
-                    'fname' => $user_login_fet['fname'],
-                    'lname' => $user_login_fet['lname'],
-                    'oname' => $user_login_fet['oname'],
-                    'email' => $user_login_fet['email'],
-                    'phone' => $user_login_fet['phone'],
-                    'accountname' => $user_login_fet['Account_Name'],
-                    'accountnumber' => $user_login_fet['Account_Number'],
-                    'bankname' => $user_login_fet['Bank_Name'],
-                    'user_mode' => $user_login_fet['user_mode'],
-                    'u_type' => (string)$user_login_fet['u_type'],
-                    'is_driver' => $driver_meta['is_driver'],
-                    'driver_status' => $driver_meta['driver_status'],
-                    'driver_id' => $driver_meta['driver_id'],
-                    'driver_online' => $driver_meta['driver_online'],
-                    'driver_rank' => $driver_meta['driver_rank'],
-                    'driver_category' => $driver_meta['driver_category'],
-                    'driver_car_plate' => $driver_meta['driver_car_plate'],
-                    'post_login_home' => $driver_meta['post_login_home'],
-                )
-            );
-        } elseif ((int)$user_login_fet['sta'] == 1) {
-            return array(
-                'error' => true,
-                'login_msg' => array(
-                    'title_msg' => 'Account Suspended',
-                    'title_msg_body' => 'Your account has been suspended. Please contact support for further assistance.'
-                )
-            );
-        }
-    }
-
-    return array(
-        'error' => true,
-        'login_msg' => array(
-            'title_msg' => 'Invalid Username or Password',
-            'title_msg_body' => 'Oops! The username or password you entered is incorrect. Please double-check and try again.'
-        )
-    );
+if ($identifier === '' || $password === '') {
+    login_failure('Invalid Username or Password', 'Please enter your email/phone and password.');
 }
 
-$user_name = isset($_POST['email']) ? sanitizeInput($_POST['email']) : '';
-$user_pass = isset($_POST['password']) ? (string)$_POST['password'] : '';
+$identKey = strtolower($identifier);
+pm_rate_limit('login_ip', pm_client_ip(), 30, 300, 'Too many login attempts. Please wait a few minutes.');
+pm_rate_limit('login_id', $identKey, 8, 900, 'Too many login attempts for this account. Please wait 15 minutes or reset your password.');
 
-$response = login($user_name, $user_pass);
+$candidates = pm_q_all(
+    'SELECT u_uid, fname, lname, oname, email, phone, pass_code, sta, Account_Name, Account_Number, Bank_Name, user_mode, u_type
+     FROM unique_user_table
+     WHERE email = ? OR phone = ?
+     LIMIT 3',
+    'ss',
+    [$identifier, $identifier]
+);
 
-http_response_code(200);
-echo json_encode($response);
+$user = null;
+$needsRehash = false;
+foreach ($candidates as $c) {
+    [$ok, $rehash] = pm_password_check($password, (string)$c['pass_code']);
+    if ($ok) {
+        $user = $c;
+        $needsRehash = $rehash;
+        break;
+    }
+}
+if (!$candidates) {
+    pm_password_check($password, ''); // equalise timing
+}
+
+if ($user === null || (int)$user['sta'] === 2) {
+    login_failure('Invalid Username or Password', 'Oops! The username or password you entered is incorrect. Please double-check and try again.');
+}
+if ((int)$user['sta'] === 1) {
+    login_failure('Account Suspended', 'Your account has been suspended. Please contact support for further assistance.', 'FORBIDDEN', 200);
+}
+if ((int)$user['sta'] !== 0) {
+    login_failure('Invalid Username or Password', 'Oops! The username or password you entered is incorrect. Please double-check and try again.');
+}
+
+$uid = (string)$user['u_uid'];
+if ($needsRehash) {
+    pm_exec('UPDATE unique_user_table SET pass_code = ? WHERE u_uid = ? LIMIT 1', 'ss', [pm_password_hash($password), $uid]);
+}
+pm_rate_limit_clear('login_id', $identKey);
+
+$session = pm_session_issue($uid);
+$driverMeta = getDriverLoginMeta($uid);
+pm_activity($uid, 'Logged in to account');
+
+pm_json([
+    'error' => false,
+    'login_msg' => [
+        'title_msg'          => 'Success!',
+        'title_msg_body'     => 'Congratulations! You have successfully logged in to your account.',
+        'uid'                => $uid,
+        'fname'              => (string)$user['fname'],
+        'lname'              => (string)$user['lname'],
+        'oname'              => (string)$user['oname'],
+        'email'              => (string)$user['email'],
+        'phone'              => (string)$user['phone'],
+        'accountname'        => (string)$user['Account_Name'],
+        'accountnumber'      => (string)$user['Account_Number'],
+        'bankname'           => (string)$user['Bank_Name'],
+        'user_mode'          => (string)$user['user_mode'],
+        'u_type'             => (string)$user['u_type'],
+        'is_driver'          => $driverMeta['is_driver'],
+        'driver_status'      => $driverMeta['driver_status'],
+        'driver_id'          => $driverMeta['driver_id'],
+        'driver_online'      => $driverMeta['driver_online'],
+        'driver_rank'        => $driverMeta['driver_rank'],
+        'driver_category'    => $driverMeta['driver_category'],
+        'driver_car_plate'   => $driverMeta['driver_car_plate'],
+        'post_login_home'    => $driverMeta['post_login_home'],
+        'session_token'      => $session['session_token'],
+        'session_expires_at' => $session['session_expires_at'],
+    ],
+]);

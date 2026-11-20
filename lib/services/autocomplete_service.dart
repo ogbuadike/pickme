@@ -1,6 +1,14 @@
-// lib/screens/home/services/autocomplete_service.dart
-// Premium Google Places Service (Autocomplete + FindPlace + Details)
-// Architected for high-performance ride-hailing queries.
+// lib/services/autocomplete_service.dart
+// Google Places Service (Autocomplete + FindPlace + Details)
+//
+//  • One keep-alive HTTP client for all calls (no TLS handshake per keystroke).
+//  • Autocomplete requests are cancellable: starting a new query aborts the
+//    previous in-flight one (`AbortableRequest`), so stale responses can never
+//    overwrite newer ones and no bandwidth is wasted. Callers should still use
+//    sequence numbers as a second line of defence.
+//  • Session tokens are passed through for Autocomplete + Details billing
+//    (create a token per search session, drop it after `placeDetails`).
+//  • API keys are never logged.
 
 import 'dart:async';
 import 'dart:convert';
@@ -15,9 +23,37 @@ class AutocompleteService {
   static const Duration _timeout = Duration(seconds: 8);
   static const String _authority = 'maps.googleapis.com';
 
+  /// Status returned when a request was superseded by a newer one.
+  static const String kCancelledStatus = 'CANCELLED';
+
+  final http.Client _client = http.Client();
+  Completer<void>? _autoAbort;
+  bool _disposed = false;
+
   AutocompleteService({this.logger});
 
   void _log(String m, [Object? d]) => logger?.call(m, d);
+
+  /// Aborts the in-flight autocomplete request (if any).
+  void cancelPending() {
+    final a = _autoAbort;
+    _autoAbort = null;
+    if (a != null && !a.isCompleted) a.complete();
+  }
+
+  /// Releases the HTTP client. The service must not be used afterwards.
+  void dispose() {
+    _disposed = true;
+    cancelPending();
+    _client.close();
+  }
+
+  Future<http.Response> _get(Uri uri, {Completer<void>? abort}) async {
+    if (_disposed) throw http.ClientException('AutocompleteService disposed', uri);
+    final req = http.AbortableRequest('GET', uri, abortTrigger: abort?.future);
+    final streamed = await _client.send(req).timeout(_timeout);
+    return http.Response.fromStream(streamed).timeout(_timeout);
+  }
 
   /// Builds a robust, properly encoded URI for the Autocomplete API.
   Uri _autoUri({
@@ -54,7 +90,8 @@ class AutocompleteService {
     return Uri.https(_authority, '/maps/api/place/autocomplete/json', queryParams);
   }
 
-  /// Fetches rich autocomplete suggestions.
+  /// Fetches rich autocomplete suggestions. Starting a new call aborts the
+  /// previous unfinished one, which then resolves with [kCancelledStatus].
   Future<AutoResult> autocomplete({
     required String input,
     required String sessionToken,
@@ -72,10 +109,15 @@ class AutocompleteService {
       relaxedTypes: relaxedTypes,
     );
 
-    _log('Autocomplete GET', uri.toString());
+    _log('Autocomplete GET', uri.path);
+
+    cancelPending();
+    final abort = Completer<void>();
+    _autoAbort = abort;
 
     try {
-      final r = await http.get(uri).timeout(_timeout);
+      final r = await _get(uri, abort: abort);
+      if (abort.isCompleted) return const AutoResult([], kCancelledStatus, null);
       _log('Autocomplete status', r.statusCode);
 
       if (r.statusCode != 200) {
@@ -84,6 +126,8 @@ class AutocompleteService {
 
       final j = jsonDecode(r.body) as Map<String, dynamic>;
       final status = j['status'] as String?;
+      // ZERO_RESULTS is a normal, successful outcome.
+      if (status == 'ZERO_RESULTS') return const AutoResult([], 'OK', null);
       final err = j['error_message'] as String?;
       final preds = (j['predictions'] as List?)?.cast<Map<String, dynamic>>() ?? const [];
 
@@ -117,6 +161,8 @@ class AutocompleteService {
       }
       return AutoResult(out, status, err);
 
+    } on http.RequestAbortedException {
+      return const AutoResult([], kCancelledStatus, null);
     } on TimeoutException {
       _log('Autocomplete Timeout');
       return AutoResult([], 'TIMEOUT', 'Request timed out');
@@ -124,8 +170,11 @@ class AutocompleteService {
       _log('Autocomplete Network Error');
       return AutoResult([], 'NETWORK_ERROR', 'No internet connection');
     } catch (e) {
+      if (abort.isCompleted) return const AutoResult([], kCancelledStatus, null);
       _log('Autocomplete Exception', e.toString());
       return AutoResult([], 'EXCEPTION', e.toString());
+    } finally {
+      if (identical(_autoAbort, abort)) _autoAbort = null;
     }
   }
 
@@ -149,10 +198,10 @@ class AutocompleteService {
 
     final uri = Uri.https(_authority, '/maps/api/place/findplacefromtext/json', queryParams);
 
-    _log('FindPlace GET', uri.toString());
+    _log('FindPlace GET', uri.path);
 
     try {
-      final r = await http.get(uri).timeout(_timeout);
+      final r = await _get(uri);
       _log('FindPlace status', r.statusCode);
 
       if (r.statusCode != 200) return const [];
@@ -198,10 +247,10 @@ class AutocompleteService {
 
     final uri = Uri.https(_authority, '/maps/api/place/details/json', queryParams);
 
-    _log('PlaceDetails GET', uri.toString());
+    _log('PlaceDetails GET', uri.path);
 
     try {
-      final r = await http.get(uri).timeout(_timeout);
+      final r = await _get(uri);
       _log('PlaceDetails status', r.statusCode);
 
       if (r.statusCode != 200) return const PlaceDetails(null);

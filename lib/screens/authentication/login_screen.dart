@@ -5,7 +5,6 @@ import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_svg/flutter_svg.dart';
-import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../api/api_client.dart';
@@ -14,10 +13,9 @@ import '../../routes/routes.dart';
 import '../../themes/app_theme.dart';
 import '../../utility/notification.dart';
 import '../../widgets/inner_background.dart';
+import '../../ui/legal_links.dart';
 import '../../ui/ui_scale.dart';
-import '../../driver/driver_home_page.dart';
-import '../home_page.dart';
-import '../../screens/main_navigation_screen.dart'; // <-- IMPORT THE NEW SHELL
+import '../../utility/session_manager.dart';
 
 
 class LoginScreen extends StatefulWidget {
@@ -33,7 +31,7 @@ class _LoginScreenState extends State<LoginScreen>
   final _pass = TextEditingController();
   final _formKey = GlobalKey<FormState>();
 
-  late final ApiClient _api;
+  final ApiClient _api = ApiClient();
 
   bool _busy = false;
   bool _showPass = false;
@@ -49,7 +47,7 @@ class _LoginScreenState extends State<LoginScreen>
   @override
   void initState() {
     super.initState();
-    _api = ApiClient(http.Client(), context);
+    WidgetsBinding.instance.addPostFrameCallback((_) => _showEntryReason());
 
     _logoController = AnimationController(
       duration: const Duration(seconds: 20),
@@ -93,7 +91,9 @@ class _LoginScreenState extends State<LoginScreen>
   }
 
   Future<void> _login() async {
+    if (_busy) return;
     if (!(_formKey.currentState?.validate() ?? false)) return;
+    FocusScope.of(context).unfocus();
 
     setState(() => _busy = true);
     try {
@@ -102,43 +102,24 @@ class _LoginScreenState extends State<LoginScreen>
         method: 'POST',
         data: {
           'email': _email.text.trim(),
+          // Trimmed for parity with registration (existing accounts).
           'password': _pass.text.trim(),
         },
       );
 
-      final body = jsonDecode(res.body);
-      if (res.statusCode == 200 && body['error'] == false) {
-        final loginMsg = (body['login_msg'] is Map)
-            ? Map<String, dynamic>.from(body['login_msg'] as Map)
-            : <String, dynamic>{};
+      final decoded = jsonDecode(res.body);
+      final body = decoded is Map ? Map<String, dynamic>.from(decoded) : <String, dynamic>{};
+      final loginMsg = (body['login_msg'] is Map)
+          ? Map<String, dynamic>.from(body['login_msg'] as Map)
+          : <String, dynamic>{};
+
+      if (body['error'] == false) {
+        final isDriver = _isApprovedDriver(loginMsg);
+        await SessionManager.instance.persistLogin(loginMsg, isDriver: isDriver);
+        _pass.clear();
 
         final prefs = await SharedPreferences.getInstance();
-        final existingPin = prefs.getString('user_pin') ?? '';
-
-        final isDriver = _isApprovedDriver(loginMsg);
-        final driverStatus = (loginMsg['driver_status'] ?? 'not_started').toString();
-        final driverId = (loginMsg['driver_id'] ?? '').toString();
-        final postLoginHome = isDriver ? 'driver_home' : 'home';
-
-        await prefs.setString('user_id', (loginMsg['uid'] ?? '').toString());
-        await prefs.setString('user_name', (loginMsg['fname'] ?? '').toString());
-        await prefs.setString(
-          'user_account_name',
-          (loginMsg['accountname'] ?? '').toString(),
-        );
-        await prefs.setString(
-          'user_account_number',
-          (loginMsg['accountnumber'] ?? '').toString(),
-        );
-        await prefs.setString(
-          'user_account_bank',
-          (loginMsg['bankname'] ?? '').toString(),
-        );
-        await prefs.setString('user_driver_status', driverStatus);
-        await prefs.setString('user_driver_id', driverId);
-        await prefs.setBool('user_is_driver', isDriver);
-        await prefs.setString('post_login_home', postLoginHome);
-        await prefs.setString('user_pin', existingPin);
+        final pinFlag = prefs.getString(PrefKeys.pinFlag) ?? '';
 
         if (!mounted) return;
         showToastNotification(
@@ -148,21 +129,28 @@ class _LoginScreenState extends State<LoginScreen>
           isSuccess: true,
         );
 
-        if (existingPin.trim().isEmpty) {
+        if (pinFlag.trim().isEmpty) {
           Navigator.of(context).pushReplacementNamed(AppRoutes.set_user_pin);
         } else {
-          await _goToResolvedHome(isDriver: isDriver);
+          _goToResolvedHome();
         }
       } else {
         if (!mounted) return;
         showBannerNotification(
           context: context,
-          title: body['login_msg']?['title_msg'] ?? 'Login Failed',
-          message: body['login_msg']?['title_msg_body'] ??
-              'Please check your credentials',
+          title: (loginMsg['title_msg'] ?? 'Login Failed').toString(),
+          message: (loginMsg['title_msg_body'] ?? body['message'] ?? 'Please check your credentials').toString(),
           isSuccess: false,
         );
       }
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      showBannerNotification(
+        context: context,
+        title: e.isRateLimited ? 'Too many attempts' : 'Login Failed',
+        message: e.message,
+        isSuccess: false,
+      );
     } catch (_) {
       if (!mounted) return;
       showToastNotification(
@@ -176,18 +164,29 @@ class _LoginScreenState extends State<LoginScreen>
     }
   }
 
+  void _showEntryReason() {
+    if (!mounted) return;
+    final args = ModalRoute.of(context)?.settings.arguments;
+    if (args is Map && args['reason'] == 'session_expired') {
+      showBannerNotification(
+        context: context,
+        title: 'Signed out',
+        message: 'Your session has expired. Please sign in again.',
+        isSuccess: false,
+      );
+    }
+  }
+
   bool _isApprovedDriver(Map<String, dynamic> loginMsg) {
     final status = (loginMsg['driver_status'] ?? '').toString().trim().toLowerCase();
     final hasDriverId = (loginMsg['driver_id'] ?? '').toString().trim().isNotEmpty;
     return hasDriverId && (status == 'approved' || status == 'activated');
   }
 
-  Future<void> _goToResolvedHome({required bool isDriver}) async {
+  /// Riders and drivers share the same shell; it picks the right home tab.
+  void _goToResolvedHome() {
     if (!mounted) return;
-    final route = MaterialPageRoute<void>(
-      builder: (_) => isDriver ? const MainNavigationScreen() : const MainNavigationScreen(), //const DriverHomePage() : const HomePage(),
-    );
-    Navigator.of(context).pushAndRemoveUntil(route, (_) => false);
+    Navigator.of(context).pushNamedAndRemoveUntil(AppRoutes.home, (_) => false);
   }
 
   @override
@@ -880,6 +879,17 @@ class _LoginScreenState extends State<LoginScreen>
   }
 
   Widget _buildRegisterLink(UIScale ui, bool isDark, ColorScheme cs) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        _buildRegisterRow(ui, isDark, cs),
+        SizedBox(height: ui.gap(4)),
+        const LegalConsentText(),
+      ],
+    );
+  }
+
+  Widget _buildRegisterRow(UIScale ui, bool isDark, ColorScheme cs) {
     return Wrap(
       alignment: WrapAlignment.center,
       crossAxisAlignment: WrapCrossAlignment.center,

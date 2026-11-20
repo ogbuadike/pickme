@@ -1,200 +1,106 @@
 <?php
-header('Content-Type: application/json');
-//driver_hub.php
-require_once '../unique/unique_con.php';
-require_once 'auth.php';
-require_once '../unique/unique_code.php';
-require_once '../unique/unique_gtm.php';
-require_once '../unique/unique_func.php';
-require_once 'activities.php';
+declare(strict_types=1);
 
-// ==================================================================
-// 📡 GPS TRACKING CONSTANTS 
-// ==================================================================
+/**
+ * POST driver_hub.php — driver command centre (session required, activated driver).
+ *
+ * action = dashboard | set_online | heartbeat | accept_ride | ride_action | verify_otp | scan_dispatch_batch
+ * The driver is always resolved from the session user (param `user` must equal the session uid,
+ * a client-sent driver_id must match the session driver, else 403).
+ *
+ * Business errors keep the legacy shape: HTTP 200 + { error:true, code, message, data:null }.
+ *
+ * State machine: see PM_RIDE_TRANSITIONS in ride_api_bootstrap.php. Every transition is a single
+ * conditional UPDATE inside a transaction holding the ride row lock (SELECT ... FOR UPDATE), so
+ * exactly one driver can win a ride and repeated taps are idempotent.
+ */
+
+require_once __DIR__ . '/ride_api_bootstrap.php';
+
 const DRIVER_FIX_MAX_AGE_SEC = 180;
 const ARRIVED_PICKUP_MAX_METERS = 200.0;
 const START_TRIP_MAX_METERS = 200.0;
 const ARRIVED_DESTINATION_MAX_METERS = 150.0;
 const COMPLETE_RIDE_MAX_METERS = 200.0;
-// ==================================================================
+const DELIVERY_OTP_MAX_ATTEMPTS = 15;
+const DISPATCH_SCAN_RADIUS_M = 5000.0;
+const DEFAULT_APP_FEE_PERCENT = 25.0;
 
-function jsonResponse(array $payload, int $statusCode = 200): void {
-    http_response_code($statusCode);
-    echo json_encode($payload);
-    exit();
+pm_require_method('POST');
+$sessionUid = pm_require_session();
+$IN = pm_input();
+
+function hub_fail(string $message, string $code = 'VALIDATION'): void
+{
+    pm_fail($code, $message, 200, ['data' => null]);
 }
 
-function sanitizeInput($input): string {
-    return trim(htmlspecialchars((string)$input, ENT_QUOTES, 'UTF-8'));
-}
-
-function headersSafe(): array {
-    if (function_exists('apache_request_headers')) {
-        $headers = apache_request_headers();
-        if (is_array($headers)) return $headers;
+function hub_param(string $key, string $label, int $max = 64): string
+{
+    global $IN;
+    $v = pm_in_str($IN, $key, $max);
+    if ($v === '') {
+        hub_fail($label . ' is required.');
     }
+    return $v;
+}
 
-    $headers = [];
-    foreach ($_SERVER as $key => $value) {
-        if (strpos($key, 'HTTP_') === 0) {
-            $name = str_replace(' ', '-', ucwords(strtolower(str_replace('_', ' ', substr($key, 5)))));
-            $headers[$name] = $value;
-        }
+function fetchDriverSession(string $userUid): array
+{
+    $row = pm_require_driver($userUid, 200);
+    $user = pm_q_one('SELECT u_uid, fname, lname, email, phone AS user_phone FROM unique_user_table WHERE u_uid = ? LIMIT 1', 's', [$userUid]);
+    return array_merge($row, $user ?? []);
+}
+
+function appFeePercent(): float
+{
+    static $fee = null;
+    if ($fee === null) {
+        $row = pm_q_one("SELECT setting_value FROM app_settings WHERE setting_key = 'app_ride_fee_percentage' LIMIT 1");
+        $fee = ($row && is_numeric($row['setting_value'])) ? (float)$row['setting_value'] : DEFAULT_APP_FEE_PERCENT;
+        $fee = min(max($fee, 0.0), 100.0);
     }
-    return $headers;
+    return $fee;
 }
 
-function authorizeRequest(): void {
-    $headers = headersSafe();
-    $token = '';
-    foreach ($headers as $key => $value) {
-        if (strtolower((string)$key) === 'authorization') {
-            $token = trim((string)$value);
-            break;
-        }
+function fetchDriverLive(int $driverId): ?array
+{
+    $row = pm_q_one(
+        'SELECT driver_id, lat, lng, heading, phase, updated_at, TIMESTAMPDIFF(SECOND, updated_at, CURRENT_TIMESTAMP) AS db_age_sec
+         FROM ride_driver_locations WHERE driver_id = ? LIMIT 1',
+        'i',
+        [$driverId]
+    );
+    if (!$row) {
+        return null;
     }
-    if ($token === '' || !checkAuthorization($token)) {
-        jsonResponse(['error' => true, 'message' => 'Unauthorized access', 'data' => null], 401);
-    }
-}
-
-authorizeRequest();
-
-function requirePosted(string $key, string $label): string {
-    $value = isset($_POST[$key]) ? sanitizeInput($_POST[$key]) : '';
-    if ($value === '') {
-        throw new Exception($label . ' is required.');
-    }
-    return $value;
-}
-
-function normalizeDriverStatus(string $value): string {
-    $status = strtolower(trim($value));
-    if ($status === 'approved' || $status === 'activated') return 'activated';
-    if ($status === 'pending') return 'pending';
-    if ($status === 'rejected') return 'rejected';
-    return 'not_started';
-}
-
-function normalizeRideStatus(string $value): string {
-    $status = strtolower(trim($value));
-    if ($status === 'driver_assigned') return 'accepted';
-    if ($status === 'in_ride') return 'in_progress';
-    return $status === '' ? 'searching' : $status;
-}
-
-function activeRideStatusesSql(): string {
-    return "'accepted','enroute_pickup','arrived_pickup','in_progress','arrived_destination','driver_assigned','in_ride'";
-}
-
-function haversineMeters(float $lat1, float $lng1, float $lat2, float $lng2): float {
-    $earth = 6371000.0;
-    $dLat = deg2rad($lat2 - $lat1);
-    $dLng = deg2rad($lng2 - $lng1);
-    $a = sin($dLat / 2) * sin($dLat / 2) +
-         cos(deg2rad($lat1)) * cos(deg2rad($lat2)) *
-         sin($dLng / 2) * sin($dLng / 2);
-    return 2.0 * $earth * asin(min(1.0, sqrt($a)));
-}
-
-function fetchDriverSession(string $userUid): array {
-    global $dbconn;
-
-    $escapedUid = mysqli_real_escape_string($dbconn, $userUid);
-    
-    $sql = "SELECT
-                o.id AS onboarding_id,
-                o.status AS onboarding_status,
-                o.driver_id,
-                o.admin_note,
-                d.id,
-                d.name,
-                d.phone,
-                d.nin,
-                d.rank,
-                d.category,
-                d.rating,
-                d.car_plate,
-                d.vehicle_type,
-                d.seats,
-                d.avatar_url,
-                d.completed_trips,
-                d.total_trips,
-                d.cancelled_trips,
-                d.incomplete_trips,
-                d.is_online,
-                d.currency,
-                d.allowed_ride_types,
-                d.max_payload_weight,
-                d.current_payload_weight,
-                u.u_uid,
-                u.fname,
-                u.lname,
-                u.email,
-                u.phone AS user_phone
-            FROM ride_driver_onboarding o
-            LEFT JOIN ride_drivers d ON d.id = o.driver_id
-            LEFT JOIN unique_user_table u ON u.u_uid = o.user_uid
-            WHERE o.user_uid='$escapedUid'
-            ORDER BY o.id DESC
-            LIMIT 1";
-
-    $result = mysqli_query($dbconn, $sql);
-    if (!$result || mysqli_num_rows($result) === 0) {
-        throw new Exception('No driver onboarding record was found for this account.');
-    }
-
-    $row = mysqli_fetch_assoc($result);
-    $status = normalizeDriverStatus((string)($row['onboarding_status'] ?? ''));
-    if ($status !== 'activated' || !isset($row['id']) || $row['id'] === null) {
-        throw new Exception('Driver account is not yet activated.');
-    }
-    return $row;
-}
-
-function fetchDriverLive(int $driverId): ?array {
-    global $dbconn;
-    $driverId = (int)$driverId;
-    $sql = "SELECT driver_id, lat, lng, heading, phase, updated_at,
-                   TIMESTAMPDIFF(SECOND, updated_at, CURRENT_TIMESTAMP) AS db_age_sec
-            FROM ride_driver_locations
-            WHERE driver_id=$driverId
-            LIMIT 1";
-            
-    $result = mysqli_query($dbconn, $sql);
-    if (!$result || mysqli_num_rows($result) === 0) return null;
-    $row = mysqli_fetch_assoc($result);
-    
-    $ageSec = isset($row['db_age_sec']) ? (int)$row['db_age_sec'] : PHP_INT_MAX;
-    if ($ageSec < 0) $ageSec = 0;
-
     return [
-        'driver_id' => (int)$row['driver_id'],
-        'lat' => isset($row['lat']) ? (float)$row['lat'] : 0.0,
-        'lng' => isset($row['lng']) ? (float)$row['lng'] : 0.0,
-        'heading' => isset($row['heading']) ? (float)$row['heading'] : 0.0,
-        'phase' => (string)($row['phase'] ?? 'idle'),
+        'driver_id'  => (int)$row['driver_id'],
+        'lat'        => (float)$row['lat'],
+        'lng'        => (float)$row['lng'],
+        'heading'    => (float)$row['heading'],
+        'phase'      => (string)($row['phase'] ?? 'idle'),
         'updated_at' => $row['updated_at'] ?? null,
-        'age_sec' => $ageSec,
+        'age_sec'    => max(0, (int)$row['db_age_sec']),
     ];
 }
 
-function requireFreshDriverLive(int $driverId, int $maxAgeSec = DRIVER_FIX_MAX_AGE_SEC): array {
+function requireFreshDriverLive(int $driverId, int $maxAgeSec = DRIVER_FIX_MAX_AGE_SEC): array
+{
     $live = fetchDriverLive($driverId);
     if (!$live) {
-        throw new Exception('Driver live location is unavailable. Wait for GPS sync and try again.');
+        hub_fail('Driver live location is unavailable. Wait for GPS sync and try again.', 'CONFLICT');
     }
-    if (($live['lat'] == 0.0 && $live['lng'] == 0.0) || (int)$live['age_sec'] > $maxAgeSec) {
-        throw new Exception('Driver GPS fix is stale (' . $live['age_sec'] . 's). Keep the app open until live location refreshes.');
+    if (($live['lat'] == 0.0 && $live['lng'] == 0.0) || $live['age_sec'] > $maxAgeSec) {
+        hub_fail('Driver GPS fix is stale (' . $live['age_sec'] . 's). Keep the app open until live location refreshes.', 'CONFLICT');
     }
     return $live;
 }
 
-function phaseForRideAction(string $rideAction, string $fallback = 'idle'): string {
+function phaseForRideAction(string $rideAction, string $fallback = 'idle'): string
+{
     switch ($rideAction) {
         case 'enroute_pickup':
-        case 'head_to_pickup':
-        case 'start_to_pickup':
             return 'enroute_pickup';
         case 'arrived_pickup':
             return 'waiting_pickup';
@@ -203,759 +109,604 @@ function phaseForRideAction(string $rideAction, string $fallback = 'idle'): stri
         case 'arrived_destination':
             return 'arrived_destination';
         case 'complete':
-        case 'complete_trip':
         case 'cancel':
-        case 'cancel_trip':
-        case 'cancel_ride':
             return 'idle';
         default:
             return $fallback;
     }
 }
 
-function upsertDriverLiveFromClient(int $driverId, ?string $latRaw, ?string $lngRaw, ?string $headingRaw, string $phase = 'idle'): void {
-    global $dbconn;
-    if ($latRaw === null || $lngRaw === null) return;
-
-    $lat = (float)$latRaw;
-    $lng = (float)$lngRaw;
-    if (($lat == 0.0 && $lng == 0.0) || !is_finite($lat) || !is_finite($lng)) return;
-
-    $heading = $headingRaw !== null ? (float)$headingRaw : 0.0;
-    $driverId = (int)$driverId;
-    $phaseEscaped = mysqli_real_escape_string($dbconn, $phase);
-
-    $sql = "INSERT INTO ride_driver_locations (driver_id, lat, lng, heading, phase, updated_at)
-            VALUES ($driverId, $lat, $lng, $heading, '$phaseEscaped', CURRENT_TIMESTAMP)
-            ON DUPLICATE KEY UPDATE lat=VALUES(lat), lng=VALUES(lng), heading=VALUES(heading), phase=VALUES(phase), updated_at=CURRENT_TIMESTAMP";
-    mysqli_query($dbconn, $sql);
+function upsertDriverLive(int $driverId, float $lat, float $lng, float $heading, string $phase): void
+{
+    if (!pm_valid_lat($lat) || !pm_valid_lng($lng)) {
+        return;
+    }
+    pm_exec(
+        'INSERT INTO ride_driver_locations (driver_id, lat, lng, heading, phase, updated_at)
+         VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+         ON DUPLICATE KEY UPDATE lat = VALUES(lat), lng = VALUES(lng), heading = VALUES(heading), phase = VALUES(phase), updated_at = CURRENT_TIMESTAMP',
+        'iddds',
+        [$driverId, $lat, $lng, fmod(max(0.0, $heading), 360.0), $phase]
+    );
 }
 
-function buildDriverPayload(array $session): array {
+function buildDriverPayload(array $s): array
+{
     return [
-        'id' => (int)$session['id'],
-        'name' => (string)$session['name'],
-        'phone' => $session['phone'],
-        'nin' => $session['nin'],
-        'rank' => $session['rank'],
-        'category' => $session['category'],
-        'rating' => (float)$session['rating'],
-        'car_plate' => $session['car_plate'],
-        'vehicle_type' => $session['vehicle_type'],
-        'seats' => (int)$session['seats'],
-        'avatar_url' => $session['avatar_url'],
-        'completed_trips' => (int)$session['completed_trips'],
-        'total_trips' => (int)$session['total_trips'],
-        'cancelled_trips' => (int)$session['cancelled_trips'],
-        'incomplete_trips' => (int)$session['incomplete_trips'],
-        'is_online' => (int)$session['is_online'],
-        'currency' => $session['currency'] ?? 'NGN',
-        'status' => 'activated',
-        
-        'allowed_ride_types' => $session['allowed_ride_types'] ?? 'street_ride,campus_ride',
-        'max_payload_weight' => isset($session['max_payload_weight']) ? (float)$session['max_payload_weight'] : 0.0,
-        'current_payload_weight' => isset($session['current_payload_weight']) ? (float)$session['current_payload_weight'] : 0.0,
+        'id'                     => (int)$s['id'],
+        'name'                   => (string)$s['name'],
+        'phone'                  => $s['phone'],
+        'nin'                    => $s['nin'], // the driver's own record
+        'rank'                   => $s['rank'],
+        'category'               => $s['category'],
+        'rating'                 => (float)$s['rating'],
+        'car_plate'              => $s['car_plate'],
+        'vehicle_type'           => $s['vehicle_type'],
+        'seats'                  => (int)$s['seats'],
+        'avatar_url'             => $s['avatar_url'],
+        'completed_trips'        => (int)$s['completed_trips'],
+        'total_trips'            => (int)$s['total_trips'],
+        'cancelled_trips'        => (int)$s['cancelled_trips'],
+        'incomplete_trips'       => (int)$s['incomplete_trips'],
+        'is_online'              => (int)$s['is_online'],
+        'currency'               => $s['currency'] ?? 'NGN',
+        'status'                 => 'activated',
+        'allowed_ride_types'     => $s['allowed_ride_types'] ?? 'street_ride,campus_ride',
+        'max_payload_weight'     => (float)($s['max_payload_weight'] ?? 0),
+        'current_payload_weight' => (float)($s['current_payload_weight'] ?? 0),
     ];
 }
 
-function mapRidePayload(?array $ride): ?array {
-    if (!$ride) return null;
-    
-    // FETCH DYNAMIC APP FEE ONLY ONCE PER REQUEST LIFECYCLE
-    static $cachedFee = null;
-    if ($cachedFee === null) {
-        global $dbconn;
-        $feeQuery = mysqli_query($dbconn, "SELECT setting_value FROM app_settings WHERE setting_key = 'app_ride_fee_percentage' LIMIT 1");
-        $cachedFee = ($feeQuery && mysqli_num_rows($feeQuery) > 0) ? (float)mysqli_fetch_assoc($feeQuery)['setting_value'] : 25.0;
+/** Ride as seen by the DRIVER. The delivery OTP itself is never sent to drivers (masked). */
+function mapRidePayload(?array $ride): ?array
+{
+    if (!$ride) {
+        return null;
     }
-
-    $status = normalizeRideStatus((string)($ride['status'] ?? 'searching'));
-    $rideType = $ride['ride_type'] ?? 'street_ride';
-    
-    // Fallback logo logic for Deliveries (Send Me & Dispatch)
+    $rideType = (string)($ride['ride_type'] ?? 'street_ride');
     $packageImage = trim((string)($ride['package_image'] ?? ''));
-    if ($packageImage === '' && in_array($rideType, ['dispatch', 'send_me'])) {
+    if ($packageImage === '' && in_array($rideType, ['dispatch', 'send_me'], true)) {
         $packageImage = 'https://phantomphones.store/pick_me/img/logo.png';
     }
+    $otpRequired = trim((string)($ride['delivery_otp'] ?? '')) !== '';
 
     return [
-        'id' => (int)$ride['id'],
-        'status' => $status,
-        
-        'ride_type' => $rideType,
-        'package_size' => $ride['package_size'] ?? null,
-        'package_weight' => isset($ride['package_weight']) ? (float)$ride['package_weight'] : 0.0,
-        'delivery_otp' => $ride['delivery_otp'] ?? null,
-        'batch_group_id' => $ride['batch_group_id'] ?? null,
-        'recipient_phone' => $ride['recipient_phone'] ?? null,
-        
-        'instructions' => $ride['instructions'] ?? null,
-        'package_image' => $packageImage,
-        
-        // --- 💰 DYNAMIC MONETIZATION SENT TO APP ---
-        'app_fee_percentage' => $cachedFee,
-        // ------------------------------------------
-        
-        'rider_id' => (string)($ride['rider_id'] ?? ''),
-        'rider_name' => trim((string)($ride['rider_name'] ?? '')) !== '' ? trim((string)$ride['rider_name']) : 'Rider',
-        'rider_phone' => $ride['rider_phone'] ?? '',
-        'pickup_lat' => isset($ride['pickup_lat']) ? (float)$ride['pickup_lat'] : 0.0,
-        'pickup_lng' => isset($ride['pickup_lng']) ? (float)$ride['pickup_lng'] : 0.0,
-        'pickup_text' => $ride['pickup_text'] ?? '',
-        'dest_lat' => isset($ride['dest_lat']) ? (float)$ride['dest_lat'] : 0.0,
-        'dest_lng' => isset($ride['dest_lng']) ? (float)$ride['dest_lng'] : 0.0,
-        'dest_text' => $ride['dest_text'] ?? '',
-        'price' => isset($ride['price']) ? (float)$ride['price'] : 0.0,
-        'currency' => $ride['currency'] ?? 'NGN',
-        'eta_min' => isset($ride['eta_min']) ? (int)$ride['eta_min'] : 0,
-        'pay_method' => $ride['pay_method'] ?? 'cash',
-        'vehicle_type' => $ride['vehicle_type'] ?? 'car',
-        'seats' => isset($ride['seats']) ? (int)$ride['seats'] : 4,
-        'created_at' => $ride['created_at'] ?? null,
-        'updated_at' => $ride['updated_at'] ?? null,
-        'started_at' => $ride['started_at'] ?? null,
-        'arrived_pickup_at' => $ride['arrived_pickup_at'] ?? null,
-        'completed_at' => $ride['completed_at'] ?? null,
+        'id'                      => (int)$ride['id'],
+        'status'                  => ride_norm_status((string)($ride['status'] ?? 'searching')),
+        'ride_type'               => $rideType,
+        'package_size'            => $ride['package_size'] ?? null,
+        'package_weight'          => (float)($ride['package_weight'] ?? 0),
+        'delivery_otp'            => $otpRequired ? '****' : null,
+        'delivery_otp_required'   => $otpRequired,
+        'delivery_otp_verified'   => !empty($ride['delivery_otp_verified_at']),
+        'batch_group_id'          => $ride['batch_group_id'] ?? null,
+        'recipient_phone'         => $ride['recipient_phone'] ?? null,
+        'instructions'            => $ride['instructions'] ?? null,
+        'package_image'           => $packageImage,
+        'app_fee_percentage'      => appFeePercent(),
+        'rider_id'                => (string)($ride['rider_id'] ?? ''),
+        'rider_name'              => trim((string)($ride['rider_name'] ?? '')) !== '' ? trim((string)$ride['rider_name']) : 'Rider',
+        'rider_phone'             => $ride['rider_phone'] ?? '',
+        'pickup_lat'              => (float)($ride['pickup_lat'] ?? 0),
+        'pickup_lng'              => (float)($ride['pickup_lng'] ?? 0),
+        'pickup_text'             => $ride['pickup_text'] ?? '',
+        'dest_lat'                => (float)($ride['dest_lat'] ?? 0),
+        'dest_lng'                => (float)($ride['dest_lng'] ?? 0),
+        'dest_text'               => $ride['dest_text'] ?? '',
+        'price'                   => (float)($ride['price'] ?? 0),
+        'currency'                => $ride['currency'] ?? 'NGN',
+        'eta_min'                 => (int)($ride['eta_min'] ?? 0),
+        'pay_method'              => $ride['pay_method'] ?? 'cash',
+        'vehicle_type'            => $ride['vehicle_type'] ?? 'car',
+        'seats'                   => (int)($ride['seats'] ?? 4),
+        'created_at'              => $ride['created_at'] ?? null,
+        'updated_at'              => $ride['updated_at'] ?? null,
+        'started_at'              => $ride['started_at'] ?? null,
+        'arrived_pickup_at'       => $ride['arrived_pickup_at'] ?? null,
+        'completed_at'            => $ride['completed_at'] ?? null,
     ];
 }
 
-function fetchQueueRides(int $driverId, int $limit = 10): array {
-    global $dbconn;
-    $driverId = (int)$driverId;
-    $limit = (int)$limit;
-    
-    $sql = "SELECT
-                r.*,
-                CONCAT(TRIM(COALESCE(u.fname, '')), ' ', TRIM(COALESCE(u.lname, ''))) AS rider_name,
-                u.phone AS rider_phone
-            FROM ride_rides r
-            LEFT JOIN unique_user_table u ON u.u_uid = r.rider_id
-            WHERE r.status='searching'
-              AND (r.driver_id = $driverId OR r.driver_id IS NULL OR r.driver_id = 0)
-            ORDER BY CASE WHEN r.driver_id = $driverId THEN 0 ELSE 1 END, r.created_at DESC
-            LIMIT $limit";
-    $result = mysqli_query($dbconn, $sql);
-    $rows = [];
-    if ($result) {
-        while ($row = mysqli_fetch_assoc($result)) {
-            $rows[] = $row;
-        }
-    }
-    return $rows;
+function fetchQueueRides(int $driverId, int $limit = 12): array
+{
+    // Index: idx_ride_rides_search_queue (status, driver_id, created_at)
+    return pm_q_all(
+        "SELECT r.*, CONCAT(TRIM(COALESCE(u.fname, '')), ' ', TRIM(COALESCE(u.lname, ''))) AS rider_name, u.phone AS rider_phone
+         FROM ride_rides r
+         LEFT JOIN unique_user_table u ON u.u_uid = r.rider_id
+         WHERE r.status = 'searching'
+           AND (r.driver_id = ? OR r.driver_id IS NULL OR r.driver_id = 0)
+           AND r.created_at > NOW() - INTERVAL " . PM_RIDE_SEARCH_TTL_MIN . " MINUTE
+         ORDER BY CASE WHEN r.driver_id = ? THEN 0 ELSE 1 END, r.created_at DESC
+         LIMIT ?",
+        'iii',
+        [$driverId, $driverId, $limit]
+    );
 }
 
-function fetchActiveRide(int $driverId): ?array {
-    global $dbconn;
-    $driverId = (int)$driverId;
-    $sql = "SELECT
-                r.*,
-                CONCAT(TRIM(COALESCE(u.fname, '')), ' ', TRIM(COALESCE(u.lname, ''))) AS rider_name,
-                u.phone AS rider_phone
-            FROM ride_rides r
-            LEFT JOIN unique_user_table u ON u.u_uid = r.rider_id
-            WHERE r.driver_id = $driverId
-              AND r.status IN (" . activeRideStatusesSql() . ")
-            ORDER BY r.updated_at DESC
-            LIMIT 1";
-    $result = mysqli_query($dbconn, $sql);
-    if ($result && mysqli_num_rows($result) > 0) {
-        return mysqli_fetch_assoc($result);
-    }
-    return null;
+function fetchActiveRide(int $driverId): ?array
+{
+    return pm_q_one(
+        "SELECT r.*, CONCAT(TRIM(COALESCE(u.fname, '')), ' ', TRIM(COALESCE(u.lname, ''))) AS rider_name, u.phone AS rider_phone
+         FROM ride_rides r
+         LEFT JOIN unique_user_table u ON u.u_uid = r.rider_id
+         WHERE r.driver_id = ? AND r.status IN (" . pm_in_placeholders(PM_RIDE_ACTIVE_STATUSES) . ')
+         ORDER BY r.updated_at DESC
+         LIMIT 1',
+        'i' . str_repeat('s', count(PM_RIDE_ACTIVE_STATUSES)),
+        array_merge([$driverId], PM_RIDE_ACTIVE_STATUSES)
+    );
 }
 
-function dashboard(string $userUid): array {
+function dashboard(string $userUid): array
+{
     $session = fetchDriverSession($userUid);
     $driverId = (int)$session['id'];
+    pm_ride_expire_stale();
     return [
-        'error' => false,
+        'error'   => false,
         'message' => 'Driver dashboard loaded.',
-        'data' => [
-            'driver' => buildDriverPayload($session),
+        'data'    => [
+            'driver'      => buildDriverPayload($session),
             'driver_live' => fetchDriverLive($driverId),
             'active_ride' => mapRidePayload(fetchActiveRide($driverId)),
-            'queue' => array_map('mapRidePayload', fetchQueueRides($driverId, 12)),
+            'queue'       => array_map('mapRidePayload', fetchQueueRides($driverId, 12)),
         ],
     ];
 }
 
-// ==================================================================
-// 🟢 ONLINE STATUS & INITIAL GPS SYNC
-// ==================================================================
-function setOnline(string $userUid, string $isOnline, float $lat = 0.0, float $lng = 0.0, float $heading = 0.0): array {
-    global $dbconn;
+function setOnline(string $userUid, string $isOnline, float $lat, float $lng, float $heading): array
+{
     $session = fetchDriverSession($userUid);
     $driverId = (int)$session['id'];
     $online = $isOnline === '1' ? 1 : 0;
 
-    // 1. Update the main driver profile status
-    if (!mysqli_query($dbconn, "UPDATE ride_drivers SET is_online=$online, updated_at=NOW() WHERE id=$driverId LIMIT 1")) {
-        throw new Exception('Unable to update driver online status.');
-    }
+    pm_tx(function () use ($driverId, $online, $lat, $lng, $heading) {
+        pm_exec('UPDATE ride_drivers SET is_online = ?, updated_at = NOW() WHERE id = ? LIMIT 1', 'ii', [$online, $driverId]);
+        if ($online === 1 && pm_valid_lat($lat) && pm_valid_lng($lng)) {
+            upsertDriverLive($driverId, $lat, $lng, $heading, 'idle');
+        } elseif ($online === 0) {
+            // Hide from the map immediately (bbox queries exclude 0,0).
+            pm_exec(
+                "INSERT INTO ride_driver_locations (driver_id, lat, lng, heading, phase) VALUES (?, 0, 0, 0, 'idle')
+                 ON DUPLICATE KEY UPDATE lat = 0, lng = 0, phase = 'idle', updated_at = CURRENT_TIMESTAMP",
+                'i',
+                [$driverId]
+            );
+        }
+    });
 
-    // 2. Handle Location Updates
-    if ($online === 1) {
-        // DRIVER ONLINE: Insert or update their actual exact location immediately
-        $sql = "INSERT INTO ride_driver_locations (driver_id, lat, lng, heading, phase)
-                VALUES ($driverId, $lat, $lng, $heading, 'idle')
-                ON DUPLICATE KEY UPDATE 
-                lat = $lat, 
-                lng = $lng, 
-                heading = $heading, 
-                phase = 'idle', 
-                updated_at = CURRENT_TIMESTAMP";
-                
-        mysqli_query($dbconn, $sql);
-    } else {
-        // DRIVER OFFLINE: Nullify the location to prevent ghost cars on the map
-        $sql = "INSERT INTO ride_driver_locations (driver_id, lat, lng, heading, phase)
-                VALUES ($driverId, 0, 0, 0, 'idle')
-                ON DUPLICATE KEY UPDATE 
-                lat = 0,
-                lng = 0,
-                phase = 'idle', 
-                updated_at = CURRENT_TIMESTAMP";
-                
-        mysqli_query($dbconn, $sql);
-    }
-
-     Activities("Driver is now online and visible to riders.",$driverId);
+    pm_activity($userUid, $online === 1 ? 'Driver went online' : 'Driver went offline');
     return [
-        'error' => false,
+        'error'   => false,
         'message' => $online === 1 ? 'Driver is now online and visible to riders.' : 'Driver is now offline and hidden from riders.',
-        'data' => [
-            'driver_id' => $driverId,
-            'is_online' => $online,
-            'lat' => $lat,
-            'lng' => $lng
-        ],
+        'data'    => ['driver_id' => $driverId, 'is_online' => $online, 'lat' => $lat, 'lng' => $lng],
     ];
 }
 
-function heartbeat(string $userUid, string $lat, string $lng, string $heading, string $phase): array {
-    global $dbconn;
+function heartbeat(string $userUid, float $lat, float $lng, float $heading, string $phase): array
+{
     $session = fetchDriverSession($userUid);
     $driverId = (int)$session['id'];
     if ((int)$session['is_online'] !== 1) {
-        throw new Exception('Driver must be online before publishing live location.');
+        hub_fail('Driver must be online before publishing live location.', 'CONFLICT');
     }
-
-    $latF = (float)$lat;
-    $lngF = (float)$lng;
-    $headingF = (float)$heading;
-    $phaseSafe = sanitizeInput($phase);
-    if ($phaseSafe === '') $phaseSafe = 'idle';
-    $phaseEsc = mysqli_real_escape_string($dbconn, $phaseSafe);
-
-    $sql = "INSERT INTO ride_driver_locations (driver_id, lat, lng, heading, phase)
-            VALUES ($driverId, $latF, $lngF, $headingF, '$phaseEsc')
-            ON DUPLICATE KEY UPDATE lat=VALUES(lat), lng=VALUES(lng), heading=VALUES(heading), phase=VALUES(phase), updated_at=CURRENT_TIMESTAMP";
-    if (!mysqli_query($dbconn, $sql)) {
-        throw new Exception('Unable to update driver live location.');
+    if (!pm_valid_lat($lat) || !pm_valid_lng($lng)) {
+        hub_fail('Latitude and longitude are invalid.');
     }
-
-    return [
-        'error' => false,
-        'message' => 'Live driver location updated.',
-        'data' => [
-            'driver_id' => $driverId,
-            'lat' => $latF,
-            'lng' => $lngF,
-            'heading' => $headingF,
-            'phase' => $phaseSafe,
-        ],
-    ];
-}
-
-function phaseForRideStatus(string $status): string {
-    switch (normalizeRideStatus($status)) {
-        case 'accepted':
-        case 'enroute_pickup':
-            return 'enroute_pickup';
-        case 'arrived_pickup':
-            return 'waiting_pickup';
-        case 'in_progress':
-            return 'enroute_destination';
-        case 'arrived_destination':
-            return 'arrived_destination';
-        default:
-            return 'idle';
-    }
-}
-
-function acceptRide(string $userUid, string $rideIdRaw): array {
-    global $dbconn;
-    $session = fetchDriverSession($userUid);
-    $driverId = (int)$session['id'];
-    $rideId = (int)$rideIdRaw;
-
-    if ((int)$session['is_online'] !== 1) {
-        throw new Exception('Go online before accepting ride requests.');
-    }
-    if ($rideId <= 0) {
-        throw new Exception('Ride ID is invalid.');
-    }
-
-    $busy = mysqli_query($dbconn, "SELECT id FROM ride_rides WHERE driver_id=$driverId AND status IN (" . activeRideStatusesSql() . ") LIMIT 1");
-    if ($busy && mysqli_num_rows($busy) > 0) {
-        throw new Exception('Finish the current trip before accepting another ride.');
-    }
-
-    mysqli_begin_transaction($dbconn);
-    try {
-        // [NOV-DEV NOTE]: "FOR UPDATE" is critical here! It locks this specific row in the database.
-        // If two drivers click "Accept" at the exact same millisecond, the database puts them in a queue. 
-        // The first driver gets it, the second driver is thrown the exception below because the status changed.
-        $lockResult = mysqli_query($dbconn, "SELECT * FROM ride_rides WHERE id=$rideId LIMIT 1 FOR UPDATE");
-        if (!$lockResult || mysqli_num_rows($lockResult) === 0) {
-            throw new Exception('Ride request no longer exists.');
-        }
-        $ride = mysqli_fetch_assoc($lockResult);
-        $currentStatus = normalizeRideStatus((string)($ride['status'] ?? 'searching'));
-        $requestedDriverId = isset($ride['driver_id']) ? (int)$ride['driver_id'] : 0;
-
-        if ($currentStatus !== 'searching') {
-            throw new Exception('This ride has already moved beyond queue state.');
-        }
-        if ($requestedDriverId > 0 && $requestedDriverId !== $driverId) {
-            throw new Exception('This request is assigned to another driver queue.');
-        }
-
-        $driverName = mysqli_real_escape_string($dbconn, (string)$session['name']);
-        $carPlate = mysqli_real_escape_string($dbconn, (string)$session['car_plate']);
-        if (!mysqli_query($dbconn, "UPDATE ride_rides SET driver_id=$driverId, driver_name='$driverName', car_plate='$carPlate', status='accepted', updated_at=CURRENT_TIMESTAMP WHERE id=$rideId LIMIT 1")) {
-            throw new Exception('Unable to assign ride to this driver.');
-        }
-
-        mysqli_query($dbconn, "INSERT INTO ride_driver_locations (driver_id, lat, lng, heading, phase)
-            VALUES ($driverId, 0, 0, 0, 'enroute_pickup')
-            ON DUPLICATE KEY UPDATE phase='enroute_pickup', updated_at=CURRENT_TIMESTAMP");
-
-        mysqli_commit($dbconn);
-        return [
-            'error' => false,
-            'message' => 'Ride accepted. Proceed to pickup.',
-            'data' => [
-                'ride_id' => $rideId,
-                'driver_id' => $driverId,
-                'status' => 'accepted',
-            ],
-        ];
-    } catch (Exception $e) {
-        mysqli_rollback($dbconn);
-        throw $e;
-    }
-}
-
-function scanAndBatchDispatchRides(string $userUid, string $latRaw, string $lngRaw): array {
-    global $dbconn;
-    $session = fetchDriverSession($userUid);
-    $driverId = (int)$session['id'];
-    
-    if ((int)$session['is_online'] !== 1) {
-        throw new Exception('Go online to scan for dispatch batches.');
-    }
-    
-    $allowedTypes = $session['allowed_ride_types'] ?? '';
-    if (strpos($allowedTypes, 'dispatch') === false) {
-        throw new Exception('Your vehicle is not authorized for Fleet Dispatch.');
-    }
-
-    $driverLat = (float)$latRaw;
-    $driverLng = (float)$lngRaw;
-    
-    $maxPayload = (float)($session['max_payload_weight'] ?? 0);
-    $currentPayload = (float)($session['current_payload_weight'] ?? 0);
-    $capacityRemaining = $maxPayload - $currentPayload;
-    
-    if ($capacityRemaining <= 0) {
-        throw new Exception('Your active payload is full. Deliver current packages first.');
-    }
-
-    $sql = "SELECT id, dest_lat, dest_lng, package_weight, price,
-            (6371000 * acos(cos(radians($driverLat)) * cos(radians(pickup_lat)) * cos(radians(pickup_lng) - radians($driverLng)) + sin(radians($driverLat)) * sin(radians(pickup_lat)))) AS distance
-            FROM ride_rides
-            WHERE status = 'searching' 
-              AND ride_type = 'dispatch' 
-              AND package_weight <= $capacityRemaining
-              AND (driver_id IS NULL OR driver_id = 0)
-            HAVING distance < 5000
-            ORDER BY distance ASC
-            LIMIT 3"; 
-            
-    $result = mysqli_query($dbconn, $sql);
-    $batch = [];
-    $batchGroupId = uniqid('BATCH_');
-    
-    if ($result && mysqli_num_rows($result) > 0) {
-        mysqli_begin_transaction($dbconn);
-        try {
-            $driverName = mysqli_real_escape_string($dbconn, (string)$session['name']);
-            $carPlate = mysqli_real_escape_string($dbconn, (string)$session['car_plate']);
-            
-            while ($row = mysqli_fetch_assoc($result)) {
-                $rideId = (int)$row['id'];
-                $batch[] = $row;
-                mysqli_query($dbconn, "UPDATE ride_rides SET driver_id=$driverId, driver_name='$driverName', car_plate='$carPlate', batch_group_id='$batchGroupId' WHERE id=$rideId");
-            }
-            $totalWeight = array_sum(array_column($batch, 'package_weight'));
-            mysqli_query($dbconn, "UPDATE ride_drivers SET current_payload_weight = current_payload_weight + $totalWeight WHERE id=$driverId");
-            
-            mysqli_commit($dbconn);
-        } catch (Exception $e) {
-            mysqli_rollback($dbconn);
-            throw $e;
-        }
-    }
-    
-    return [
-        'error' => false,
-        'message' => count($batch) > 0 ? "Successfully batched " . count($batch) . " nearby deliveries to your route." : "No dispatch requests nearby matching your capacity.",
-        'data' => [
-            'batched_count' => count($batch),
-            'batch_group_id' => count($batch) > 0 ? $batchGroupId : null
-        ]
-    ];
-}
-
-function verifyDeliveryOtp(string $userUid, string $rideIdRaw, string $providedOtp): array {
-    global $dbconn;
-    $session = fetchDriverSession($userUid);
-    $driverId = (int)$session['id'];
-    $rideId = (int)$rideIdRaw;
-    $safeOtp = sanitizeInput($providedOtp);
-
-    $sql = "SELECT id, status, delivery_otp, package_weight FROM ride_rides WHERE id=$rideId AND driver_id=$driverId LIMIT 1 FOR UPDATE";
-    
-    mysqli_begin_transaction($dbconn);
-    try {
-        $lockResult = mysqli_query($dbconn, $sql);
-        if (!$lockResult || mysqli_num_rows($lockResult) === 0) {
-            throw new Exception('Delivery not found or not assigned to you.');
-        }
-        
-        $ride = mysqli_fetch_assoc($lockResult);
-        
-        if ($ride['status'] !== 'arrived_destination' && $ride['status'] !== 'in_progress') {
-            throw new Exception('You must be at the destination to verify the OTP.');
-        }
-        
-        if ((string)$ride['delivery_otp'] !== $safeOtp) {
-            throw new Exception('Invalid Secure OTP. Handoff denied. Contact recipient.');
-        }
-
-        $weight = (float)$ride['package_weight'];
-        if ($weight > 0) {
-            mysqli_query($dbconn, "UPDATE ride_drivers SET current_payload_weight = GREATEST(0, current_payload_weight - $weight) WHERE id=$driverId");
-        }
-
-        mysqli_commit($dbconn);
-        return [
-            'error' => false,
-            'message' => 'OTP Verified successfully. Chain of custody confirmed.',
-            'data' => ['ride_id' => $rideId, 'verified' => true]
-        ];
-    } catch (Exception $e) {
-        mysqli_rollback($dbconn);
-        throw $e;
-    }
-}
-
-// ==============================================================================
-// 💰 FINANCIAL TRANSACTION & MONETIZATION ENGINE (ALL RIDE TYPES)
-// ==============================================================================
-// This engine processes actions (start, complete, cancel) for humans (street_ride) 
-// AND packages (send_me, dispatch) identically. 
-//
-// HOW THE MATH WORKS:
-// 1. The default system fee is 25% (overridden by DB settings if found).
-// 2. We ONLY charge money when the driver taps 'complete' (or 'cancel' if trip started).
-// 3. We check the driver's wallet to ensure they can afford our 25% cut.
-// 4. If the passenger/sender chose "wallet" payment, we subtract 100% of the fare 
-//    from the rider's wallet, and give 100% of it to the driver. 
-// 5. Finally, we deduct our 25% commission from the driver's wallet. 
-// ==============================================================================
-
-function rideAction(string $userUid, string $rideIdRaw, string $rideActionRaw): array {
-    global $dbconn;
-    $session = fetchDriverSession($userUid);
-    $driverId = (int)$session['id'];
-    $rideId = (int)$rideIdRaw;
-    $rideAction = strtolower(trim($rideActionRaw));
-
-    if ($rideId <= 0) {
-        throw new Exception('Ride ID is invalid.');
-    }
-
-    // Normalizing aliases to core statuses
-    if ($rideAction === 'start_to_pickup' || $rideAction === 'head_to_pickup') $rideAction = 'enroute_pickup';
-    if ($rideAction === 'complete_trip') $rideAction = 'complete';
-    if ($rideAction === 'cancel_trip' || $rideAction === 'cancel_ride') $rideAction = 'cancel';
-
-    $clientLat = isset($_POST['lat']) ? sanitizeInput($_POST['lat']) : null;
-    $clientLng = isset($_POST['lng']) ? sanitizeInput($_POST['lng']) : null;
-    $clientHeading = isset($_POST['heading']) ? sanitizeInput($_POST['heading']) : null;
-    upsertDriverLiveFromClient($driverId, $clientLat, $clientLng, $clientHeading, phaseForRideAction($rideAction));
-
-    // [NOV-DEV NOTE]: Begin the transaction and lock the ride table row!
-    mysqli_begin_transaction($dbconn);
-    try {
-        $lockResult = mysqli_query($dbconn, "SELECT * FROM ride_rides WHERE id=$rideId AND driver_id=$driverId LIMIT 1 FOR UPDATE");
-        if (!$lockResult || mysqli_num_rows($lockResult) === 0) {
-            throw new Exception('No active ride was found for this driver action.');
-        }
-        $ride = mysqli_fetch_assoc($lockResult);
-        $currentStatus = normalizeRideStatus((string)($ride['status'] ?? 'searching'));
-        
-        // Is this action finishing the ride and triggering money transfers?
-        $isChargeableAction = ($rideAction === 'complete') || ($rideAction === 'cancel' && in_array($currentStatus, ['in_progress', 'arrived_destination'], true));
-        
-        $payMethod = $ride['pay_method'] ?? 'cash';
-        $price = (float)($ride['price'] ?? 0.0);
-        $appFee = 0.0;
-        $feePercentage = 25.0; // The App's Commission 
-        
-        // $riderId refers to the account that booked the request. 
-        // For 'send_me' & 'dispatch', this is the SENDER of the package.
-        $riderId = mysqli_real_escape_string($dbconn, (string)($ride['rider_id'] ?? ''));
-        $escapedUserUid = mysqli_real_escape_string($dbconn, $userUid);
-
-        // --- STEP 1: PRE-CHECK DRIVER WALLET ---
-        if ($isChargeableAction) {
-            // Retrieve dynamic fee from settings table if available
-            $feeQuery = mysqli_query($dbconn, "SELECT setting_value FROM app_settings WHERE setting_key = 'app_ride_fee_percentage'");
-            if ($feeQuery && mysqli_num_rows($feeQuery) > 0) {
-                $feeRow = mysqli_fetch_assoc($feeQuery);
-                $feePercentage = (float)$feeRow['setting_value'];
-            }
-            
-            // Calculate our cut
-            $appFee = ($feePercentage / 100) * $price;
-            
-            // Look up driver's current balance
-            $driverQuery = mysqli_query($dbconn, "SELECT bal FROM unique_user_table WHERE u_uid = '$escapedUserUid'");
-            if ($driverQuery && mysqli_num_rows($driverQuery) > 0) {
-                $driverData = mysqli_fetch_assoc($driverQuery);
-                $driverBal = (float)($driverData['bal'] ?? 0);
-                
-                // If the driver can't afford the app fee, block the completion.
-                if ($driverBal < $appFee) {
-                    $driveFundAmount = $appFee-$driverBal;
-                    throw new Exception("Insufficient balance to cover the app fee (" . ($ride['currency'] ?? 'NGN') . " " . number_format($appFee, 2) . "). Please fund your wallet with (" . ($ride['currency'] ?? 'NGN') . " " . number_format($driveFundAmount, 2) . ") to be able to complete this transaction.");
-                }
-            }
-        }
-
-        $live = requireFreshDriverLive($driverId, DRIVER_FIX_MAX_AGE_SEC);
-        $driverLat = (float)$live['lat'];
-        $driverLng = (float)$live['lng'];
-        $distanceToPickup = haversineMeters($driverLat, $driverLng, (float)$ride['pickup_lat'], (float)$ride['pickup_lng']);
-        $distanceToDest = haversineMeters($driverLat, $driverLng, (float)$ride['dest_lat'], (float)$ride['dest_lng']);
-
-        $gpsErrorMargin = isset($_POST['accuracy']) ? (float)$_POST['accuracy'] : 15.0;
-        $compensation = min($gpsErrorMargin, 150.0);
-        
-        $effectivePickupRadius = ARRIVED_PICKUP_MAX_METERS + $compensation;
-        $effectiveStartRadius = START_TRIP_MAX_METERS + $compensation;
-        $effectiveDestRadius = ARRIVED_DESTINATION_MAX_METERS + $compensation;
-        $effectiveCompleteRadius = COMPLETE_RIDE_MAX_METERS + $compensation;
-
-        $nextStatus = '';
-        $message = '';
-        $timestampSql = '';
-        $counterSql = '';
+    $allowedPhases = ['idle', 'enroute_pickup', 'waiting_pickup', 'enroute_destination', 'arrived_destination'];
+    if (!in_array($phase, $allowedPhases, true)) {
         $phase = 'idle';
+    }
+    upsertDriverLive($driverId, $lat, $lng, $heading, $phase);
+    return [
+        'error'   => false,
+        'message' => 'Live driver location updated.',
+        'data'    => ['driver_id' => $driverId, 'lat' => $lat, 'lng' => $lng, 'heading' => $heading, 'phase' => $phase],
+    ];
+}
 
+function acceptRide(string $userUid, int $rideId): array
+{
+    $session = fetchDriverSession($userUid);
+    $driverId = (int)$session['id'];
+    if ((int)$session['is_online'] !== 1) {
+        hub_fail('Go online before accepting ride requests.', 'CONFLICT');
+    }
+    if ($rideId <= 0) {
+        hub_fail('Ride ID is invalid.');
+    }
+
+    $result = pm_tx(function () use ($driverId, $rideId, $session) {
+        // Per-driver lock: serialises this driver's accepts so they can never hold two active rides.
+        pm_q_one('SELECT id FROM ride_drivers WHERE id = ? FOR UPDATE', 'i', [$driverId]);
+
+        $ride = ride_fetch_ride(null, $rideId, true);
+        if (!$ride) {
+            hub_fail('Ride request no longer exists.', 'NOT_FOUND');
+        }
+        $current = ride_norm_status((string)$ride['status']);
+        $assigned = (int)($ride['driver_id'] ?? 0);
+        if ($assigned === $driverId && $current === 'accepted') {
+            return ['idempotent' => true, 'ride' => $ride]; // double tap
+        }
+        if ($assigned > 0 && $assigned !== $driverId) {
+            hub_fail($current === 'searching' ? 'This request is assigned to another driver queue.' : 'This ride has already been taken.', 'CONFLICT');
+        }
+        $busy = pm_q_one(
+            'SELECT id FROM ride_rides WHERE driver_id = ? AND id <> ? AND status IN (' . pm_in_placeholders(PM_RIDE_ACTIVE_STATUSES) . ') LIMIT 1',
+            'ii' . str_repeat('s', count(PM_RIDE_ACTIVE_STATUSES)),
+            array_merge([$driverId, $rideId], PM_RIDE_ACTIVE_STATUSES)
+        );
+        if ($busy) {
+            hub_fail('Finish the current trip before accepting another ride.', 'CONFLICT');
+        }
+
+        // Single conditional UPDATE: wins only if still searching and unassigned/assigned to me.
+        $won = pm_exec(
+            "UPDATE ride_rides
+             SET driver_id = ?, driver_name = ?, car_plate = ?, status = 'accepted', updated_at = CURRENT_TIMESTAMP
+             WHERE id = ? AND status = 'searching' AND (driver_id IS NULL OR driver_id = 0 OR driver_id = ?)
+               AND created_at > NOW() - INTERVAL " . PM_RIDE_SEARCH_TTL_MIN . ' MINUTE
+             LIMIT 1',
+            'issii',
+            [$driverId, (string)$session['name'], (string)($session['car_plate'] ?? ''), $rideId, $driverId]
+        );
+        if ($won !== 1) {
+            hub_fail('This ride has already moved beyond queue state.', 'CONFLICT');
+        }
+        pm_exec(
+            "INSERT INTO ride_driver_locations (driver_id, lat, lng, heading, phase) VALUES (?, 0, 0, 0, 'enroute_pickup')
+             ON DUPLICATE KEY UPDATE phase = 'enroute_pickup', updated_at = CURRENT_TIMESTAMP",
+            'i',
+            [$driverId]
+        );
+        return ['idempotent' => false, 'ride' => $ride];
+    });
+
+    if (!$result['idempotent']) {
+        $riderUid = (string)$result['ride']['rider_id'];
+        pm_defer(static function () use ($riderUid, $rideId): void {
+            pm_push_ride_update($riderUid, 'Driver on the way', 'Your ride has been accepted.', ['ride_id' => (string)$rideId, 'status' => 'accepted']);
+        });
+    }
+
+    return [
+        'error'   => false,
+        'message' => 'Ride accepted. Proceed to pickup.',
+        'data'    => ['ride_id' => $rideId, 'driver_id' => $driverId, 'status' => 'accepted'],
+    ];
+}
+
+function scanAndBatchDispatchRides(string $userUid, float $driverLat, float $driverLng): array
+{
+    $session = fetchDriverSession($userUid);
+    $driverId = (int)$session['id'];
+    if ((int)$session['is_online'] !== 1) {
+        hub_fail('Go online to scan for dispatch batches.', 'CONFLICT');
+    }
+    $allowed = array_map('trim', explode(',', (string)($session['allowed_ride_types'] ?? '')));
+    if (!in_array('dispatch', $allowed, true)) {
+        hub_fail('Your vehicle is not authorized for Fleet Dispatch.', 'FORBIDDEN');
+    }
+    if (!pm_valid_lat($driverLat) || !pm_valid_lng($driverLng)) {
+        hub_fail('Latitude and longitude are invalid.');
+    }
+
+    $batchGroupId = 'BATCH_' . bin2hex(random_bytes(8));
+    $won = pm_tx(function () use ($driverId, $driverLat, $driverLng, $session, $batchGroupId) {
+        $drv = pm_q_one('SELECT max_payload_weight, current_payload_weight FROM ride_drivers WHERE id = ? FOR UPDATE', 'i', [$driverId]);
+        $capacity = (float)($drv['max_payload_weight'] ?? 0) - (float)($drv['current_payload_weight'] ?? 0);
+        if ($capacity <= 0) {
+            hub_fail('Your active payload is full. Deliver current packages first.', 'CONFLICT');
+        }
+        [$minLat, $maxLat, $minLng, $maxLng] = pm_bbox($driverLat, $driverLng, DISPATCH_SCAN_RADIUS_M / 1000.0);
+        $candidates = pm_q_all(
+            "SELECT id, package_weight, pickup_lat, pickup_lng
+             FROM ride_rides
+             WHERE status = 'searching' AND ride_type = 'dispatch'
+               AND (driver_id IS NULL OR driver_id = 0)
+               AND created_at > NOW() - INTERVAL " . PM_RIDE_SEARCH_TTL_MIN . ' MINUTE
+               AND pickup_lat BETWEEN ? AND ? AND pickup_lng BETWEEN ? AND ?
+               AND package_weight <= ?
+             LIMIT 50',
+            'ddddd',
+            [$minLat, $maxLat, $minLng, $maxLng, $capacity]
+        );
+        foreach ($candidates as &$c) {
+            $c['distance'] = pm_haversine_m($driverLat, $driverLng, (float)$c['pickup_lat'], (float)$c['pickup_lng']);
+        }
+        unset($c);
+        $candidates = array_values(array_filter($candidates, static fn($c) => $c['distance'] < DISPATCH_SCAN_RADIUS_M));
+        usort($candidates, static fn($a, $b) => $a['distance'] <=> $b['distance']);
+
+        $won = [];
+        $weight = 0.0;
+        foreach ($candidates as $c) {
+            if (count($won) >= 3) {
+                break;
+            }
+            $w = (float)$c['package_weight'];
+            if ($weight + $w > $capacity) {
+                continue;
+            }
+            // Conditional claim: another driver scanning concurrently cannot claim the same parcel.
+            $ok = pm_exec(
+                "UPDATE ride_rides SET driver_id = ?, driver_name = ?, car_plate = ?, batch_group_id = ?
+                 WHERE id = ? AND status = 'searching' AND (driver_id IS NULL OR driver_id = 0) LIMIT 1",
+                'isssi',
+                [$driverId, (string)$session['name'], (string)($session['car_plate'] ?? ''), $batchGroupId, (int)$c['id']]
+            );
+            if ($ok === 1) {
+                $won[] = (int)$c['id'];
+                $weight += $w;
+            }
+        }
+        if ($weight > 0) {
+            pm_exec('UPDATE ride_drivers SET current_payload_weight = current_payload_weight + ? WHERE id = ?', 'di', [$weight, $driverId]);
+        }
+        return $won;
+    });
+
+    $n = count($won);
+    return [
+        'error'   => false,
+        'message' => $n > 0 ? 'Successfully batched ' . $n . ' nearby deliveries to your route.' : 'No dispatch requests nearby matching your capacity.',
+        'data'    => ['batched_count' => $n, 'batch_group_id' => $n > 0 ? $batchGroupId : null],
+    ];
+}
+
+/** Server-side delivery OTP check with attempt limits (rate limit + hard cap per ride). */
+function verifyDeliveryOtp(string $userUid, int $rideId, string $providedOtp): array
+{
+    $session = fetchDriverSession($userUid);
+    $driverId = (int)$session['id'];
+    if ($rideId <= 0) {
+        hub_fail('Ride ID is invalid.');
+    }
+    pm_rate_limit('delivery_otp', (string)$rideId, 5, 900, 'Too many wrong codes. Please wait 15 minutes or contact support.');
+
+    $ride = pm_q_one(
+        'SELECT id, status, delivery_otp, delivery_otp_attempts, delivery_otp_verified_at FROM ride_rides WHERE id = ? AND driver_id = ? LIMIT 1',
+        'ii',
+        [$rideId, $driverId]
+    );
+    if (!$ride) {
+        hub_fail('Delivery not found or not assigned to you.', 'NOT_FOUND');
+    }
+    if (!empty($ride['delivery_otp_verified_at'])) {
+        return ['error' => false, 'message' => 'OTP already verified.', 'data' => ['ride_id' => $rideId, 'verified' => true]];
+    }
+    if (!in_array(ride_norm_status((string)$ride['status']), ['in_progress', 'arrived_destination'], true)) {
+        hub_fail('You must be at the destination to verify the OTP.', 'CONFLICT');
+    }
+    $expected = trim((string)$ride['delivery_otp']);
+    if ($expected === '') {
+        return ['error' => false, 'message' => 'No OTP required for this delivery.', 'data' => ['ride_id' => $rideId, 'verified' => true]];
+    }
+    if ((int)$ride['delivery_otp_attempts'] >= DELIVERY_OTP_MAX_ATTEMPTS) {
+        hub_fail('This delivery is locked after too many wrong codes. Contact support.', 'RATE_LIMITED');
+    }
+
+    $provided = preg_replace('/\D/', '', $providedOtp) ?? '';
+    if (!hash_equals($expected, $provided)) {
+        // Committed immediately (autocommit) so failed attempts are always counted.
+        pm_exec('UPDATE ride_rides SET delivery_otp_attempts = delivery_otp_attempts + 1 WHERE id = ?', 'i', [$rideId]);
+        hub_fail('Invalid Secure OTP. Handoff denied. Contact recipient.');
+    }
+
+    pm_tx(function () use ($rideId, $driverId) {
+        $first = pm_exec('UPDATE ride_rides SET delivery_otp_verified_at = NOW() WHERE id = ? AND driver_id = ? AND delivery_otp_verified_at IS NULL', 'ii', [$rideId, $driverId]);
+        if ($first === 1) {
+            $r = pm_q_one('SELECT package_weight, batch_group_id FROM ride_rides WHERE id = ?', 'i', [$rideId]);
+            $weight = (float)($r['package_weight'] ?? 0);
+            if ($weight > 0 && !empty($r['batch_group_id'])) {
+                pm_exec('UPDATE ride_drivers SET current_payload_weight = GREATEST(0, current_payload_weight - ?) WHERE id = ?', 'di', [$weight, $driverId]);
+            }
+        }
+    });
+    pm_rate_limit_clear('delivery_otp', (string)$rideId);
+
+    return ['error' => false, 'message' => 'OTP Verified successfully. Chain of custody confirmed.', 'data' => ['ride_id' => $rideId, 'verified' => true]];
+}
+
+/**
+ * Ride actions with GPS gating and money movement.
+ * Charging rules (unchanged): app fee (% of fare, app_settings.app_ride_fee_percentage) is taken from the
+ * driver's wallet on completion, or on a driver cancel after the trip started. Wallet-paid rides move the
+ * fare rider → driver on completion. All balance changes are atomic conditional UPDATEs in one transaction
+ * with the ride transition, so a double tap can never charge twice.
+ */
+function rideAction(string $userUid, int $rideId, string $rideActionRaw): array
+{
+    global $IN;
+    $session = fetchDriverSession($userUid);
+    $driverId = (int)$session['id'];
+    if ($rideId <= 0) {
+        hub_fail('Ride ID is invalid.');
+    }
+
+    $rideAction = strtolower(trim($rideActionRaw));
+    $aliases = ['start_to_pickup' => 'enroute_pickup', 'head_to_pickup' => 'enroute_pickup', 'complete_trip' => 'complete', 'cancel_trip' => 'cancel', 'cancel_ride' => 'cancel'];
+    $rideAction = $aliases[$rideAction] ?? $rideAction;
+    if (!in_array($rideAction, ['enroute_pickup', 'arrived_pickup', 'start_trip', 'arrived_destination', 'complete', 'cancel'], true)) {
+        hub_fail('Unsupported ride action.');
+    }
+
+    $clientLat = pm_in_float($IN, 'lat', 0.0);
+    $clientLng = pm_in_float($IN, 'lng', 0.0);
+    if (pm_valid_lat($clientLat) && pm_valid_lng($clientLng)) {
+        upsertDriverLive($driverId, $clientLat, $clientLng, pm_in_float($IN, 'heading', 0.0), phaseForRideAction($rideAction));
+    }
+    $compensation = min(max(pm_in_float($IN, 'accuracy', 15.0), 0.0), 150.0);
+
+    $out = pm_tx(function () use ($driverId, $rideId, $rideAction, $userUid, $compensation) {
+        $ride = pm_q_one('SELECT * FROM ride_rides WHERE id = ? AND driver_id = ? LIMIT 1 FOR UPDATE', 'ii', [$rideId, $driverId]);
+        if (!$ride) {
+            hub_fail('No active ride was found for this driver action.', 'NOT_FOUND');
+        }
+        $current = ride_norm_status((string)$ride['status']);
+        $live = requireFreshDriverLive($driverId);
+        $toPickup = pm_haversine_m($live['lat'], $live['lng'], (float)$ride['pickup_lat'], (float)$ride['pickup_lng']);
+        $toDest = pm_haversine_m($live['lat'], $live['lng'], (float)$ride['dest_lat'], (float)$ride['dest_lng']);
+
+        $transition = $rideAction === 'cancel' ? 'driver_cancel' : $rideAction;
+        [$from, $target] = PM_RIDE_TRANSITIONS[$transition];
+        $base = ['ride_id' => $rideId, 'driver_id' => $driverId, 'distance_to_pickup_m' => round($toPickup, 2), 'distance_to_destination_m' => round($toDest, 2), 'driver_fix_age_sec' => $live['age_sec']];
+
+        // Idempotent replay (double tap / retry after timeout): no side effects.
+        if ($current === $target) {
+            return ['message' => 'Ride already ' . $target . '.', 'status' => $target, 'phase' => phaseForRideAction($rideAction), 'base' => $base, 'notify' => null];
+        }
+        if (!in_array((string)$ride['status'], $from, true) && !in_array($current, $from, true)) {
+            hub_fail('Ride cannot move to ' . $target . ' from ' . $current . '.', 'CONFLICT');
+        }
+
+        $extra = '';
+        $message = '';
+        $phase = phaseForRideAction($rideAction);
         switch ($rideAction) {
             case 'enroute_pickup':
-                if (!in_array($currentStatus, ['accepted', 'enroute_pickup'], true)) {
-                    throw new Exception('Ride cannot move to pickup transit from ' . $currentStatus . '.');
-                }
-                $nextStatus = 'enroute_pickup';
                 $message = 'Driver is heading to pickup.';
-                $phase = 'enroute_pickup';
                 break;
-
             case 'arrived_pickup':
-                if (!in_array($currentStatus, ['accepted', 'enroute_pickup'], true)) {
-                    throw new Exception('Pickup arrival can only be marked while heading to rider.');
+                if ($toPickup > ARRIVED_PICKUP_MAX_METERS + $compensation) {
+                    hub_fail('Driver must be inside the pickup zone before marking arrived. Current distance: ' . round($toPickup) . ' m.', 'CONFLICT');
                 }
-                if ($distanceToPickup > $effectivePickupRadius) {
-                    throw new Exception('Driver must be inside the pickup zone before marking arrived. Current distance: ' . round($distanceToPickup) . ' m.');
-                }
-                $nextStatus = 'arrived_pickup';
                 $message = 'Driver has arrived at pickup.';
-                $timestampSql = ", arrived_pickup_at=NOW()";
-                $phase = 'waiting_pickup';
+                $extra = ', arrived_pickup_at = NOW()';
                 break;
-
             case 'start_trip':
-                if (!in_array($currentStatus, ['arrived_pickup'], true)) {
-                    throw new Exception('Trip can only start after pickup arrival is confirmed.');
+                if ($toPickup > START_TRIP_MAX_METERS + $compensation) {
+                    hub_fail('Driver and rider must still be together inside pickup zone before starting trip. Current distance: ' . round($toPickup) . ' m.', 'CONFLICT');
                 }
-                if ($distanceToPickup > $effectiveStartRadius) {
-                    throw new Exception('Driver and rider must still be together inside pickup zone before starting trip. Current distance: ' . round($distanceToPickup) . ' m.');
-                }
-                $nextStatus = 'in_progress';
                 $message = 'Trip started. Driver is en route to destination.';
-                $timestampSql = ", started_at=IFNULL(started_at,NOW())";
-                $phase = 'enroute_destination';
+                $extra = ', started_at = IFNULL(started_at, NOW())';
                 break;
-
             case 'arrived_destination':
-                if (!in_array($currentStatus, ['in_progress'], true)) {
-                    throw new Exception('Destination arrival can only be marked for an active trip.');
+                if ($toDest > ARRIVED_DESTINATION_MAX_METERS + $compensation) {
+                    hub_fail('Driver must be inside the destination zone before marking arrived. Current distance: ' . round($toDest) . ' m.', 'CONFLICT');
                 }
-                if ($distanceToDest > $effectiveDestRadius) {
-                    throw new Exception('Driver must be inside the destination zone before marking arrived. Current distance: ' . round($distanceToDest) . ' m.');
-                }
-                $nextStatus = 'arrived_destination';
                 $message = 'Driver reached the destination.';
-                $phase = 'arrived_destination';
                 break;
-
             case 'complete':
-                if (!in_array($currentStatus, ['in_progress', 'arrived_destination'], true)) {
-                    throw new Exception('Only active or destination-arrived rides can be completed.');
+                if ($toDest > COMPLETE_RIDE_MAX_METERS + $compensation) {
+                    hub_fail('Ride can only be completed at the destination zone. Current distance: ' . round($toDest) . ' m.', 'CONFLICT');
                 }
-                if ($distanceToDest > $effectiveCompleteRadius) {
-                    throw new Exception('Ride can only be completed at the destination zone. Current distance: ' . round($distanceToDest) . ' m.');
+                if (in_array((string)$ride['ride_type'], ['dispatch', 'send_me'], true) && trim((string)$ride['delivery_otp']) !== '' && empty($ride['delivery_otp_verified_at'])) {
+                    hub_fail('Verify the recipient OTP before completing this delivery.', 'CONFLICT');
                 }
-                
-                $nextStatus = 'completed';
                 $message = 'Ride completed successfully.';
-                $timestampSql = ", completed_at=CURRENT_TIMESTAMP";
-                $counterSql = "UPDATE ride_drivers SET completed_trips=completed_trips+1, total_trips=total_trips+1 WHERE id=$driverId LIMIT 1";
-                $phase = 'idle';
+                $extra = ', completed_at = CURRENT_TIMESTAMP';
                 break;
-
             case 'cancel':
-                if (!in_array($currentStatus, ['searching', 'accepted', 'enroute_pickup', 'arrived_pickup', 'in_progress', 'arrived_destination'], true)) {
-                    throw new Exception('Ride cannot be canceled from ' . $currentStatus . '.');
-                }
-                $nextStatus = 'canceled';
                 $message = 'Ride canceled.';
-                $timestampSql = ", canceled_at=NOW()";
-                $counterSql = "UPDATE ride_drivers SET cancelled_trips=cancelled_trips+1, total_trips=total_trips+1 WHERE id=$driverId LIMIT 1";
-                $phase = 'idle';
-                
-                // If it was a package delivery, restore the driver's vehicle capacity limit
-                $weight = (float)($ride['package_weight'] ?? 0);
-                if ($weight > 0) {
-                    mysqli_query($dbconn, "UPDATE ride_drivers SET current_payload_weight = GREATEST(0, current_payload_weight - $weight) WHERE id=$driverId");
-                }
+                $extra = ", canceled_at = NOW(), cancel_reason = IFNULL(cancel_reason, 'driver_canceled')";
                 break;
-
-            default:
-                throw new Exception('Unsupported ride action.');
         }
 
-        // --- STEP 2: EXECUTE MONETIZATION TRANSFERS ---
-        if ($isChargeableAction) {
-            $transactionId = uniqid('TRX_');
-            
-            // A. WALLET PAYMENT PROCESSING
-            // If the sender/rider chose 'wallet' as the payment method, we deduct the fare from their balance.
-            if ($payMethod === 'wallet' && $rideAction === 'complete') {
-                // 1. Deduct from Sender/Rider
-                mysqli_query($dbconn, "UPDATE unique_user_table SET bal = bal - $price WHERE u_uid = '$riderId'");
-                mysqli_query($dbconn, "INSERT INTO unique_account_table (user_uid, amount, type, descTxt, reference, datetime) VALUES ('$riderId', '$price', 'minus', 'Paid for ride via wallet', '$transactionId', NOW())");
-                
-                // 2. Give to Driver
-                mysqli_query($dbconn, "UPDATE unique_user_table SET bal = bal + $price WHERE u_uid = '$escapedUserUid'");
-                mysqli_query($dbconn, "INSERT INTO unique_account_table (user_uid, amount, type, descTxt, reference, datetime) VALUES ('$escapedUserUid', '$price', 'plus', 'Ride earnings from rider', '$transactionId', NOW())");
+        $t = pm_ride_transition($rideId, $transition, 'driver_id', $driverId, $extra);
+        if (!$t['changed']) {
+            return ['message' => 'Ride already ' . $target . '.', 'status' => $target, 'phase' => $phase, 'base' => $base, 'notify' => null];
+        }
+
+        // --- money movement (only on the request that performed the transition) ---
+        $chargeable = $rideAction === 'complete' || ($rideAction === 'cancel' && in_array($current, ['in_progress', 'arrived_destination'], true));
+        if ($chargeable) {
+            $price = round((float)$ride['price'], 2);
+            $feePct = appFeePercent();
+            $appFee = round($price * $feePct / 100.0, 2);
+            $currency = (string)($ride['currency'] ?? 'NGN');
+            $ref = 'RIDE_' . $rideId;
+            $riderUid = (string)$ride['rider_id'];
+
+            if ($rideAction === 'complete' && ($ride['pay_method'] ?? 'cash') === 'wallet' && $price > 0) {
+                if (pm_wallet_debit($riderUid, $price)) {
+                    pm_ledger_add($riderUid, $price, 'minus', 'Paid for ride via wallet', $ref, 'wallet');
+                    pm_wallet_credit($userUid, $price);
+                    pm_ledger_add($userUid, $price, 'plus', 'Ride earnings from rider', $ref, 'wallet');
+                } else {
+                    // Rider wallet no longer covers the fare: settle in cash instead of going negative.
+                    pm_exec("UPDATE ride_rides SET pay_method = 'cash' WHERE id = ?", 'i', [$rideId]);
+                    $message .= ' Rider wallet balance was insufficient — collect ' . $currency . ' ' . number_format($price, 2) . ' in cash.';
+                }
             }
-            
-            // B. THE APP COMMISSION (e.g., 25%)
-            // Regardless of Cash or Wallet, the App takes its commission directly out of the Driver's balance.
-            mysqli_query($dbconn, "UPDATE unique_user_table SET bal = bal - $appFee WHERE u_uid = '$escapedUserUid'");
-            mysqli_query($dbconn, "INSERT INTO unique_account_table (user_uid, amount, type, descTxt, reference, datetime) VALUES ('$escapedUserUid', '$appFee', 'minus', 'App service fee ({$feePercentage}%)', '$transactionId', NOW())");
+            if ($appFee > 0) {
+                if (!pm_wallet_debit($userUid, $appFee)) {
+                    $bal = (float)(pm_wallet_balance($userUid) ?? 0);
+                    hub_fail('Insufficient balance to cover the app fee (' . $currency . ' ' . number_format($appFee, 2) . '). Please fund your wallet with (' . $currency . ' ' . number_format(max(0, $appFee - $bal), 2) . ') to be able to complete this transaction.', 'CONFLICT');
+                }
+                pm_ledger_add($userUid, $appFee, 'minus', 'App service fee (' . rtrim(rtrim(number_format($feePct, 2, '.', ''), '0'), '.') . '%)', $ref, 'wallet');
+            }
         }
 
-        if (!mysqli_query($dbconn, "UPDATE ride_rides SET status='$nextStatus', updated_at=CURRENT_TIMESTAMP$timestampSql WHERE id=$rideId AND driver_id=$driverId LIMIT 1")) {
-            throw new Exception('Unable to update ride status.');
+        if ($rideAction === 'complete') {
+            pm_exec('UPDATE ride_drivers SET completed_trips = completed_trips + 1, total_trips = total_trips + 1 WHERE id = ? LIMIT 1', 'i', [$driverId]);
+        } elseif ($rideAction === 'cancel') {
+            pm_exec('UPDATE ride_drivers SET cancelled_trips = cancelled_trips + 1, total_trips = total_trips + 1 WHERE id = ? LIMIT 1', 'i', [$driverId]);
+            $weight = (float)($ride['package_weight'] ?? 0);
+            if ($weight > 0 && !empty($ride['batch_group_id']) && empty($ride['delivery_otp_verified_at'])) {
+                pm_exec('UPDATE ride_drivers SET current_payload_weight = GREATEST(0, current_payload_weight - ?) WHERE id = ?', 'di', [$weight, $driverId]);
+            }
         }
-        if ($counterSql !== '' && !mysqli_query($dbconn, $counterSql)) {
-            throw new Exception('Ride counters could not be updated.');
-        }
-        mysqli_query($dbconn, "UPDATE ride_driver_locations SET phase='$phase', updated_at=CURRENT_TIMESTAMP WHERE driver_id=$driverId LIMIT 1");
+        pm_exec('UPDATE ride_driver_locations SET phase = ?, updated_at = CURRENT_TIMESTAMP WHERE driver_id = ? LIMIT 1', 'si', [$phase, $driverId]);
 
-        mysqli_commit($dbconn);
-        return [
-            'error' => false,
-            'message' => $message,
-            'data' => [
-                'ride_id' => $rideId,
-                'driver_id' => $driverId,
-                'status' => $nextStatus,
-                'phase' => $phase,
-                'distance_to_pickup_m' => round($distanceToPickup, 2),
-                'distance_to_destination_m' => round($distanceToDest, 2),
-                'driver_fix_age_sec' => (int)$live['age_sec'],
-            ],
-        ];
-    } catch (Exception $e) {
-        mysqli_rollback($dbconn);
-        throw $e;
+        return ['message' => $message, 'status' => $target, 'phase' => $phase, 'base' => $base, 'notify' => (string)$ride['rider_id']];
+    });
+
+    if ($out['notify']) {
+        $riderUid = $out['notify'];
+        $status = $out['status'];
+        $msg = $out['message'];
+        pm_defer(static function () use ($riderUid, $rideId, $status, $msg): void {
+            pm_push_ride_update($riderUid, 'Trip update', $msg, ['ride_id' => (string)$rideId, 'status' => $status]);
+        });
     }
+
+    return [
+        'error'   => false,
+        'message' => $out['message'],
+        'data'    => $out['base'] + ['status' => $out['status'], 'phase' => $out['phase']],
+    ];
 }
 
+// ---------------------------------------------------------------------------
 try {
-    $action = isset($_POST['action']) ? sanitizeInput($_POST['action']) : 'dashboard';
-    $userUid = requirePosted('user', 'User');
-
+    $action = pm_in_str($IN, 'action', 40, 'dashboard');
     switch ($action) {
         case 'dashboard':
-            jsonResponse(dashboard($userUid));
+            pm_json(dashboard($sessionUid));
             break;
-            
         case 'set_online':
-            $isOnline = requirePosted('is_online', 'Online status');
-            $lat = isset($_POST['lat']) ? (float)$_POST['lat'] : 0.0;
-            $lng = isset($_POST['lng']) ? (float)$_POST['lng'] : 0.0;
-            $heading = isset($_POST['heading']) ? (float)$_POST['heading'] : 0.0;
-            jsonResponse(setOnline($userUid, $isOnline, $lat, $lng, $heading));
+            pm_json(setOnline($sessionUid, hub_param('is_online', 'Online status', 1), pm_in_float($IN, 'lat', 0.0), pm_in_float($IN, 'lng', 0.0), pm_in_float($IN, 'heading', 0.0)));
             break;
-            
         case 'heartbeat':
-            jsonResponse(heartbeat(
-                $userUid,
-                requirePosted('lat', 'Latitude'),
-                requirePosted('lng', 'Longitude'),
-                isset($_POST['heading']) ? sanitizeInput($_POST['heading']) : '0',
-                isset($_POST['phase']) ? sanitizeInput($_POST['phase']) : 'idle'
-            ));
+            hub_param('lat', 'Latitude');
+            hub_param('lng', 'Longitude');
+            pm_json(heartbeat($sessionUid, pm_in_float($IN, 'lat', 0.0), pm_in_float($IN, 'lng', 0.0), pm_in_float($IN, 'heading', 0.0), pm_in_str($IN, 'phase', 40, 'idle')));
             break;
-            
         case 'accept_ride':
-            jsonResponse(acceptRide($userUid, requirePosted('ride_id', 'Ride ID')));
+            pm_json(acceptRide($sessionUid, (int)hub_param('ride_id', 'Ride ID', 20)));
             break;
-            
         case 'ride_action':
-            jsonResponse(rideAction($userUid, requirePosted('ride_id', 'Ride ID'), requirePosted('ride_action', 'Ride action')));
+            pm_json(rideAction($sessionUid, (int)hub_param('ride_id', 'Ride ID', 20), hub_param('ride_action', 'Ride action', 40)));
             break;
-            
         case 'verify_otp':
-            jsonResponse(verifyDeliveryOtp(
-                $userUid, 
-                requirePosted('ride_id', 'Ride ID'), 
-                requirePosted('otp', 'OTP')
-            ));
+            pm_json(verifyDeliveryOtp($sessionUid, (int)hub_param('ride_id', 'Ride ID', 20), hub_param('otp', 'OTP', 10)));
             break;
-            
         case 'scan_dispatch_batch':
-            jsonResponse(scanAndBatchDispatchRides(
-                $userUid, 
-                requirePosted('lat', 'Latitude'), 
-                requirePosted('lng', 'Longitude')
-            ));
+            hub_param('lat', 'Latitude');
+            hub_param('lng', 'Longitude');
+            pm_json(scanAndBatchDispatchRides($sessionUid, pm_in_float($IN, 'lat', 0.0), pm_in_float($IN, 'lng', 0.0)));
             break;
-            
         default:
-            throw new Exception('Unsupported driver action.');
+            hub_fail('Unsupported driver action.');
     }
-} catch (Exception $e) {
-    jsonResponse(['error' => true, 'message' => $e->getMessage(), 'data' => null], 200);
+} catch (PmHttpError $e) {
+    $status = $e->httpStatus;
+    // Legacy contract for this endpoint: business errors are HTTP 200 with error:true.
+    if (!in_array($e->apiCode, ['UNAUTHORIZED', 'SESSION_EXPIRED', 'RATE_LIMITED'], true) && $status !== 403) {
+        $status = 200;
+    }
+    pm_error($e->apiCode, $e->getMessage(), $status, $e->extra + ['data' => null]);
 }
-
-?>

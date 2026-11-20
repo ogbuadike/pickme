@@ -1,111 +1,75 @@
 <?php
-header('Content-Type: application/json');
+declare(strict_types=1);
 
-require_once '../unique/unique_con.php'; 
-require_once 'auth.php';
-require_once '../unique/unique_code.php';
+/**
+ * POST user_settings.php — the session user's app settings (session required).
+ * action=get_settings | update_setting (setting_key ∈ whitelist, setting_value)
+ * Table user_settings_table is created by db/migrations/001_security.sql (no DDL at runtime).
+ */
 
-function sanitizeInput($input) {
-    return trim(htmlspecialchars((string)$input, ENT_QUOTES, 'UTF-8'));
-}
+require_once __DIR__ . '/security.php';
 
-$headers = function_exists('apache_request_headers') ? apache_request_headers() : [];
-$token = isset($headers['Authorization']) ? $headers['Authorization'] : '';
+$uid = pm_require_session();
+$in = pm_input();
+$action = pm_in_str($in, 'action', 40);
 
-if (!checkAuthorization($token)) {
-    http_response_code(401);
-    echo json_encode(['error' => true, 'message' => 'Unauthorized access']);
-    exit();
-}
+const SETTINGS_BOOL_KEYS = ['push_notif', 'sms_notif', 'email_promos', 'loc_access', 'share_ride'];
+const SETTINGS_TEXT_KEYS = ['language' => ['English', 'French', 'Spanish', 'Igbo', 'Hausa', 'Yoruba', 'Pidgin'], 'theme' => ['System', 'Light', 'Dark']];
 
-$user_ID = isset($_POST['user']) ? sanitizeInput($_POST['user']) : '';
-$action = isset($_POST['action']) ? sanitizeInput($_POST['action']) : '';
-
-if (empty($user_ID)) {
-    echo json_encode(['error' => true, 'message' => 'User ID is required']);
-    exit();
-}
-
-$user_ID = mysqli_real_escape_string($dbconn, $user_ID);
-
-// 1. Ensure Table Exists
-$table_check = "
-CREATE TABLE IF NOT EXISTS `user_settings_table` (
-  `id` int(11) NOT NULL AUTO_INCREMENT,
-  `user_uid` varchar(64) NOT NULL,
-  `push_notif` tinyint(1) DEFAULT 1,
-  `sms_notif` tinyint(1) DEFAULT 1,
-  `email_promos` tinyint(1) DEFAULT 0,
-  `loc_access` tinyint(1) DEFAULT 1,
-  `share_ride` tinyint(1) DEFAULT 0,
-  `language` varchar(20) DEFAULT 'English',
-  `theme` varchar(20) DEFAULT 'System',
-  PRIMARY KEY (`id`),
-  UNIQUE KEY `user_uid` (`user_uid`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
-";
-mysqli_query($dbconn, $table_check);
-
-// 2. Ensure User row exists
-mysqli_query($dbconn, "INSERT IGNORE INTO user_settings_table (user_uid) VALUES ('$user_ID')");
-
+pm_exec('INSERT IGNORE INTO user_settings_table (user_uid) VALUES (?)', 's', [$uid]);
 
 if ($action === 'get_settings') {
-    $q = mysqli_query($dbconn, "SELECT * FROM user_settings_table WHERE user_uid='$user_ID' LIMIT 1");
-    
-    // Fetch App Settings (Terms & Privacy)
-    $app_settings = [
+    $s = pm_q_one('SELECT push_notif, sms_notif, email_promos, loc_access, share_ride, language, theme FROM user_settings_table WHERE user_uid = ? LIMIT 1', 's', [$uid]);
+    $appSettings = [
         'terms_of_service_url' => 'https://phantomphones.store/pick_me/terms',
-        'privacy_policy_url' => 'https://phantomphones.store/pick_me/privacy'
+        'privacy_policy_url'   => 'https://phantomphones.store/pick_me/privacy',
     ];
-    $app_settings_q = mysqli_query($dbconn, "SELECT setting_key, setting_value FROM app_settings WHERE setting_key IN ('terms_of_service_url', 'privacy_policy_url')");
-    if ($app_settings_q && mysqli_num_rows($app_settings_q) > 0) {
-        while($row = mysqli_fetch_assoc($app_settings_q)) {
-            $app_settings[$row['setting_key']] = $row['setting_value'];
-        }
+    foreach (pm_q_all("SELECT setting_key, setting_value FROM app_settings WHERE setting_key IN ('terms_of_service_url', 'privacy_policy_url')") as $row) {
+        $appSettings[$row['setting_key']] = $row['setting_value'];
     }
-
-    if ($q && mysqli_num_rows($q) > 0) {
-        $settings = mysqli_fetch_assoc($q);
-        echo json_encode([
-            'error' => false,
-            'message' => 'Settings retrieved',
-            'settings' => [
-                'push_notif' => (int)$settings['push_notif'],
-                'sms_notif' => (int)$settings['sms_notif'],
-                'email_promos' => (int)$settings['email_promos'],
-                'loc_access' => (int)$settings['loc_access'],
-                'share_ride' => (int)$settings['share_ride'],
-                'language' => $settings['language'],
-                'theme' => $settings['theme']
-            ],
-            'app_settings' => $app_settings
-        ]);
-    } else {
-        echo json_encode(['error' => true, 'message' => 'Failed to load settings']);
+    if ($s === null) {
+        pm_error('SERVER', 'Failed to load settings', 200);
     }
+    pm_json([
+        'error'    => false,
+        'message'  => 'Settings retrieved',
+        'settings' => [
+            'push_notif'   => (int)$s['push_notif'],
+            'sms_notif'    => (int)$s['sms_notif'],
+            'email_promos' => (int)$s['email_promos'],
+            'loc_access'   => (int)$s['loc_access'],
+            'share_ride'   => (int)$s['share_ride'],
+            'language'     => (string)$s['language'],
+            'theme'        => (string)$s['theme'],
+        ],
+        'app_settings' => $appSettings,
+    ]);
 }
-elseif ($action === 'update_setting') {
-    $key = isset($_POST['setting_key']) ? sanitizeInput($_POST['setting_key']) : '';
-    $val = isset($_POST['setting_value']) ? sanitizeInput($_POST['setting_value']) : '';
 
-    $allowed_keys = ['push_notif', 'sms_notif', 'email_promos', 'loc_access', 'share_ride', 'language', 'theme'];
-
-    if (in_array($key, $allowed_keys)) {
-        // Prepare value for SQL based on expected type
-        $sql_val = (in_array($key, ['language', 'theme'])) ? "'$val'" : (int)$val;
-        
-        $update_q = "UPDATE user_settings_table SET $key = $sql_val WHERE user_uid = '$user_ID'";
-        if (mysqli_query($dbconn, $update_q)) {
-            echo json_encode(['error' => false, 'message' => 'Setting updated']);
-        } else {
-            echo json_encode(['error' => true, 'message' => 'Database update failed']);
-        }
-    } else {
-        echo json_encode(['error' => true, 'message' => 'Invalid setting key']);
+if ($action === 'update_setting') {
+    pm_require_method('POST');
+    $key = pm_in_str($in, 'setting_key', 40);
+    $val = pm_in_str($in, 'setting_value', 40);
+    if (in_array($key, SETTINGS_BOOL_KEYS, true)) {
+        $bool = in_array(strtolower($val), ['1', 'true', 'on', 'yes'], true) ? 1 : 0;
+        // Column name comes from the whitelist above, never from raw input.
+        pm_exec('UPDATE user_settings_table SET `' . $key . '` = ? WHERE user_uid = ?', 'is', [$bool, $uid]);
+        pm_json(['error' => false, 'message' => 'Setting updated']);
     }
-} 
-else {
-    echo json_encode(['error' => true, 'message' => 'Invalid action']);
+    if (isset(SETTINGS_TEXT_KEYS[$key])) {
+        $match = null;
+        foreach (SETTINGS_TEXT_KEYS[$key] as $opt) {
+            if (strcasecmp($opt, $val) === 0) {
+                $match = $opt;
+            }
+        }
+        if ($match === null) {
+            pm_error('VALIDATION', 'Invalid setting value', 200);
+        }
+        pm_exec('UPDATE user_settings_table SET `' . $key . '` = ? WHERE user_uid = ?', 'ss', [$match, $uid]);
+        pm_json(['error' => false, 'message' => 'Setting updated']);
+    }
+    pm_error('VALIDATION', 'Invalid setting key', 200);
 }
-?>
+
+pm_error('VALIDATION', 'Invalid action', 200);

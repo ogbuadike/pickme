@@ -1,82 +1,40 @@
 <?php
-header('Content-Type: application/json');
+declare(strict_types=1);
 
-require_once '../unique/unique_con.php'; 
-require_once 'auth.php';
-require_once '../unique/unique_code.php';
-require_once '../unique/unique_gtm.php';
-//require_once '../unique/unique_all_pg.php'; //unique_pg.php';
-require_once '../unique/unique_func.php';
-require_once 'activities.php';
+/**
+ * POST set_pin.php — set the session user's transaction PIN (session required). Params: pin (4–6 digits).
+ * Allowed when no PIN exists yet, or within 15 minutes of a fresh password login (e.g. after
+ * reinstalling the app). Otherwise use user_info.php action=update_transaction_code.
+ * Stored with password_hash (argon2id/bcrypt). Rate limited.
+ */
 
-$headers = apache_request_headers();
-$token = isset($headers['Authorization']) ? $headers['Authorization'] : '';
+require_once __DIR__ . '/security.php';
+require_once __DIR__ . '/activities.php';
 
-// Check authorization
-$authorized = checkAuthorization($token);
-if (!$authorized) {
-    http_response_code(401); // Set Unauthorized HTTP response code
-    $response = array(
-        'error' => true,
-        'message' => 'Unauthorized access',
-        'data' => null
-    );
+const SET_PIN_FRESH_LOGIN_SEC = 900;
 
-    echo json_encode($response);
-    exit();
+pm_require_method('POST');
+$uid = pm_require_session();
+$in = pm_input();
+
+pm_rate_limit('set_pin', $uid, 5, 3600, 'Too many attempts. Please try again later.');
+
+$pin = pm_in_raw($in, 'pin', 16);
+if ($pin === '') {
+    pm_error('VALIDATION', "Pin can't be empty", 200, ['data' => null]);
+}
+if (!pm_valid_pin($pin)) {
+    pm_error('VALIDATION', 'PIN must be 4 to 6 digits.', 200, ['data' => null]);
 }
 
-function sanitizeInput($input) {
-    return trim(htmlspecialchars($input));
+$row = pm_q_one('SELECT access FROM unique_user_table WHERE u_uid = ? LIMIT 1', 's', [$uid]);
+$hasPin = trim((string)($row['access'] ?? '')) !== '';
+$session = pm_current_session();
+if ($hasPin && (int)($session['age_sec'] ?? PHP_INT_MAX) > SET_PIN_FRESH_LOGIN_SEC) {
+    pm_error('CONFLICT', 'A PIN is already set. Sign in again or change it from your profile.', 200, ['data' => null]);
 }
 
-function set_pin($user_pin, $uid) {
-    global $dbconn;
+pm_exec('UPDATE unique_user_table SET access = ? WHERE u_uid = ? LIMIT 1', 'ss', [pm_password_hash($pin), $uid]);
+pm_activity($uid, $hasPin ? 'Transaction PIN reset after login' : 'Transaction PIN set');
 
-    // Hash the PIN with bcrypt
-    $hashedPin = password_hash($user_pin, PASSWORD_BCRYPT);
-
-    // Escape the inputs to prevent SQL injection
-    $hashedPinEscaped = mysqli_real_escape_string($dbconn, $hashedPin);
-    $uidEscaped = mysqli_real_escape_string($dbconn, $uid);
-
-    // Prepare the SQL query
-    $user_login = "UPDATE unique_user_table SET access='$hashedPinEscaped' WHERE u_uid='$uidEscaped'";
-
-    // Execute the query and check the result
-    if (mysqli_query($dbconn, $user_login)) {
-        return array(
-            'error' => false,
-            'message' => 'Pin set successfully.'
-        );
-    } else {
-        return array(
-            'error' => true,
-            'message' => 'Error setting pin',
-        );
-    }
-}
-
-
-
-
-
-$user_id = isset($_POST['uid']) ? sanitizeInput($_POST['uid']) : '';
-$user_pin = isset($_POST['pin']) ? sanitizeInput($_POST['pin']) : '';
-
-if($user_id !='' && $user_pin !=''){
-    $response = set_pin($user_pin, $user_id);
-}else{
-    $response = array(
-        'error' => true,
-        'message' => 'Pin can\'t be empty',
-        'data' => null
-    );
-}
-
-
-
-
-http_response_code(200);
-echo json_encode($response);
-
+pm_json(['error' => false, 'message' => 'Pin set successfully.']);

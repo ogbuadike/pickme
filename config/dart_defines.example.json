@@ -1,0 +1,6 @@
+{
+  "PICKME_APP_KEY": "legacy-app-key-from-backend-config",
+  "GOOGLE_MAPS_WEB_API_KEY": "maps-web-services-key",
+  "HERE_API_KEY": "here-api-key",
+  "PICKME_TERMS_URL": "https://realpickme.com/endpoint/terms.php"
+}

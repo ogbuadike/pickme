@@ -33,25 +33,37 @@ enum HoloStyle { flux, prism, vapor }
 
 class _BackgroundWidgetState extends State<BackgroundWidget>
     with SingleTickerProviderStateMixin {
+  // Repaints through the painter's `repaint` listenable instead of calling
+  // setState every frame (which rebuilt the whole subtree 60x per second).
   late final AnimationController _ctrl = AnimationController(
     vsync: this,
     duration: const Duration(seconds: 28),
-  )..addListener(() => setState(() {}));
+  );
+
+  bool get _shouldAnimate {
+    // Respect the OS "reduce motion" accessibility setting.
+    final reduceMotion = MediaQuery.maybeDisableAnimationsOf(context) ?? false;
+    return widget.animate && !reduceMotion;
+  }
+
+  void _syncAnimation() {
+    if (_shouldAnimate && !_ctrl.isAnimating) {
+      _ctrl.repeat();
+    } else if (!_shouldAnimate && _ctrl.isAnimating) {
+      _ctrl.stop();
+    }
+  }
 
   @override
-  void initState() {
-    super.initState();
-    if (widget.animate) _ctrl.repeat();
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _syncAnimation();
   }
 
   @override
   void didUpdateWidget(covariant BackgroundWidget oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (widget.animate && !_ctrl.isAnimating) {
-      _ctrl.repeat();
-    } else if (!widget.animate && _ctrl.isAnimating) {
-      _ctrl.stop();
-    }
+    _syncAnimation();
   }
 
   @override
@@ -69,34 +81,39 @@ class _BackgroundWidgetState extends State<BackgroundWidget>
     final effectiveStyle =
     (widget.showGrid ?? false) ? HoloStyle.prism : widget.style;
 
-    return CustomPaint(
+    return RepaintBoundary(
+      child: CustomPaint(
       painter: _HoloPainter(
-        t: _ctrl.value,
+        animation: _ctrl,
         style: effectiveStyle,
         intensity: widget.intensity,
         isDark: isDark,
         cs: cs,
       ),
       size: Size.infinite,
+      ),
     );
   }
 }
 
 /// Core painter: different modes that all feel premium.
 class _HoloPainter extends CustomPainter {
-  final double t;          // 0..1 time
+  final Animation<double> animation;
   final HoloStyle style;
   final double intensity;
   final bool isDark;
   final ColorScheme cs;
 
   _HoloPainter({
-    required this.t,
+    required this.animation,
     required this.style,
     required this.intensity,
     required this.isDark,
     required this.cs,
-  });
+  }) : super(repaint: animation);
+
+  /// 0..1 time, read at paint time.
+  double get t => animation.value;
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -344,7 +361,7 @@ class _HoloPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant _HoloPainter old) =>
-      old.t != t ||
+      old.animation != animation ||
           old.style != style ||
           old.intensity != intensity ||
           old.isDark != isDark;

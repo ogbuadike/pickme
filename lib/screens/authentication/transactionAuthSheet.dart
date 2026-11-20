@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:ui' as ui;
 
@@ -78,14 +79,20 @@ class _TransactionPinBottomSheetState extends State<TransactionPinBottomSheet>
     _checkBiometricAvailability();
   }
 
+  Timer? _unlockTimer;
+  bool _prefsReady = false;
+
   @override
   void dispose() {
+    _unlockTimer?.cancel();
     _dotController.dispose();
     super.dispose();
   }
 
   Future<void> _initializePrefs() async {
     _prefs = await SharedPreferences.getInstance();
+    _prefsReady = true;
+    if (!mounted) return;
     _loadStoredData();
   }
 
@@ -94,10 +101,10 @@ class _TransactionPinBottomSheetState extends State<TransactionPinBottomSheet>
       _failedAttempts = _prefs.getInt('failed_attempts') ?? 0;
       final lockTimeStr = _prefs.getString('lock_time');
       if (lockTimeStr != null) {
-        _lockTime = DateTime.parse(lockTimeStr);
-        _checkLockStatus();
+        _lockTime = DateTime.tryParse(lockTimeStr);
       }
     });
+    _checkLockStatus();
   }
 
   Future<void> _checkBiometricAvailability() async {
@@ -112,24 +119,24 @@ class _TransactionPinBottomSheetState extends State<TransactionPinBottomSheet>
           types.contains(BiometricType.weak) ||
           types.contains(BiometricType.iris);
 
+      if (!mounted) return;
       setState(() {
         _isBiometricAvailable = canCheck && supported && hasBio;
       });
     } catch (_) {
-      setState(() => _isBiometricAvailable = false);
+      if (mounted) setState(() => _isBiometricAvailable = false);
     }
   }
 
   void _checkLockStatus() {
     if (_lockTime == null) return;
 
-    final lockDuration = DateTime.now().difference(_lockTime!);
-    if (lockDuration.inMinutes < TransactionPinBottomSheet._lockDurationMinutes) {
+    const lockout = Duration(minutes: TransactionPinBottomSheet._lockDurationMinutes);
+    final remaining = lockout - DateTime.now().difference(_lockTime!);
+    if (remaining > Duration.zero) {
       setState(() => _isLocked = true);
-      Future.delayed(
-        Duration(minutes: TransactionPinBottomSheet._lockDurationMinutes - lockDuration.inMinutes),
-        _resetLockState,
-      );
+      _unlockTimer?.cancel();
+      _unlockTimer = Timer(remaining, _resetLockState);
     } else {
       _resetLockState();
     }
@@ -138,6 +145,7 @@ class _TransactionPinBottomSheetState extends State<TransactionPinBottomSheet>
   void _resetLockState() {
     _prefs.remove('lock_time');
     _prefs.setInt('failed_attempts', 0);
+    if (!mounted) return;
     setState(() {
       _isLocked = false;
       _failedAttempts = 0;
@@ -171,6 +179,7 @@ class _TransactionPinBottomSheetState extends State<TransactionPinBottomSheet>
   }
 
   void _resetPin() {
+    if (!mounted) return;
     setState(() {
       for (var i = 0; i < TransactionPinBottomSheet._pinLength; i++) {
         _pin[i] = '';
@@ -181,6 +190,7 @@ class _TransactionPinBottomSheetState extends State<TransactionPinBottomSheet>
   }
 
   Future<void> _handleAuthentication() async {
+    if (!mounted || !_prefsReady || _isLoading) return;
     if (_isLocked) {
       showToastNotification(
         context: context,
@@ -214,18 +224,31 @@ class _TransactionPinBottomSheetState extends State<TransactionPinBottomSheet>
       );
 
       final responseData = jsonDecode(response.body);
-
-      if (response.statusCode == 200) {
-        if (responseData['error'] == false) {
-          _handleSuccessfulAuthentication();
-        } else {
-          _handleFailedAttempt(responseData['message'] ?? 'Incorrect PIN.');
-        }
+      if (!mounted) return;
+      if (responseData is Map && responseData['error'] == false) {
+        _handleSuccessfulAuthentication();
       } else {
-        _handleFailedAttempt('Server Error. Please try again.');
+        _handleFailedAttempt(
+            (responseData is Map ? responseData['message'] : null)?.toString() ?? 'Incorrect PIN.');
       }
-    } catch (error) {
-      _handleFailedAttempt('Connection error. Please try again.');
+    } on ApiException catch (e) {
+      if (!mounted || e.isAuthError) return;
+      if (e.isRateLimited || e.statusCode >= 500) {
+        _resetPin();
+        showToastNotification(context: context, title: 'Try again', message: e.message, isSuccess: false);
+      } else {
+        _handleFailedAttempt(e.message);
+      }
+    } catch (_) {
+      // Network problems must not count as wrong PIN attempts.
+      if (!mounted) return;
+      _resetPin();
+      showToastNotification(
+        context: context,
+        title: 'Connection Error',
+        message: 'Please check your internet connection and try again.',
+        isSuccess: false,
+      );
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }
@@ -261,6 +284,11 @@ class _TransactionPinBottomSheetState extends State<TransactionPinBottomSheet>
     setState(() => _isLocked = true);
     _lockTime = DateTime.now();
     _prefs.setString('lock_time', _lockTime!.toIso8601String());
+    _unlockTimer?.cancel();
+    _unlockTimer = Timer(
+      const Duration(minutes: TransactionPinBottomSheet._lockDurationMinutes),
+      _resetLockState,
+    );
     showToastNotification(
       context: context,
       title: 'Account Locked',
@@ -296,6 +324,7 @@ class _TransactionPinBottomSheetState extends State<TransactionPinBottomSheet>
         widget.onAuthenticationComplete(true);
       }
     } on PlatformException catch (e) {
+      if (!mounted) return;
       String message = 'Authentication failed';
       switch (e.code) {
         case 'NotEnrolled':

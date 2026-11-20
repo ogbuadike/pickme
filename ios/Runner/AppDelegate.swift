@@ -11,12 +11,15 @@ import GoogleMaps
 
     // Google Maps key comes from Info.plist (GMSApiKey), which is filled from
     // GOOGLE_MAPS_IOS_API_KEY in ios/Flutter/Secrets.xcconfig at build time.
-    if let key = Bundle.main.object(forInfoDictionaryKey: "GMSApiKey") as? String,
-       !key.isEmpty, !key.hasPrefix("$(") {
-      GMSServices.provideAPIKey(key)
-    } else {
-      NSLog("[PickMe] GMSApiKey missing: set GOOGLE_MAPS_IOS_API_KEY in ios/Flutter/Secrets.xcconfig")
+    // TEMPORARY testing fallback (the original project key). Remove before release.
+    let fallbackMapsKey = "AIzaSyDDg8yoVH4mPYiEErNCpVzRDKxu-iP4UN8"
+    let plistKey = (Bundle.main.object(forInfoDictionaryKey: "GMSApiKey") as? String) ?? ""
+    // Google API keys always start with "AIza"; placeholders fall back to the test key.
+    let mapsKey = plistKey.hasPrefix("AIza") ? plistKey : fallbackMapsKey
+    if !plistKey.hasPrefix("AIza") {
+      NSLog("[PickMe] GMSApiKey not set; using testing fallback key")
     }
+    GMSServices.provideAPIKey(mapsKey)
 
     // Register Flutter plugins (Firebase, etc.).
     GeneratedPluginRegistrant.register(with: self)

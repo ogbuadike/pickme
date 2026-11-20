@@ -40,7 +40,10 @@ val defaultMapsApiKey = "AIzaSyDDg8yoVH4mPYiEErNCpVzRDKxu-iP4UN8"
 val mapsApiKey: String =
     (localProperties.getProperty("MAPS_API_KEY") ?: System.getenv("MAPS_API_KEY") ?: "")
         .trim()
-        .ifEmpty { defaultMapsApiKey }
+        // Google API keys always start with "AIza"; anything else (empty, or a
+        // placeholder such as "your_android_maps_key") falls back to the test key.
+        .takeIf { it.startsWith("AIza") } ?: defaultMapsApiKey
+logger.lifecycle("Google Maps key in use: ${mapsApiKey.take(8)}…")
 
 android {
     namespace = "com.pickmee.pickmeeride"

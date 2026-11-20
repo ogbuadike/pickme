@@ -34,11 +34,13 @@ val localPropertiesFile = rootProject.file("local.properties")
 if (localPropertiesFile.exists()) {
     FileInputStream(localPropertiesFile).use { localProperties.load(it) }
 }
+// TEMPORARY testing fallback: the original project key. Replace it (or set
+// MAPS_API_KEY in local.properties / env, which takes precedence) before release.
+val defaultMapsApiKey = "AIzaSyDDg8yoVH4mPYiEErNCpVzRDKxu-iP4UN8"
 val mapsApiKey: String =
-    (localProperties.getProperty("MAPS_API_KEY") ?: System.getenv("MAPS_API_KEY") ?: "").trim()
-if (mapsApiKey.isEmpty()) {
-    logger.warn("MAPS_API_KEY is not set (android/local.properties or env): Google Maps will not load.")
-}
+    (localProperties.getProperty("MAPS_API_KEY") ?: System.getenv("MAPS_API_KEY") ?: "")
+        .trim()
+        .ifEmpty { defaultMapsApiKey }
 
 android {
     namespace = "com.pickmee.pickmeeride"

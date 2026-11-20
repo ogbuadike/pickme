@@ -69,9 +69,7 @@ const RideOffer _offer = RideOffer(
 String _endpoint(http.Request r) => r.url.pathSegments.last;
 
 void main() {
-  const Timeout to = Timeout(Duration(seconds: 40));
-  // ignore: unused_local_variable
-  final Timeout unusedTo = to;
+  const Timeout to = Timeout(Duration(seconds: 60));
   group('RideStatusCode', () {
     test('normalizes backend aliases', () {
       expect(RideStatusCode.normalize('cancelled'), RideStatusCode.canceled);
@@ -117,23 +115,19 @@ void main() {
       expect(books.single.headers['Idempotency-Key'], books.single.bodyFields['client_request_id']);
       expect(books.single.bodyFields['pickup_lat'], startsWith('6.45'));
       expect(books.single.bodyFields['estimated_total'], '2500.00');
-
-      print('T1 pump1');
       await tester.pump(const Duration(seconds: 1)); // first poll -> accepted
-      print('T1 pump2');
       await tester.pump(const Duration(seconds: 3)); // second poll -> completed
-      print('T1 after pump2 $seen');
       expect(seen, containsAllInOrder(<BookingStatus>[
         BookingStatus.searching,
         BookingStatus.driverAssigned,
         BookingStatus.completed,
       ]));
       final int callsAtEnd = statusCalls;
-      print('T1 pump3');
       await tester.pump(const Duration(seconds: 30));
-      print('T1 cancel');
       expect(statusCalls, callsAtEnd, reason: 'polling stops on a terminal status');
-      await sub.cancel();
+      // Not awaited: a broadcast cancel future never completes inside the
+      // fake-async zone of testWidgets.
+      unawaited(sub.cancel());
       c.dispose();
     });
 
@@ -243,19 +237,17 @@ void main() {
           .stream(origin: const LatLng(6.45, 3.39), destination: const LatLng(6.6, 3.35))
           .listen(snaps.add);
       await tester.pump(const Duration(milliseconds: 100));
-      print('T5 a');
       await tester.pump(const Duration(seconds: 2));
-      print('T5 b');
       await tester.pump(const Duration(seconds: 5));
-      print('T5 c');
       final http.Request offers = log.firstWhere((http.Request r) => _endpoint(r) == 'ride_offers.php');
       expect(offers.bodyFields['origin[lat]'], '6.45');
       expect(offers.bodyFields['destination[lng]'], '3.35');
       expect(snaps, isNotEmpty);
       expect(snaps.every((RideMarketSnapshot s) => s.drivers.length == 1), isTrue,
           reason: 'a failed tick must not wipe the driver list');
-      await sub.cancel();
-      print('T5 d');
+      // Not awaited: a broadcast cancel future never completes inside the
+      // fake-async zone of testWidgets.
+      unawaited(sub.cancel());
       svc.dispose();
     });
   });

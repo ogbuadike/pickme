@@ -110,7 +110,12 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
         index: _currentIndex,
         children: [
           for (var i = 0; i < pages.length; i++)
-            _visited.contains(i) ? pages[i] : const SizedBox.shrink(),
+            // TickerMode lets hidden tabs pause animations, GPS and polling
+            // (Home and Campus read TickerMode.of to detect visibility).
+            TickerMode(
+              enabled: i == _currentIndex,
+              child: _visited.contains(i) ? pages[i] : const SizedBox.shrink(),
+            ),
         ],
       ),
       bottomNavigationBar: CustomBottomNavBar(

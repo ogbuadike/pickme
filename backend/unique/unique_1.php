@@ -40,6 +40,11 @@ if (!function_exists('env_data')) {
         $cache = [];
         $path = pm_env_file_path();
         $raw = is_readable($path) ? (string)@file_get_contents($path) : '';
+        // Editors on Windows/cPanel often save a UTF-8 BOM, which would silently
+        // corrupt the first key name (e.g. "\xEF\xBB\xBFAPP_KEY_SHA256").
+        if (strncmp($raw, "\xEF\xBB\xBF", 3) === 0) {
+            $raw = substr($raw, 3);
+        }
         foreach (preg_split('/\r\n|\r|\n/', $raw) ?: [] as $line) {
             $line = trim($line);
             if ($line === '' || $line[0] === '#') {
@@ -52,8 +57,9 @@ if (!function_exists('env_data')) {
             if (count($parts) !== 2) {
                 continue;
             }
-            $key = trim($parts[0]);
-            $value = trim($parts[1]);
+            // Strip ordinary and non-breaking spaces pasted from web pages/chat apps.
+            $key = trim($parts[0], " \t\u{00A0}");
+            $value = trim($parts[1], " \t\u{00A0}");
             $len = strlen($value);
             if ($len >= 2 && (($value[0] === '"' && $value[$len - 1] === '"') || ($value[0] === "'" && $value[$len - 1] === "'"))) {
                 $value = substr($value, 1, -1);

@@ -6,7 +6,6 @@ import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:flutter_compass/flutter_compass.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:http/http.dart' as http;
 
@@ -14,9 +13,9 @@ import '../api/url.dart';
 import '../services/booking_controller.dart';
 import '../themes/app_theme.dart';
 import '../ui/ui_scale.dart';
-import '../utility/notification.dart';
 
 enum TripNavigationRole { rider, driver }
+
 enum TripNavPhase {
   driverToPickup,
   waitingPickup,
@@ -25,35 +24,8 @@ enum TripNavPhase {
   completed,
   cancelled
 }
+
 enum NavigationViewMode { navigation, atAGlance }
-
-// ---------------------------------------------------------------------------
-// HYBRID DART KALMAN FILTER & VECTOR SNAPPER
-// Custom-built for precise on-road telemetry tracking.
-// ---------------------------------------------------------------------------
-class _Kalman1D {
-  final double q;
-  final double r;
-  double x;
-  double p;
-  double k;
-
-  _Kalman1D({
-    this.q = 0.00001,
-    this.r = 0.0001,
-    required this.x,
-    this.p = 1.0,
-    this.k = 0.0,
-  });
-
-  double update(double measurement) {
-    p = p + q;
-    k = p / (p + r);
-    x = x + k * (measurement - x);
-    p = (1 - k) * p;
-    return x;
-  }
-}
 
 class TripNavigationArgs {
   final String userId, driverId, tripId;
@@ -84,9 +56,7 @@ class TripNavigationArgs {
       showCancelButton,
       showMetaCard,
       showDebugPanel;
-  final bool enableLivePickupTracking,
-      preserveStopOrder,
-      autoCloseOnCancel;
+  final bool enableLivePickupTracking, preserveStopOrder, autoCloseOnCancel;
   final bool showArrivedPickupButton,
       showArrivedDestinationButton,
       showCompleteTripButton;
@@ -146,15 +116,14 @@ class TripNavigationPage extends StatefulWidget {
 
 class _TripNavigationPageState extends State<TripNavigationPage>
     with TickerProviderStateMixin, WidgetsBindingObserver {
-  // --- ISOLATED MAP LAYER NOTIFIERS ---
+
+  // --- MAP LAYER NOTIFIERS ---
   final ValueNotifier<Set<Marker>> _markersNotifier = ValueNotifier({});
   final ValueNotifier<Set<Polyline>> _polylinesNotifier = ValueNotifier({});
   GoogleMapController? _mapController;
 
   StreamSubscription<dynamic>? _bookingSub;
-  StreamSubscription<CompassEvent>? _compassSub;
   Timer? _tickTimer;
-  Timer? _compassThrottleTimer;
   Timer? _cameraLockTimer;
 
   Set<Marker> _staticMarkers = {};
@@ -164,22 +133,14 @@ class _TripNavigationPageState extends State<TripNavigationPage>
 
   BitmapDescriptor? _driverIcon, _pickupIcon, _dropIcon, _riderIcon, _waypointIcon;
 
-  // --- 60FPS GLIDE ENGINE ---
+  // --- GLIDE ENGINE ---
   AnimationController? _glideController;
   CurvedAnimation? _glideCurve;
-  LatLng? _rawDriverLL, _animStartLL, _animTargetLL, _displayDriverLL;
+  LatLng? _animStartLL, _animTargetLL, _displayDriverLL;
   LatLng? _riderLL;
 
-  // --- HYBRID FILTER STATE ---
-  _Kalman1D? _latKalman;
-  _Kalman1D? _lngKalman;
-  DateTime _lastLocationTime = DateTime.now();
-
-  // --- HEADING & CAMERA ---
-  double _backendDriverHeading = 0.0;
-  double? _localHardwareHeading;
+  // --- STRICT ON-RAILS HEADING ---
   double _carIconHeading = 0.0;
-  double _cameraBearingEMA = 0.0;
 
   TripNavPhase _phase = TripNavPhase.driverToPickup;
   TripNavPhase? _optimisticPhase;
@@ -191,7 +152,7 @@ class _TripNavigationPageState extends State<TripNavigationPage>
   bool _isProgrammaticCameraMove = false;
   bool _booting = true;
 
-  // --- DIRTY FLAG STATE ---
+  // --- UI FLAGS ---
   String? _distanceText, _durationText, _lastErrorText;
   bool _uiNeedsRebuild = false;
 
@@ -257,23 +218,17 @@ class _TripNavigationPageState extends State<TripNavigationPage>
     super.initState();
     WidgetsBinding.instance.addObserver(this);
 
-    _rawDriverLL = widget.args.initialDriverLocation;
-    _displayDriverLL = _rawDriverLL;
+    _displayDriverLL = widget.args.initialDriverLocation;
     _riderLL = widget.args.initialRiderLocation ?? widget.args.pickup;
     _phase = widget.args.initialPhase;
     _isFollowCameraEnabled = widget.args.autoFollowCamera;
 
-    if (_rawDriverLL != null) {
-      _latKalman = _Kalman1D(x: _rawDriverLL!.latitude);
-      _lngKalman = _Kalman1D(x: _rawDriverLL!.longitude);
-      _carIconHeading = _bearingBetween(_rawDriverLL!, _currentTarget);
-      _cameraBearingEMA = _carIconHeading;
+    if (_displayDriverLL != null) {
+      _carIconHeading = _bearingBetween(_displayDriverLL!, _currentTarget);
     }
 
     _glideController = AnimationController(vsync: this, duration: _tickEvery);
-    _glideCurve = CurvedAnimation(
-        parent: _glideController!,
-        curve: Curves.linear); // linear for raw GPS interpolation
+    _glideCurve = CurvedAnimation(parent: _glideController!, curve: Curves.linear);
     _glideCurve!.addListener(_onGlideTick);
 
     _bootstrap();
@@ -283,9 +238,7 @@ class _TripNavigationPageState extends State<TripNavigationPage>
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _bookingSub?.cancel();
-    _compassSub?.cancel();
     _tickTimer?.cancel();
-    _compassThrottleTimer?.cancel();
     _cameraLockTimer?.cancel();
     _glideController?.dispose();
     _glideCurve?.dispose();
@@ -307,7 +260,6 @@ class _TripNavigationPageState extends State<TripNavigationPage>
     _pushMapState();
 
     _listenBooking();
-    _startHardwareCompass();
 
     _tickTimer = Timer.periodic(_tickEvery, (_) => _tick());
     await Future.delayed(const Duration(milliseconds: 300));
@@ -342,23 +294,6 @@ class _TripNavigationPageState extends State<TripNavigationPage>
     }
   }
 
-  void _startHardwareCompass() {
-    _compassSub?.cancel();
-    _compassSub = FlutterCompass.events?.listen((CompassEvent event) {
-      if (event.heading == null) return;
-      _localHardwareHeading = (event.heading! % 360.0 + 360.0) % 360.0;
-
-      if (_compassThrottleTimer?.isActive ?? false) return;
-      _compassThrottleTimer = Timer(const Duration(milliseconds: 50), () {
-        if (!mounted || !_isFollowCameraEnabled || _isProgrammaticCameraMove)
-          return;
-        if (_viewMode == NavigationViewMode.navigation) {
-          _followCamera();
-        }
-      });
-    });
-  }
-
   Future<void> _preloadIcons() async {
     try {
       await Future.wait([_loadDriverIcon(), _loadPointIcons()]);
@@ -368,12 +303,11 @@ class _TripNavigationPageState extends State<TripNavigationPage>
   Future<void> _loadDriverIcon() async {
     if (_driverIcon != null) return;
     try {
-      // 200% visible – high resolution with built-in drop shadow
       final ByteData bd =
       await rootBundle.load('assets/images/open_top_view_car.png');
       final ui.Codec codec = await ui.instantiateImageCodec(
           bd.buffer.asUint8List(),
-          targetWidth: 200);
+          targetWidth: 96);
       final ui.FrameInfo frame = await codec.getNextFrame();
       final ByteData? png =
       await frame.image.toByteData(format: ui.ImageByteFormat.png);
@@ -398,7 +332,6 @@ class _TripNavigationPageState extends State<TripNavigationPage>
     final canvas = Canvas(recorder);
     final center = const Offset(size / 2, size / 2);
 
-    // subtle shadow
     canvas.drawCircle(
         center + const Offset(0, 3),
         14,
@@ -449,8 +382,8 @@ class _TripNavigationPageState extends State<TripNavigationPage>
           position: _displayDriverLL!,
           icon: _driverIcon ?? BitmapDescriptor.defaultMarker,
           anchor: const Offset(0.5, 0.5),
-          flat: true,
-          rotation: _smoothCarRotation(),
+          flat: true, // Forces pure 2D
+          rotation: _carIconHeading, // STRICTLY polyline direction
           zIndex: 50,
         ),
       if (_riderLL != null)
@@ -467,7 +400,7 @@ class _TripNavigationPageState extends State<TripNavigationPage>
     if (widget.args.bookingUpdates == null) return;
     _bookingSub?.cancel();
     _bookingSub = widget.args.bookingUpdates!.listen((event) {
-      _applyIncoming(event, trustPhase: true);
+      _applyIncoming(event);
       if (_uiNeedsRebuild && mounted) setState(() {});
     }, cancelOnError: false);
   }
@@ -497,30 +430,38 @@ class _TripNavigationPageState extends State<TripNavigationPage>
     if (widget.args.liveSnapshotProvider == null) return;
     try {
       final snap = await widget.args.liveSnapshotProvider!.call();
-      if (snap != null && snap.isNotEmpty) _applyIncoming(snap, trustPhase: false);
+      if (snap != null && snap.isNotEmpty) _applyIncoming(snap);
     } catch (_) {}
   }
 
   // ---------------------------------------------------------------------------
-  // VECTOR ROUTE SNAPPER – magnetically locks driver onto the road
+  // STRICT MAP-MATCHING: Snaps GPS exactly to the drawn polyline
   // ---------------------------------------------------------------------------
-  LatLng _snapToRoute(LatLng currentPos, List<LatLng>? routePoints) {
-    if (routePoints == null || routePoints.isEmpty) return currentPos;
+  _SnappedPoint _snapToRouteStrict(LatLng currentPos, List<LatLng> routePoints) {
+    if (routePoints.isEmpty) return _SnappedPoint(currentPos, _carIconHeading);
 
     double minDist = double.infinity;
     LatLng snappedPos = currentPos;
+    double segmentBearing = _carIconHeading;
 
     for (int i = 0; i < routePoints.length - 1; i++) {
-      LatLng closest =
-      _getClosestPointOnSegment(currentPos, routePoints[i], routePoints[i + 1]);
+      LatLng p1 = routePoints[i];
+      LatLng p2 = routePoints[i + 1];
+      LatLng closest = _getClosestPointOnSegment(currentPos, p1, p2);
       double dist = _haversine(currentPos, closest);
+
       if (dist < minDist) {
         minDist = dist;
         snappedPos = closest;
+        segmentBearing = _bearingBetween(p1, p2); // Head exactly down the line
       }
     }
-    // snap only when physically close to the road
-    return minDist < 35.0 ? snappedPos : currentPos;
+
+    if (minDist < 35.0) {
+      return _SnappedPoint(snappedPos, segmentBearing);
+    } else {
+      return _SnappedPoint(currentPos, _carIconHeading);
+    }
   }
 
   LatLng _getClosestPointOnSegment(LatLng p, LatLng a, LatLng b) {
@@ -550,7 +491,7 @@ class _TripNavigationPageState extends State<TripNavigationPage>
     );
   }
 
-  void _applyIncoming(dynamic event, {bool trustPhase = true}) {
+  void _applyIncoming(dynamic event) {
     final payload = _eventMap(event);
     if (payload.isEmpty) return;
 
@@ -561,46 +502,28 @@ class _TripNavigationPageState extends State<TripNavigationPage>
     }
 
     LatLng? rawNew = _coerceDriverLL(payload, event);
-    final now = DateTime.now();
 
     if (rawNew != null) {
-      // snap to existing route before Kalman filtering – eliminates "L" hooks
-      if (_currentRoutePoints != null) {
-        rawNew = _snapToRoute(rawNew, _currentRoutePoints);
+      LatLng targetLL = rawNew;
+      double targetHeading = _carIconHeading;
+
+      if (_currentRoutePoints != null && _currentRoutePoints!.isNotEmpty) {
+        final snapped = _snapToRouteStrict(rawNew, _currentRoutePoints!);
+        targetLL = snapped.point;
+        targetHeading = snapped.bearing;
       }
 
-      if (_rawDriverLL == null) {
-        _rawDriverLL = rawNew;
-        _displayDriverLL = rawNew;
-        _latKalman = _Kalman1D(x: rawNew.latitude);
-        _lngKalman = _Kalman1D(x: rawNew.longitude);
+      final LatLng glideFrom = _displayDriverLL ?? targetLL;
+      if (_haversine(glideFrom, targetLL) > 0.5) {
+        _animStartLL = glideFrom;
+        _animTargetLL = targetLL;
+        _carIconHeading = targetHeading;
+
+        _glideController?.forward(from: 0.0);
       } else {
-        final double distMeters = _haversine(_rawDriverLL!, rawNew);
-        final double timeSecs =
-            now.difference(_lastLocationTime).inMilliseconds / 1000.0;
-
-        if (timeSecs > 0) {
-          final double speedMPS = distMeters / timeSecs;
-
-          if (speedMPS < 0.3) {
-            // kinematic deadband – ignore noise
-          } else if (speedMPS <= 70.0) {
-            final double fLat = _latKalman!.update(rawNew.latitude);
-            final double fLng = _lngKalman!.update(rawNew.longitude);
-            LatLng filtered = LatLng(fLat, fLng);
-
-            _rawDriverLL = filtered;
-
-            final LatLng glideFrom = _displayDriverLL ?? filtered;
-            if (_haversine(glideFrom, filtered) > 1.0) {
-              _animStartLL = glideFrom;
-              _animTargetLL = filtered;
-              _glideController?.forward(from: 0.0);
-            }
-          }
-        }
+        _displayDriverLL = targetLL;
+        _carIconHeading = targetHeading;
       }
-      _lastLocationTime = now;
     }
 
     final rider = _coerceRiderLL(payload, event);
@@ -611,16 +534,12 @@ class _TripNavigationPageState extends State<TripNavigationPage>
       }
     }
 
-    final heading = _coerceHeading(payload, event);
-    if (heading != null) _backendDriverHeading = heading;
-
+    // --- INSTANT BUTTON SYNC LOCK ---
+    // If we just clicked a button, ignore stale backend phases for 15 seconds!
     TripNavPhase? nextPhase = _coercePhase(payload, event);
     if (nextPhase != null && nextPhase != _phase) {
-      if (!trustPhase &&
-          _optimisticPhase != null &&
-          _optimisticPhaseSetAt != null &&
-          now.difference(_optimisticPhaseSetAt!) < const Duration(seconds: 4)) {
-        nextPhase = _phase; // hold optimistic phase
+      if (_optimisticPhaseSetAt != null && DateTime.now().difference(_optimisticPhaseSetAt!) < const Duration(seconds: 15)) {
+        nextPhase = _phase; // Lock the UI to our optimistic phase
       } else {
         _optimisticPhase = null;
         _optimisticPhaseSetAt = null;
@@ -653,7 +572,7 @@ class _TripNavigationPageState extends State<TripNavigationPage>
   }
 
   void _recomputePermissions() {
-    final LatLng? pos = _displayDriverLL ?? _rawDriverLL;
+    final LatLng? pos = _displayDriverLL;
     if (pos == null) return;
 
     final double safeArrival = math.max(_arrivalMeters, 150.0);
@@ -677,31 +596,6 @@ class _TripNavigationPageState extends State<TripNavigationPage>
     }
   }
 
-  double _smoothCarRotation() {
-    if (_displayDriverLL == null) return _carIconHeading;
-
-    double target = (_backendDriverHeading > 0)
-        ? _backendDriverHeading
-        : (_animStartLL != null &&
-        _animTargetLL != null &&
-        _haversine(_animStartLL!, _animTargetLL!) > 2.5)
-        ? _bearingBetween(_animStartLL!, _animTargetLL!)
-        : _carIconHeading;
-
-    double diff = target - _carIconHeading;
-    while (diff < -180.0) {
-      diff += 360.0;
-    }
-    while (diff > 180.0) {
-      diff -= 360.0;
-    }
-    _carIconHeading += diff * 0.18; // smooth EMA
-    return _carIconHeading;
-  }
-
-  // ---------------------------------------------------------------------------
-  // ROUTE REBUILD with forced road-snap for the origin
-  // ---------------------------------------------------------------------------
   Future<void> _rebuildRoute({bool force = false}) async {
     if (_busyRoute ||
         _phase == TripNavPhase.completed ||
@@ -717,9 +611,8 @@ class _TripNavigationPageState extends State<TripNavigationPage>
         : _effectivePickupLL;
     if (from == null || to == null) return;
 
-    // ⭐ SNAP ORIGIN TO EXISTING ROUTE to avoid L-shaped polyline
-    if (_currentRoutePoints != null) {
-      from = _snapToRoute(from, _currentRoutePoints);
+    if (_currentRoutePoints != null && _currentRoutePoints!.isNotEmpty) {
+      from = _snapToRouteStrict(from, _currentRoutePoints!).point;
     }
 
     if (!force && DateTime.now().difference(_lastRouteAt) < _routeMinGap) {
@@ -843,7 +736,7 @@ class _TripNavigationPageState extends State<TripNavigationPage>
   }
 
   // ---------------------------------------------------------------------------
-  // HEAD-UP FOLLOW CAMERA – bearing from the upcoming road segment
+  // HEAD-UP FOLLOW CAMERA
   // ---------------------------------------------------------------------------
   void _followCamera() {
     if (_phase == TripNavPhase.completed ||
@@ -857,37 +750,12 @@ class _TripNavigationPageState extends State<TripNavigationPage>
         : _displayDriverLL;
     if (target == null) return;
 
-    // compute forward bearing from the route, not from compass swing
-    double targetBearing = _carIconHeading;
-    if (_currentRoutePoints != null && _currentRoutePoints!.length > 1) {
-      targetBearing = _bearingTowardRoutePoint(target, _currentRoutePoints!);
-    } else if (_localHardwareHeading != null) {
-      targetBearing = _localHardwareHeading!;
-    }
-
-    double diff = targetBearing - _cameraBearingEMA;
-    while (diff < -180.0)
-      diff += 360.0;
-    while (diff > 180.0)
-      diff -= 360.0;
-    _cameraBearingEMA += diff * 0.22;
-
+    // Use the perfectly locked polyline heading for the camera
     _safeCameraMove(CameraUpdate.newCameraPosition(CameraPosition(
         target: target,
         zoom: (_phase == TripNavPhase.enRoute) ? 18.5 : 17.5,
-        tilt: 75.0,
-        bearing: _cameraBearingEMA)));
-  }
-
-  double _bearingTowardRoutePoint(LatLng current, List<LatLng> route) {
-    // find the first point ahead of current position by at least 8 meters
-    for (int i = 0; i < route.length; i++) {
-      if (_haversine(current, route[i]) > 8.0) {
-        return _bearingBetween(current, route[i]);
-      }
-    }
-    // fallback to last point
-    return _bearingBetween(current, route.last);
+        tilt: 0.0, // Strict 2D Map
+        bearing: _carIconHeading)));
   }
 
   Future<void> _activateOverviewMode() async {
@@ -916,23 +784,17 @@ class _TripNavigationPageState extends State<TripNavigationPage>
     });
 
     if (_displayDriverLL != null) {
-      _cameraBearingEMA = _carIconHeading; // reset to road heading
-      _followCamera(); // immediately apply
+      _followCamera();
     }
   }
 
-  // When the user manually zooms, we allow the lock to break (as requested).
-  // Other gestures like panning are ignored while locked.
   void _onCameraMoveStarted() {
     if (_isFollowCameraEnabled && !_isProgrammaticCameraMove) {
-      // Only break lock if the user actually pinched (zoomed) – rough detection
-      // In practice any gesture will call this, but we choose to keep lock tight.
-      // The user can always tap "Overview" to deliberately leave lock.
-      // If you prefer zoom-only, you can implement a zoom change listener.
-      // For now, keep it docile.
+      // Do nothing unless explicitly zooming out
     }
   }
 
+  // --- INSTANT BUTTON STATE RECONCILIATION ---
   Future<void> _handlePrimaryAction() async {
     if (_busyPrimaryAction) return;
 
@@ -961,17 +823,16 @@ class _TripNavigationPageState extends State<TripNavigationPage>
     try {
       await callback();
 
-      // 👇 Instant cascade – UI updates before next poll
+      // OPTIMISTIC RENDER: Change phase instantly before backend confirms
       if (nextOpt != null) {
         setState(() {
           _phase = nextOpt!;
           _optimisticPhase = nextOpt;
-          _optimisticPhaseSetAt = DateTime.now();
+          _optimisticPhaseSetAt = DateTime.now(); // Triggers the 15-second lock
           _didInitialFit = false;
           _lastDriverRouteLL = null;
-          _busyPrimaryAction = false;
         });
-        _recomputePermissions(); // triggers UI rebuild for new button
+        _recomputePermissions();
       }
 
       await _tick(force: true);
@@ -981,6 +842,7 @@ class _TripNavigationPageState extends State<TripNavigationPage>
       }
     } catch (e) {
       _emitError(e.toString().replaceFirst('Exception: ', ''));
+    } finally {
       if (mounted) setState(() => _busyPrimaryAction = false);
     }
   }
@@ -997,11 +859,11 @@ class _TripNavigationPageState extends State<TripNavigationPage>
       if (!mounted) return;
       setState(() {
         _phase = TripNavPhase.cancelled;
-        _busyCancel = false;
       });
       if (widget.args.autoCloseOnCancel) Navigator.of(context).maybePop();
     } catch (e) {
       _emitError(e.toString().replaceFirst('Exception: ', ''));
+    } finally {
       if (mounted) setState(() => _busyCancel = false);
     }
   }
@@ -1117,24 +979,6 @@ class _TripNavigationPageState extends State<TripNavigationPage>
             '');
     if (lat != null && lng != null) return LatLng(lat, lng);
     return null;
-  }
-
-  double? _coerceHeading(Map<String, dynamic> payload, dynamic rawEvent) {
-    final top = double.tryParse((payload['driver_heading'] ??
-        payload['driverHeading'] ??
-        payload['heading'] ??
-        payload['bearing'])
-        ?.toString() ??
-        '');
-    if (top != null) return top;
-    try {
-      return double.tryParse(
-          (rawEvent.heading ?? rawEvent.bearing ?? rawEvent.driverHeading)
-              ?.toString() ??
-              '');
-    } catch (_) {
-      return null;
-    }
   }
 
   List<LatLng> _decodePolyline(String enc) {
@@ -1467,7 +1311,9 @@ class _OptimizedMapLayer extends StatelessWidget {
             builder: (context, polylines, _) {
               return GoogleMap(
                 initialCameraPosition: CameraPosition(
-                    target: initialTarget, zoom: 17.5, tilt: 65),
+                    target: initialTarget,
+                    zoom: 17.5,
+                    tilt: 0.0), // STRICT 2D MAP
                 myLocationEnabled: false,
                 myLocationButtonEnabled: false,
                 zoomControlsEnabled: false,
@@ -1477,7 +1323,7 @@ class _OptimizedMapLayer extends StatelessWidget {
                 indoorViewEnabled: false,
                 trafficEnabled: false,
                 rotateGesturesEnabled: true,
-                tiltGesturesEnabled: true,
+                tiltGesturesEnabled: false, // PREVENTS 3D BENDING
                 padding: padding,
                 markers: markers,
                 polylines: polylines,
@@ -2055,6 +1901,12 @@ class _ActionPill extends StatelessWidget {
                       letterSpacing: 0.2))
             ])));
   }
+}
+
+class _SnappedPoint {
+  final LatLng point;
+  final double bearing;
+  const _SnappedPoint(this.point, this.bearing);
 }
 
 class _RouteResult {

@@ -10,7 +10,7 @@ import '../api/api_client.dart';
 import '../api/url.dart';
 import '../utility/notification.dart';
 import 'dart:io';
-import '../screens/transaction_detail_page.dart';
+//import '../screens/transaction_detail_page.dart';
 
 class TransactionList extends StatefulWidget {
   final int limit;
@@ -258,11 +258,11 @@ class _TransactionListState extends State<TransactionList> {
   }
 
   void _navigateToTransactionDetail(Map<String, dynamic> transaction) {
-    Navigator.push(
+    /*Navigator.push(
       context,
       MaterialPageRoute(
         builder: (context) => TransactionDetailPage(transaction: transaction),
       ),
-    );
+    );*/
   }
 }

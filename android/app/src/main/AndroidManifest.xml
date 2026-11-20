@@ -18,7 +18,7 @@
     </queries>
 
     <application
-        android:label="Pick Me"
+        android:label="Pick Mee"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher"
         android:enableOnBackInvokedCallback="true"> <meta-data

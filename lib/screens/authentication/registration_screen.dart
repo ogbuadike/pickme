@@ -6,7 +6,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:http/http.dart' as http;
-import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../api/api_client.dart';
 import '../../api/url.dart';
@@ -28,6 +27,7 @@ class _RegistrationScreenState extends State<RegistrationScreen>
     with TickerProviderStateMixin {
   final _name = TextEditingController();
   final _email = TextEditingController();
+  final _phone = TextEditingController();
   final _pass = TextEditingController();
   final _confirm = TextEditingController();
 
@@ -45,6 +45,21 @@ class _RegistrationScreenState extends State<RegistrationScreen>
   double _strength = 0;
   String _strengthLabel = 'Too weak';
 
+  // --- COUNTRY DATA STATE ---
+  List<dynamic> _countries = [];
+  Map<String, dynamic>? _selectedCountry;
+  bool _loadingCountries = true;
+
+  // Solid Local Fallback to ensure the UI NEVER breaks if the API fails
+  final List<Map<String, dynamic>> _fallbackCountries = [
+    {'name': 'Nigeria', 'iso2': 'NG', 'phonecode': '234', 'emoji': '🇳🇬'},
+    {'name': 'Ghana', 'iso2': 'GH', 'phonecode': '233', 'emoji': '🇬🇭'},
+    {'name': 'South Africa', 'iso2': 'ZA', 'phonecode': '27', 'emoji': '🇿🇦'},
+    {'name': 'United Kingdom', 'iso2': 'GB', 'phonecode': '44', 'emoji': '🇬🇧'},
+    {'name': 'United States', 'iso2': 'US', 'phonecode': '1', 'emoji': '🇺🇸'},
+    {'name': 'Canada', 'iso2': 'CA', 'phonecode': '1', 'emoji': '🇨🇦'},
+  ];
+
   @override
   void initState() {
     super.initState();
@@ -59,17 +74,68 @@ class _RegistrationScreenState extends State<RegistrationScreen>
     _logoRotation = Tween<double>(begin: 0, end: 2 * math.pi).animate(
       CurvedAnimation(parent: _logoController, curve: Curves.linear),
     );
+
+    _fetchCountries();
   }
 
   @override
   void dispose() {
     _name.dispose();
     _email.dispose();
+    _phone.dispose();
     _pass.removeListener(_computeStrength);
     _pass.dispose();
     _confirm.dispose();
     _logoController.dispose();
     super.dispose();
+  }
+
+  // Fetch Country List from Backend with Fallback Logic
+  // Fetch Country List from Backend with Fallback Logic
+  Future<void> _fetchCountries() async {
+    // 1. Immediately set the robust defaults so the UI shows +234 instantly
+    if (mounted) {
+      setState(() {
+        _countries = _fallbackCountries;
+        _selectedCountry = _fallbackCountries.firstWhere((c) => c['iso2'] == 'NG');
+        _loadingCountries = true;
+      });
+    }
+
+    try {
+      // Direct file name to prevent ApiConstants missing variable issues
+      final res = await _api.request('get_countries.php', method: 'GET').timeout(const Duration(seconds: 15));
+
+      print('--- COUNTRY FETCH STATUS: ${res.statusCode} ---');
+      print('--- COUNTRY FETCH BODY: ${res.body} ---');
+
+      if (res.statusCode == 200) {
+        final body = jsonDecode(res.body);
+
+        if (body['error'] == false && body['data'] != null && (body['data'] as List).isNotEmpty) {
+          if (!mounted) return;
+          setState(() {
+            _countries = List<dynamic>.from(body['data']);
+            // Override with the full list from the DB, but explicitly set +234 (Nigeria) as default
+            _selectedCountry = _countries.firstWhere(
+                  (c) => c['iso2'] == 'NG' || c['phonecode'] == '234' || c['phonecode'] == '+234',
+              orElse: () => _countries.first,
+            );
+          });
+          print('--- COUNTRIES SUCCESSFULLY LOADED FROM DB ---');
+        } else {
+          print('--- FAILED TO LOAD FROM DB: ${body['message']} ---');
+        }
+      } else {
+        print('--- SERVER ERROR: ${res.statusCode} ---');
+      }
+    } catch (e) {
+      // If the API fails (e.g. no internet, bad endpoint), do nothing.
+      // The app will just continue to use the _fallbackCountries seamlessly.
+      print('--- EXCEPTION FETCHING COUNTRIES: $e ---');
+    } finally {
+      if (mounted) setState(() => _loadingCountries = false);
+    }
   }
 
   bool _validEmail(String s) {
@@ -108,13 +174,27 @@ class _RegistrationScreenState extends State<RegistrationScreen>
 
   Future<void> _register() async {
     if (!(_formKey.currentState?.validate() ?? false)) return;
+    if (_selectedCountry == null) {
+      showToastNotification(context: context, title: 'Wait', message: 'Please select a country code.', isSuccess: false);
+      return;
+    }
 
     setState(() => _busy = true);
     try {
       final device = await _deviceInfo.getDeviceInfo();
+
+      // Clean up the phone number (remove leading zeros for local format)
+      String rawPhone = _phone.text.trim().replaceAll(RegExp(r'\s+'), '');
+      if (rawPhone.startsWith('0')) rawPhone = rawPhone.substring(1);
+
+      // Strip out any '+' that might have accidentally come from the database phonecode column
+      String cleanCode = _selectedCountry!['phonecode'].toString().replaceAll('+', '');
+      String formattedPhone = '+$cleanCode$rawPhone';
+
       final payload = {
         'full_name': _name.text.trim(),
         'email': _email.text.trim(),
+        'phone': formattedPhone,
         'password': _pass.text.trim(),
         'device': jsonEncode(device),
       };
@@ -140,22 +220,43 @@ class _RegistrationScreenState extends State<RegistrationScreen>
         showBannerNotification(
           context: context,
           title: body['login_msg']?['title_msg'] ?? 'Registration failed',
-          message:
-          body['login_msg']?['title_msg_body'] ?? 'Please try again.',
+          message: body['login_msg']?['title_msg_body'] ?? 'Please try again.',
           isSuccess: false,
         );
       }
     } catch (e) {
       if (!mounted) return;
-      showToastNotification(
-        context: context,
-        title: 'Error',
-        message: e.toString(),
-        isSuccess: false,
-      );
+      showToastNotification(context: context, title: 'Error', message: e.toString(), isSuccess: false);
     } finally {
       if (mounted) setState(() => _busy = false);
     }
+  }
+
+  // --- COUNTRY PICKER BOTTOM SHEET ---
+  void _showCountryPicker(UIScale ui, bool isDark, ColorScheme cs) {
+    if (_countries.isEmpty) return;
+
+    showModalBottomSheet(
+        context: context,
+        isScrollControlled: true,
+        backgroundColor: Colors.transparent,
+        builder: (ctx) {
+          return StatefulBuilder(
+              builder: (ctx, setModalState) {
+                return _CountryPickerSheet(
+                  countries: _countries,
+                  ui: ui,
+                  isDark: isDark,
+                  cs: cs,
+                  onSelect: (country) {
+                    setState(() => _selectedCountry = country);
+                    Navigator.pop(ctx);
+                  },
+                );
+              }
+          );
+        }
+    );
   }
 
   @override
@@ -218,9 +319,7 @@ class _RegistrationScreenState extends State<RegistrationScreen>
                   child: Align(
                     alignment: Alignment.center,
                     child: ConstrainedBox(
-                      constraints: BoxConstraints(
-                        maxWidth: ui.tablet ? 500 : 380,
-                      ),
+                      constraints: BoxConstraints(maxWidth: ui.tablet ? 500 : 380),
                       child: Padding(
                         padding: EdgeInsets.symmetric(vertical: ui.gap(10)),
                         child: _buildBrandingSection(ui, isDark, cs),
@@ -295,59 +394,26 @@ class _RegistrationScreenState extends State<RegistrationScreen>
             children: [
               _buildFeatureItemWidget(
                 SizedBox(
-                  width: featureIconSize,
-                  height: featureIconSize,
-                  child: SvgPicture.asset(
-                    'assets/icons/street_ride.svg',
-                    fit: BoxFit.contain,
-                    colorFilter: ColorFilter.mode(
-                      isDark ? cs.primary : AppColors.primary,
-                      BlendMode.srcIn,
-                    ),
-                  ),
+                  width: featureIconSize, height: featureIconSize,
+                  child: SvgPicture.asset('assets/icons/street_ride.svg', fit: BoxFit.contain, colorFilter: ColorFilter.mode(isDark ? cs.primary : AppColors.primary, BlendMode.srcIn)),
                 ),
-                'Street Rides',
-                ui,
-                isDark,
-                cs,
+                'Street Rides', ui, isDark, cs,
               ),
               SizedBox(height: ui.gap(10)),
               _buildFeatureItemWidget(
                 SizedBox(
-                  width: featureIconSize,
-                  height: featureIconSize,
-                  child: SvgPicture.asset(
-                    'assets/icons/campus_ride_monochrome.svg',
-                    fit: BoxFit.contain,
-                    colorFilter: ColorFilter.mode(
-                      isDark ? cs.primary : AppColors.primary,
-                      BlendMode.srcIn,
-                    ),
-                  ),
+                  width: featureIconSize, height: featureIconSize,
+                  child: SvgPicture.asset('assets/icons/campus_ride_monochrome.svg', fit: BoxFit.contain, colorFilter: ColorFilter.mode(isDark ? cs.primary : AppColors.primary, BlendMode.srcIn)),
                 ),
-                'Campus Rides',
-                ui,
-                isDark,
-                cs,
+                'Campus Rides', ui, isDark, cs,
               ),
               SizedBox(height: ui.gap(10)),
               _buildFeatureItemWidget(
                 SizedBox(
-                  width: featureIconSize,
-                  height: featureIconSize,
-                  child: SvgPicture.asset(
-                    'assets/icons/dispatch.svg',
-                    fit: BoxFit.contain,
-                    colorFilter: ColorFilter.mode(
-                      isDark ? cs.primary : AppColors.primary,
-                      BlendMode.srcIn,
-                    ),
-                  ),
+                  width: featureIconSize, height: featureIconSize,
+                  child: SvgPicture.asset('assets/icons/dispatch.svg', fit: BoxFit.contain, colorFilter: ColorFilter.mode(isDark ? cs.primary : AppColors.primary, BlendMode.srcIn)),
                 ),
-                'Package Dispatch',
-                ui,
-                isDark,
-                cs,
+                'Package Dispatch', ui, isDark, cs,
               ),
             ],
           ),
@@ -361,37 +427,24 @@ class _RegistrationScreenState extends State<RegistrationScreen>
       animation: _logoRotation,
       builder: (context, child) {
         return Container(
-          width: size,
-          height: size,
+          width: size, height: size,
           decoration: BoxDecoration(
             shape: BoxShape.circle,
             gradient: LinearGradient(
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
+              begin: Alignment.topLeft, end: Alignment.bottomRight,
               colors: isDark
                   ? [cs.surfaceVariant, cs.primary.withOpacity(0.2)]
                   : [AppColors.surface, AppColors.mintBgLight.withOpacity(0.9)],
               transform: GradientRotation(_logoRotation.value),
             ),
             boxShadow: [
-              BoxShadow(
-                color: (isDark ? cs.primary : AppColors.primary).withOpacity(0.28),
-                blurRadius: 24,
-                spreadRadius: 2,
-              ),
-              BoxShadow(
-                color: (isDark ? cs.secondary : AppColors.secondary).withOpacity(0.18),
-                blurRadius: 18,
-                spreadRadius: 1,
-              ),
+              BoxShadow(color: (isDark ? cs.primary : AppColors.primary).withOpacity(0.28), blurRadius: 24, spreadRadius: 2),
+              BoxShadow(color: (isDark ? cs.secondary : AppColors.secondary).withOpacity(0.18), blurRadius: 18, spreadRadius: 1),
             ],
           ),
           child: Padding(
             padding: EdgeInsets.all(size * 0.24),
-            child: Image.asset(
-              'image/pickme.png',
-              fit: BoxFit.contain,
-            ),
+            child: Image.asset('image/pickme.png', fit: BoxFit.contain),
           ),
         );
       },
@@ -407,16 +460,12 @@ class _RegistrationScreenState extends State<RegistrationScreen>
     return ClipRRect(
       borderRadius: BorderRadius.circular(ui.cardRadius),
       child: BackdropFilter(
-        filter: ImageFilter.blur(
-          sigmaX: ui.blur(20),
-          sigmaY: ui.blur(20),
-        ),
+        filter: ImageFilter.blur(sigmaX: ui.blur(20), sigmaY: ui.blur(20)),
         child: Container(
           padding: EdgeInsets.all(ui.compact ? ui.inset(18) : ui.inset(28)),
           decoration: BoxDecoration(
             gradient: LinearGradient(
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
+              begin: Alignment.topLeft, end: Alignment.bottomRight,
               colors: isDark
                   ? [cs.surface.withOpacity(0.95), cs.surfaceVariant.withOpacity(0.8)]
                   : [AppColors.surface.withOpacity(0.92), AppColors.mintBgLight.withOpacity(0.28)],
@@ -468,6 +517,8 @@ class _RegistrationScreenState extends State<RegistrationScreen>
                   SizedBox(height: ui.gap(12)),
                   _fieldWrapper(ui, isDark, cs, _buildEmailField(ui, isDark, cs)),
                   SizedBox(height: ui.gap(12)),
+                  _fieldWrapper(ui, isDark, cs, _buildPhoneField(ui, isDark, cs)),
+                  SizedBox(height: ui.gap(12)),
                   _fieldWrapper(ui, isDark, cs, _buildPasswordField(ui, isDark, cs)),
                   SizedBox(height: ui.gap(10)),
                   _buildStrengthMeter(ui, isDark, cs),
@@ -489,28 +540,20 @@ class _RegistrationScreenState extends State<RegistrationScreen>
   Widget _buildCompactLogo(UIScale ui, bool isDark, ColorScheme cs) {
     final size = ui.compactLogoSize;
     return Container(
-      width: size,
-      height: size,
+      width: size, height: size,
       decoration: BoxDecoration(
         shape: BoxShape.circle,
-        gradient: LinearGradient(
-          colors: isDark ? [cs.primary, cs.secondary] : [AppColors.primary, AppColors.secondary],
-        ),
+        gradient: LinearGradient(colors: isDark ? [cs.primary, cs.secondary] : [AppColors.primary, AppColors.secondary]),
         boxShadow: [
           BoxShadow(
             color: (isDark ? cs.primary : AppColors.primary).withOpacity(0.22),
-            blurRadius: ui.reduceFx ? 10 : 20,
-            spreadRadius: 1,
+            blurRadius: ui.reduceFx ? 10 : 20, spreadRadius: 1,
           ),
         ],
       ),
       child: Padding(
         padding: EdgeInsets.all(ui.inset(14)),
-        child: Image.asset(
-          'image/pickme.png',
-          fit: BoxFit.contain,
-          color: isDark ? cs.onPrimary : AppColors.surface,
-        ),
+        child: Image.asset('image/pickme.png', fit: BoxFit.contain, color: isDark ? cs.onPrimary : AppColors.surface),
       ),
     );
   }
@@ -522,8 +565,7 @@ class _RegistrationScreenState extends State<RegistrationScreen>
         boxShadow: [
           BoxShadow(
             color: isDark ? Colors.black.withOpacity(0.3) : AppColors.deep.withOpacity(0.05),
-            blurRadius: ui.reduceFx ? 6 : 10,
-            offset: const Offset(0, 4),
+            blurRadius: ui.reduceFx ? 6 : 10, offset: const Offset(0, 4),
           ),
         ],
       ),
@@ -533,19 +575,9 @@ class _RegistrationScreenState extends State<RegistrationScreen>
 
   Widget _buildNameField(UIScale ui, bool isDark, ColorScheme cs) {
     return TextFormField(
-      controller: _name,
-      textInputAction: TextInputAction.next,
-      style: TextStyle(
-        fontSize: ui.font(14),
-        color: isDark ? cs.onSurface : AppColors.textPrimary,
-      ),
-      decoration: _inputDecoration(
-        ui,
-        isDark,
-        cs,
-        label: 'Legal full name',
-        icon: Icons.person_rounded,
-      ),
+      controller: _name, textInputAction: TextInputAction.next,
+      style: TextStyle(fontSize: ui.font(14), color: isDark ? cs.onSurface : AppColors.textPrimary),
+      decoration: _inputDecoration(ui, isDark, cs, label: 'Legal full name', icon: Icons.person_rounded),
       validator: (v) {
         final s = (v ?? '').trim();
         if (s.isEmpty) return 'Full name can’t be empty';
@@ -557,58 +589,79 @@ class _RegistrationScreenState extends State<RegistrationScreen>
 
   Widget _buildEmailField(UIScale ui, bool isDark, ColorScheme cs) {
     return TextFormField(
-      controller: _email,
-      textInputAction: TextInputAction.next,
-      keyboardType: TextInputType.emailAddress,
+      controller: _email, textInputAction: TextInputAction.next, keyboardType: TextInputType.emailAddress,
       autofillHints: const [AutofillHints.email, AutofillHints.username],
-      style: TextStyle(
-        fontSize: ui.font(14),
-        color: isDark ? cs.onSurface : AppColors.textPrimary,
-      ),
-      decoration: _inputDecoration(
-        ui,
-        isDark,
-        cs,
-        label: 'Email Address',
-        icon: Icons.email_rounded,
-      ),
+      style: TextStyle(fontSize: ui.font(14), color: isDark ? cs.onSurface : AppColors.textPrimary),
+      decoration: _inputDecoration(ui, isDark, cs, label: 'Email Address', icon: Icons.email_rounded),
       validator: (v) => _validEmail(v ?? '') ? null : 'Enter a valid email',
+    );
+  }
+
+  Widget _buildPhoneField(UIScale ui, bool isDark, ColorScheme cs) {
+    final cleanCode = _selectedCountry?['phonecode']?.toString().replaceAll('+', '') ?? '234';
+
+    return TextFormField(
+      controller: _phone, textInputAction: TextInputAction.next, keyboardType: TextInputType.phone,
+      autofillHints: const [AutofillHints.telephoneNumber],
+      style: TextStyle(fontSize: ui.font(14), color: isDark ? cs.onSurface : AppColors.textPrimary),
+      decoration: _inputDecoration(
+        ui, isDark, cs, label: 'Phone Number', icon: Icons.phone_rounded,
+      ).copyWith(
+        prefixIcon: GestureDetector(
+          onTap: () => _showCountryPicker(ui, isDark, cs),
+          child: IntrinsicWidth(
+            child: Container(
+              padding: EdgeInsets.only(left: ui.inset(12), right: ui.inset(6)),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  _loadingCountries && _countries.isEmpty
+                      ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
+                      : Text(_selectedCountry?['emoji'] ?? '🇳🇬', style: TextStyle(fontSize: ui.font(16))),
+                  SizedBox(width: ui.gap(6)),
+                  Text(
+                      '+$cleanCode',
+                      style: TextStyle(
+                          fontSize: ui.font(14), fontWeight: FontWeight.w700,
+                          color: isDark ? cs.onSurface : AppColors.textPrimary
+                      )
+                  ),
+                  Icon(Icons.arrow_drop_down_rounded, color: isDark ? cs.onSurfaceVariant : AppColors.textSecondary),
+                  SizedBox(width: ui.gap(4)),
+                  Container(width: 1, height: 20, color: isDark ? cs.outline.withOpacity(0.5) : AppColors.outline),
+                  SizedBox(width: ui.gap(8)),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+      validator: (v) {
+        final s = (v ?? '').trim();
+        if (s.isEmpty) return 'Phone number is required';
+        if (s.length < 8) return 'Enter a valid phone number';
+        return null;
+      },
     );
   }
 
   Widget _buildPasswordField(UIScale ui, bool isDark, ColorScheme cs) {
     return TextFormField(
-      controller: _pass,
-      obscureText: !_showPass,
-      textInputAction: TextInputAction.next,
+      controller: _pass, obscureText: !_showPass, textInputAction: TextInputAction.next,
       autofillHints: const [AutofillHints.newPassword],
-      style: TextStyle(
-        fontSize: ui.font(14),
-        color: isDark ? cs.onSurface : AppColors.textPrimary,
-      ),
+      style: TextStyle(fontSize: ui.font(14), color: isDark ? cs.onSurface : AppColors.textPrimary),
       decoration: _inputDecoration(
-        ui,
-        isDark,
-        cs,
-        label: 'Password',
-        icon: Icons.lock_rounded,
+        ui, isDark, cs, label: 'Password', icon: Icons.lock_rounded,
         trailing: IconButton(
           onPressed: () => setState(() => _showPass = !_showPass),
-          icon: Icon(
-            _showPass
-                ? Icons.visibility_rounded
-                : Icons.visibility_off_rounded,
-            color: isDark ? cs.onSurfaceVariant : AppColors.textSecondary,
-          ),
+          icon: Icon(_showPass ? Icons.visibility_rounded : Icons.visibility_off_rounded, color: isDark ? cs.onSurfaceVariant : AppColors.textSecondary),
         ),
       ),
       validator: (v) {
         final s = v ?? '';
         if (s.isEmpty) return 'Password can’t be empty';
         if (s.length < 8) return 'Use at least 8 characters';
-        if (!RegExp(r'[A-Za-z]').hasMatch(s) || !RegExp(r'\d').hasMatch(s)) {
-          return 'Use letters and numbers';
-        }
+        if (!RegExp(r'[A-Za-z]').hasMatch(s) || !RegExp(r'\d').hasMatch(s)) return 'Use letters and numbers';
         return null;
       },
     );
@@ -616,120 +669,56 @@ class _RegistrationScreenState extends State<RegistrationScreen>
 
   Widget _buildConfirmField(UIScale ui, bool isDark, ColorScheme cs) {
     return TextFormField(
-      controller: _confirm,
-      obscureText: !_showConfirm,
-      textInputAction: TextInputAction.done,
+      controller: _confirm, obscureText: !_showConfirm, textInputAction: TextInputAction.done,
       autofillHints: const [AutofillHints.newPassword],
       onFieldSubmitted: (_) => _busy ? null : _register(),
-      style: TextStyle(
-        fontSize: ui.font(14),
-        color: isDark ? cs.onSurface : AppColors.textPrimary,
-      ),
+      style: TextStyle(fontSize: ui.font(14), color: isDark ? cs.onSurface : AppColors.textPrimary),
       decoration: _inputDecoration(
-        ui,
-        isDark,
-        cs,
-        label: 'Confirm password',
-        icon: Icons.lock_person_rounded,
+        ui, isDark, cs, label: 'Confirm password', icon: Icons.lock_person_rounded,
         trailing: IconButton(
           onPressed: () => setState(() => _showConfirm = !_showConfirm),
-          icon: Icon(
-            _showConfirm
-                ? Icons.visibility_rounded
-                : Icons.visibility_off_rounded,
-            color: isDark ? cs.onSurfaceVariant : AppColors.textSecondary,
-          ),
+          icon: Icon(_showConfirm ? Icons.visibility_rounded : Icons.visibility_off_rounded, color: isDark ? cs.onSurfaceVariant : AppColors.textSecondary),
         ),
       ),
-      validator: (v) => (v ?? '').trim() == _pass.text.trim()
-          ? null
-          : 'Passwords do not match',
+      validator: (v) => (v ?? '').trim() == _pass.text.trim() ? null : 'Passwords do not match',
     );
   }
 
   InputDecoration _inputDecoration(
-      UIScale ui,
-      bool isDark,
-      ColorScheme cs, {
-        required String label,
-        required IconData icon,
-        Widget? trailing,
+      UIScale ui, bool isDark, ColorScheme cs, {
+        required String label, required IconData icon, Widget? trailing,
       }) {
     return InputDecoration(
-      isDense: ui.compact,
-      labelText: label,
-      labelStyle: TextStyle(
-        color: isDark ? cs.onSurfaceVariant : AppColors.textSecondary.withOpacity(.9),
-      ),
-      contentPadding: EdgeInsets.symmetric(
-        horizontal: ui.inset(14),
-        vertical: ui.inputVerticalPadding,
-      ),
+      isDense: ui.compact, labelText: label,
+      labelStyle: TextStyle(color: isDark ? cs.onSurfaceVariant : AppColors.textSecondary.withOpacity(.9)),
+      contentPadding: EdgeInsets.symmetric(horizontal: ui.inset(14), vertical: ui.inputVerticalPadding),
       prefixIcon: Padding(
         padding: EdgeInsets.all(ui.inset(8)),
         child: Container(
-          decoration: BoxDecoration(
-            color: (isDark ? cs.primary : AppColors.primary).withOpacity(0.10),
-            shape: BoxShape.circle,
-          ),
+          decoration: BoxDecoration(color: (isDark ? cs.primary : AppColors.primary).withOpacity(0.10), shape: BoxShape.circle),
           child: Icon(icon, size: ui.icon(18), color: isDark ? cs.primary : AppColors.primary),
         ),
       ),
-      suffixIcon: trailing,
-      filled: true,
+      suffixIcon: trailing, filled: true,
       fillColor: isDark ? cs.surfaceVariant.withOpacity(0.5) : AppColors.surface,
-      border: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(ui.radius(16)),
-        borderSide: BorderSide.none,
-      ),
-      enabledBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(ui.radius(16)),
-        borderSide: BorderSide(
-          color: isDark ? cs.outline.withOpacity(0.5) : AppColors.mintBgLight.withOpacity(0.30),
-          width: 1,
-        ),
-      ),
-      focusedBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(ui.radius(16)),
-        borderSide: BorderSide(color: isDark ? cs.primary : AppColors.primary, width: 2),
-      ),
-      errorBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(ui.radius(16)),
-        borderSide: BorderSide(color: cs.error, width: 1),
-      ),
+      border: OutlineInputBorder(borderRadius: BorderRadius.circular(ui.radius(16)), borderSide: BorderSide.none),
+      enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(ui.radius(16)), borderSide: BorderSide(color: isDark ? cs.outline.withOpacity(0.5) : AppColors.mintBgLight.withOpacity(0.30), width: 1)),
+      focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(ui.radius(16)), borderSide: BorderSide(color: isDark ? cs.primary : AppColors.primary, width: 2)),
+      errorBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(ui.radius(16)), borderSide: BorderSide(color: cs.error, width: 1)),
     );
   }
 
-  Widget _buildFeatureItemWidget(
-      Widget icon,
-      String label,
-      UIScale ui,
-      bool isDark,
-      ColorScheme cs,
-      ) {
+  Widget _buildFeatureItemWidget(Widget icon, String label, UIScale ui, bool isDark, ColorScheme cs) {
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
         Container(
           padding: EdgeInsets.all(ui.inset(8)),
-          decoration: BoxDecoration(
-            color: isDark ? cs.surfaceVariant.withOpacity(0.8) : AppColors.surface.withOpacity(0.85),
-            shape: BoxShape.circle,
-          ),
+          decoration: BoxDecoration(color: isDark ? cs.surfaceVariant.withOpacity(0.8) : AppColors.surface.withOpacity(0.85), shape: BoxShape.circle),
           child: SizedBox(width: ui.icon(20), height: ui.icon(20), child: icon),
         ),
         SizedBox(width: ui.gap(10)),
-        Flexible(
-          child: Text(
-            label,
-            overflow: TextOverflow.ellipsis,
-            style: TextStyle(
-              color: isDark ? cs.onSurface : AppColors.textPrimary,
-              fontWeight: FontWeight.w600,
-              fontSize: ui.font(14),
-            ),
-          ),
-        ),
+        Flexible(child: Text(label, overflow: TextOverflow.ellipsis, style: TextStyle(color: isDark ? cs.onSurface : AppColors.textPrimary, fontWeight: FontWeight.w600, fontSize: ui.font(14)))),
       ],
     );
   }
@@ -741,22 +730,14 @@ class _RegistrationScreenState extends State<RegistrationScreen>
           child: ClipRRect(
             borderRadius: BorderRadius.circular(ui.radius(8)),
             child: LinearProgressIndicator(
-              minHeight: 6,
-              value: _strength == 0 ? null : _strength,
+              minHeight: 6, value: _strength == 0 ? null : _strength,
               color: _meterColor(context, isDark, cs),
               backgroundColor: isDark ? cs.outline.withOpacity(0.3) : AppColors.mintBgLight,
             ),
           ),
         ),
         SizedBox(width: ui.gap(8)),
-        Text(
-          _strengthLabel,
-          style: TextStyle(
-            color: isDark ? cs.onSurfaceVariant : AppColors.textSecondary,
-            fontWeight: FontWeight.w700,
-            fontSize: ui.font(12.5),
-          ),
-        ),
+        Text(_strengthLabel, style: TextStyle(color: isDark ? cs.onSurfaceVariant : AppColors.textSecondary, fontWeight: FontWeight.w700, fontSize: ui.font(12.5))),
       ],
     );
   }
@@ -770,82 +751,135 @@ class _RegistrationScreenState extends State<RegistrationScreen>
 
   Widget _primaryGradientButton(UIScale ui, bool isDark, ColorScheme cs) {
     return Container(
-      width: double.infinity,
-      height: ui.buttonHeight,
+      width: double.infinity, height: ui.buttonHeight,
       decoration: BoxDecoration(
-        gradient: LinearGradient(
-          colors: isDark ? [cs.primary, cs.secondary] : [AppColors.primary, AppColors.secondary],
-        ),
+        gradient: LinearGradient(colors: isDark ? [cs.primary, cs.secondary] : [AppColors.primary, AppColors.secondary]),
         borderRadius: BorderRadius.circular(ui.radius(30)),
         boxShadow: [
-          BoxShadow(
-            color: (isDark ? cs.primary : AppColors.primary).withOpacity(ui.reduceFx ? 0.18 : 0.30),
-            blurRadius: ui.reduceFx ? 12 : 20,
-            offset: const Offset(0, 8),
-          ),
+          BoxShadow(color: (isDark ? cs.primary : AppColors.primary).withOpacity(ui.reduceFx ? 0.18 : 0.30), blurRadius: ui.reduceFx ? 12 : 20, offset: const Offset(0, 8)),
         ],
       ),
       child: ElevatedButton(
-        onPressed: _busy
-            ? null
-            : () {
-          HapticFeedback.lightImpact();
-          _register();
-        },
+        onPressed: _busy ? null : () { HapticFeedback.lightImpact(); _register(); },
         style: ElevatedButton.styleFrom(
-          backgroundColor: Colors.transparent,
-          shadowColor: Colors.transparent,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(ui.radius(30)),
-          ),
+          backgroundColor: Colors.transparent, shadowColor: Colors.transparent,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(ui.radius(30))),
         ),
         child: _busy
-            ? SizedBox(
-          height: 20,
-          width: 20,
-          child: CircularProgressIndicator(
-            strokeWidth: 2,
-            valueColor: AlwaysStoppedAnimation<Color>(isDark ? cs.onPrimary : AppColors.surface),
-          ),
-        )
-            : Text(
-          'Create account',
-          style: TextStyle(
-            fontSize: ui.font(15.5),
-            fontWeight: FontWeight.w700,
-            color: isDark ? cs.onPrimary : AppColors.surface,
-          ),
-        ),
+            ? SizedBox(height: 20, width: 20, child: CircularProgressIndicator(strokeWidth: 2, valueColor: AlwaysStoppedAnimation<Color>(isDark ? cs.onPrimary : AppColors.surface)))
+            : Text('Create account', style: TextStyle(fontSize: ui.font(15.5), fontWeight: FontWeight.w700, color: isDark ? cs.onPrimary : AppColors.surface)),
       ),
     );
   }
 
   Widget _loginLink(UIScale ui, bool isDark, ColorScheme cs) {
     return Wrap(
-      alignment: WrapAlignment.center,
-      crossAxisAlignment: WrapCrossAlignment.center,
-      spacing: 2,
+      alignment: WrapAlignment.center, crossAxisAlignment: WrapCrossAlignment.center, spacing: 2,
       children: [
-        Text(
-          'Already have an account?',
-          style: TextStyle(
-            color: isDark ? cs.onSurfaceVariant : AppColors.textSecondary,
-            fontSize: ui.font(13),
-          ),
-        ),
+        Text('Already have an account?', style: TextStyle(color: isDark ? cs.onSurfaceVariant : AppColors.textSecondary, fontSize: ui.font(13))),
         TextButton(
-          onPressed: () =>
-              Navigator.pushReplacementNamed(context, AppRoutes.login),
+          onPressed: () => Navigator.pushReplacementNamed(context, AppRoutes.login),
           style: TextButton.styleFrom(foregroundColor: isDark ? cs.primary : AppColors.primary),
-          child: Text(
-            'Log in',
-            style: TextStyle(
-              fontWeight: FontWeight.w700,
-              fontSize: ui.font(13.5),
-            ),
-          ),
+          child: Text('Log in', style: TextStyle(fontWeight: FontWeight.w700, fontSize: ui.font(13.5))),
         ),
       ],
+    );
+  }
+}
+
+// --- COUNTRY PICKER SHEET WIDGET ---
+class _CountryPickerSheet extends StatefulWidget {
+  final List<dynamic> countries;
+  final Function(Map<String, dynamic>) onSelect;
+  final UIScale ui;
+  final bool isDark;
+  final ColorScheme cs;
+
+  const _CountryPickerSheet({
+    required this.countries, required this.onSelect,
+    required this.ui, required this.isDark, required this.cs
+  });
+
+  @override
+  State<_CountryPickerSheet> createState() => _CountryPickerSheetState();
+}
+
+class _CountryPickerSheetState extends State<_CountryPickerSheet> {
+  final _searchController = TextEditingController();
+  List<dynamic> _filteredCountries = [];
+
+  @override
+  void initState() {
+    super.initState();
+    _filteredCountries = widget.countries;
+    _searchController.addListener(_filter);
+  }
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
+
+  void _filter() {
+    final q = _searchController.text.toLowerCase();
+    setState(() {
+      _filteredCountries = widget.countries.where((c) {
+        return c['name'].toString().toLowerCase().contains(q) ||
+            c['phonecode'].toString().contains(q);
+      }).toList();
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final ui = widget.ui;
+    final isDark = widget.isDark;
+    final cs = widget.cs;
+
+    return Container(
+      height: MediaQuery.of(context).size.height * 0.75,
+      decoration: BoxDecoration(
+        color: isDark ? cs.surface : AppColors.surface,
+        borderRadius: BorderRadius.vertical(top: Radius.circular(ui.radius(24))),
+      ),
+      child: Column(
+        children: [
+          SizedBox(height: ui.gap(12)),
+          Container(width: 40, height: 5, decoration: BoxDecoration(color: isDark ? cs.outline.withOpacity(0.5) : AppColors.outline, borderRadius: BorderRadius.circular(10))),
+          SizedBox(height: ui.gap(16)),
+          Padding(
+            padding: EdgeInsets.symmetric(horizontal: ui.inset(16)),
+            child: TextField(
+              controller: _searchController,
+              decoration: InputDecoration(
+                hintText: 'Search country or code...',
+                prefixIcon: Icon(Icons.search, color: isDark ? cs.onSurfaceVariant : AppColors.textSecondary),
+                filled: true,
+                fillColor: isDark ? cs.surfaceVariant.withOpacity(0.5) : AppColors.mintBgLight.withOpacity(0.3),
+                border: OutlineInputBorder(borderRadius: BorderRadius.circular(ui.radius(16)), borderSide: BorderSide.none),
+              ),
+            ),
+          ),
+          SizedBox(height: ui.gap(8)),
+          Expanded(
+            child: ListView.builder(
+              itemCount: _filteredCountries.length,
+              itemBuilder: (context, i) {
+                final c = _filteredCountries[i];
+                final cleanCode = c['phonecode']?.toString().replaceAll('+', '') ?? '';
+
+                return ListTile(
+                  leading: Text(c['emoji'] ?? '🌍', style: TextStyle(fontSize: ui.font(20))),
+                  title: Text(c['name'] ?? '', style: TextStyle(color: isDark ? cs.onSurface : AppColors.textPrimary, fontWeight: FontWeight.w600)),
+                  trailing: Text('+$cleanCode', style: TextStyle(color: isDark ? cs.onSurfaceVariant : AppColors.textSecondary, fontWeight: FontWeight.w800)),
+                  onTap: () => widget.onSelect(c as Map<String, dynamic>),
+                );
+              },
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

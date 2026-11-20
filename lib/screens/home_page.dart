@@ -728,7 +728,8 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
 
   void _onUserMapGesture() {
     // Any pan/zoom by the user pauses camera follow until "locate" is tapped.
-    _followUser = false;
+    if (!_followUser) return;
+    setState(() => _followUser = false); // updates the locate button state
   }
 
   Future<void> _onLocateTap() async {
@@ -742,7 +743,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
       }
       return;
     }
-    _followUser = true;
+    setState(() => _followUser = true);
     _didCenterOnUser = true;
     _lastCamTarget = target;
     try {

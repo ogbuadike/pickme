@@ -2,7 +2,6 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:http/http.dart' as http;
 import 'package:url_launcher/url_launcher.dart';
 
 import '../api/api_client.dart';
@@ -20,7 +19,7 @@ class HelpScreen extends StatefulWidget {
 }
 
 class _HelpScreenState extends State<HelpScreen> with SingleTickerProviderStateMixin {
-  late ApiClient _api;
+  final ApiClient _api = ApiClient();
 
   bool _isLoading = true;
   bool _hasError = false;
@@ -38,7 +37,6 @@ class _HelpScreenState extends State<HelpScreen> with SingleTickerProviderStateM
   @override
   void initState() {
     super.initState();
-    _api = ApiClient(http.Client(), context);
     _shimmerController = AnimationController(vsync: this, duration: const Duration(milliseconds: 1500))..repeat();
     _fetchHelpData();
   }
@@ -65,11 +63,16 @@ class _HelpScreenState extends State<HelpScreen> with SingleTickerProviderStateM
       );
 
       final data = jsonDecode(res.body);
-      if (res.statusCode == 200 && data['error'] == false) {
+      if (!mounted) return;
+      if (data is Map && data['error'] == false && data['data'] is Map) {
+        final d = data['data'] as Map;
         setState(() {
-          _contacts = data['data']['contacts'];
-          _categories = [{'id': 0, 'name': 'All'}, ...data['data']['categories']];
-          _allFaqs = data['data']['faqs'];
+          _contacts = d['contacts'] is Map ? Map<String, dynamic>.from(d['contacts']) : <String, dynamic>{};
+          _categories = [
+            {'id': 0, 'name': 'All'},
+            ...(d['categories'] is List ? d['categories'] as List : const []),
+          ];
+          _allFaqs = d['faqs'] is List ? List<dynamic>.from(d['faqs']) : <dynamic>[];
           _filteredFaqs = _allFaqs;
         });
       } else {
@@ -101,12 +104,28 @@ class _HelpScreenState extends State<HelpScreen> with SingleTickerProviderStateM
     _filterFaqs(_searchCtrl.text);
   }
 
-  Future<void> _launchUrl(String scheme, String path) async {
-    final Uri url = Uri(scheme: scheme, path: path);
+  Future<void> _launchUrl(String scheme, Object? path) async {
+    final p = path?.toString().trim() ?? '';
+    if (p.isEmpty) return;
+    final Uri url = Uri(scheme: scheme, path: p);
+    var ok = false;
     try {
-      await launchUrl(url);
-    } catch (e) {
+      ok = await launchUrl(url);
+    } catch (_) {}
+    if (!ok && mounted) {
       showToastNotification(context: context, title: 'Error', message: 'Could not open app.', isSuccess: false);
+    }
+  }
+
+  Future<void> _launchWhatsApp() async {
+    final number = (_contacts['whatsapp'] ?? '').toString().replaceAll(RegExp(r'[^0-9]'), '');
+    if (number.isEmpty) return;
+    var ok = false;
+    try {
+      ok = await launchUrl(Uri.https('wa.me', '/$number'), mode: LaunchMode.externalApplication);
+    } catch (_) {}
+    if (!ok && mounted) {
+      showToastNotification(context: context, title: 'Error', message: 'Could not open WhatsApp.', isSuccess: false);
     }
   }
 
@@ -264,7 +283,7 @@ class _HelpScreenState extends State<HelpScreen> with SingleTickerProviderStateM
                   SizedBox(width: ui.gap(12)),
                   _ContactAction(ui: ui, icon: Icons.phone_in_talk_rounded, label: 'Call', color: AppColors.primary, isDark: isDark, cs: cs, onTap: () => _launchUrl('tel', _contacts['phone'])),
                   SizedBox(width: ui.gap(12)),
-                  _ContactAction(ui: ui, icon: Icons.chat_bubble_rounded, label: 'WhatsApp', color: const Color(0xFF25D366), isDark: isDark, cs: cs, onTap: () => _launchUrl('https', 'wa.me/${_contacts['whatsapp']}')),
+                  _ContactAction(ui: ui, icon: Icons.chat_bubble_rounded, label: 'WhatsApp', color: const Color(0xFF25D366), isDark: isDark, cs: cs, onTap: _launchWhatsApp),
                 ],
               )
             ],

@@ -1,55 +1,39 @@
 // lib/driver/driver_home_page.dart
+//
+// Driver console screen. Composition only:
+//   * DriverSessionController  – server state, polling, transitions
+//   * DriverLocationUpdater    – GPS stream + heartbeat
+//   * DriverMapView            – map (never rebuilt by state changes)
+//   * DriverCommandCenter / ActiveRideCard – bottom panel
 import 'dart:async';
 import 'dart:convert';
-import 'dart:math' as math;
-import 'dart:ui' as ui;
 
-import 'package:flutter/foundation.dart' show TargetPlatform, defaultTargetPlatform, kIsWeb;
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
-import 'package:flutter_compass/flutter_compass.dart';
-import 'package:geolocator/geolocator.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
-import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:url_launcher/url_launcher.dart';
-import 'package:intl/intl.dart' as intl;
 
 import '../api/api_client.dart';
 import '../api/url.dart';
 import '../routes/routes.dart';
+import '../screens/authentication/transactionAuthSheet.dart';
+import '../screens/trip_navigation_page.dart';
+import '../services/driver_location_updater.dart';
 import '../themes/app_theme.dart';
 import '../ui/ui_scale.dart';
 import '../utility/notification.dart';
 import '../widgets/app_menu_drawer.dart';
-import '../widgets/bottom_navigation_bar.dart';
 import '../widgets/fund_account_sheet.dart';
 import '../widgets/header_bar.dart';
-import '../screens/trip_navigation_page.dart';
-import '../screens/authentication/transactionAuthSheet.dart';
-import '../screens/state/map_graphics_engine.dart';
-import '../screens/state/location_permission_modal.dart';
-import 'state/driver_models.dart';
+import 'state/driver_api.dart';
 import 'state/driver_command_center.dart';
+import 'state/driver_location_permission.dart';
+import 'state/driver_models.dart';
+import 'state/driver_session_controller.dart';
+import 'widgets/active_ride_card.dart';
 import 'widgets/delivery_otp_sheet.dart';
-
-class _Kalman1D {
-  final double q;
-  final double r;
-  double x;
-  double p;
-  double k;
-
-  _Kalman1D({this.q = 0.00001, this.r = 0.0001, required this.x, this.p = 1.0, this.k = 0.0});
-
-  double update(double measurement) {
-    p = p + q;
-    k = p / (p + r);
-    x = x + k * (measurement - x);
-    p = (1 - k) * p;
-    return x;
-  }
-}
+import 'widgets/driver_map_view.dart';
 
 class DriverHomePage extends StatefulWidget {
   const DriverHomePage({super.key});
@@ -59,204 +43,69 @@ class DriverHomePage extends StatefulWidget {
 }
 
 class _DriverHomePageState extends State<DriverHomePage> with WidgetsBindingObserver {
-  static const String _driverHubEndpoint = 'driver_hub.php';
-  static const Duration _dashboardPollInterval = Duration(seconds: 2);
-  static const Duration _heartbeatInterval = Duration(seconds: 2);
-  static const double _fallbackLat = 6.458985;
-  static const double _fallbackLng = 7.548266;
   static const double _headerVisualH = 88.0;
 
-  static const Duration _driverFixMaxAge = Duration(seconds: 180);
-  static const double _pickupArrivalRadiusM = 150.0;
-  static const double _tripStartRadiusM = 150.0;
-  static const double _destinationArrivalRadiusM = 150.0;
-  static const double _rideCompleteRadiusM = 200.0;
-
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>(debugLabel: 'DriverHomeScaffold');
-  final GlobalKey _sheetKey = GlobalKey();
 
-  late SharedPreferences _prefs;
-  late ApiClient _api;
+  late final ApiClient _api;
+  late final DriverLocationUpdater _location;
+  final DriverMapController _mapController = DriverMapController();
+  final ValueNotifier<EdgeInsets> _mapPadding = ValueNotifier<EdgeInsets>(EdgeInsets.zero);
+
+  SharedPreferences? _prefs;
+  DriverHubApi? _hub;
+  DriverSessionController? _session;
+  StreamSubscription<DriverEvent>? _eventSub;
+  Widget? _mapLayer;
 
   Map<String, dynamic>? _user;
   bool _busyProfile = false;
-  bool _busyOnlineToggle = false;
-  bool _busyRideAction = false;
-  bool _dashboardConnected = true;
   bool _panelExpanded = false;
-  int _currentIndex = 2;
+  bool _onlineFlow = false;
+  bool _acceptFlow = false;
+  bool _rideFlow = false;
+  bool _navOpen = false;
+  double _panelHeight = 0;
 
-  GoogleMapController? _mapController;
-  final ValueNotifier<Set<Marker>> _markersNotifier = ValueNotifier({});
-  final ValueNotifier<Set<Polyline>> _polylinesNotifier = ValueNotifier({});
-  final ValueNotifier<Set<Circle>> _circlesNotifier = ValueNotifier({});
-
-  bool _booting = true;
-  bool _fetchingDashboard = false;
-
-  DriverProfile? _driver;
-  RideJob? _activeRide;
-  List<RideJob> _queue = const <RideJob>[];
-
-  Position? _currentPosition;
-  StreamSubscription<Position>? _locationSub;
-  StreamSubscription<CompassEvent>? _compassSub;
-  Timer? _dashboardTimer;
-  Timer? _heartbeatTimer;
-  Timer? _compassThrottleTimer;
-
-  DateTime? _lastDashboardSyncAt;
-  DateTime? _lastHeartbeatAt;
-  String? _statusMessage;
-
-  CameraPosition _initialCamera = const CameraPosition(
-    target: LatLng(_fallbackLat, _fallbackLng),
-    zoom: 15.3,
-  );
-
-  BitmapDescriptor? _userPinIcon;
-  BitmapDescriptor? _pickupIcon;
-  BitmapDescriptor? _dropIcon;
-
-  _Kalman1D? _latKalman;
-  _Kalman1D? _lngKalman;
-  double _emaHeading = 0.0;
-  static const double _smoothingFactor = 0.25;
-
-  List<LatLng> _overviewRoutePoints = [];
-  String? _lastRouteId;
-
-  final Set<Marker> _markers = <Marker>{};
-  final Set<Polyline> _polylines = <Polyline>{};
-
-  double _sheetHeight = 0;
-  EdgeInsets _mapPadding = EdgeInsets.zero;
-
-  MediaQueryData _safeMediaQuery() {
-    if (mounted) {
-      final mq = MediaQuery.maybeOf(context);
-      if (mq != null) return mq;
-    }
-    final views = WidgetsBinding.instance.platformDispatcher.views;
-    if (views.isNotEmpty) return MediaQueryData.fromView(views.first);
-    return const MediaQueryData(size: Size(390, 844));
-  }
-
-  double _scaleFromUi(UIScale uiScale) {
-    double scale = (uiScale.shortest / 390.0).clamp(0.58, 1.12);
-    if (uiScale.tiny) scale *= 0.88;
-    if (uiScale.compact) scale *= 0.94;
-    return scale.clamp(0.56, 1.12);
-  }
-
-  void _scheduleMapPaddingUpdate() {
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted) return;
-      final ctx = _sheetKey.currentContext;
-      double newHeight = 0;
-      if (ctx != null) {
-        final box = ctx.findRenderObject() as RenderBox?;
-        if (box != null && box.hasSize) newHeight = box.size.height;
-      }
-      if (_sheetHeight != newHeight) {
-        _sheetHeight = newHeight;
-        _applyMapPadding();
-      }
-    });
-  }
-
-  void _applyMapPadding() {
-    if (!mounted) return;
-    final mq = _safeMediaQuery();
-    final uiScale = UIScale.of(context);
-    final topPad = mq.padding.top + (_headerVisualH * _scaleFromUi(uiScale));
-
-    final bottomNavH = uiScale.compact ? 110.0 : uiScale.inset(116.0);
-    final bottomPad = (_sheetHeight + bottomNavH + uiScale.gap(12)).clamp(20.0, mq.size.height * 0.55);
-
-    setState(() => _mapPadding = EdgeInsets.fromLTRB(8.0, topPad, 8.0, bottomPad));
-  }
+  String get _userId => _prefs?.getString('user_id')?.trim() ?? '';
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    _api = ApiClient(http.Client(), context);
-    _bootstrap();
+    _api = ApiClient();
+    _location = DriverLocationUpdater(_api, sender: (fix, phase) async {
+      final hub = _hub;
+      if (hub == null) throw const DriverActionRejected('Driver session not ready.');
+      await hub.heartbeat(fix.toPayload(), phase: phase);
+    });
+    unawaited(_boot());
   }
 
-  void _pushMapState() {
-    _buildMarkersAndLines();
-    _markersNotifier.value = Set.from(_markers);
-    _polylinesNotifier.value = Set.from(_polylines);
-  }
-
-  void _buildMarkersAndLines() {
-    _markers.clear();
-    _polylines.clear();
-
-    if (_currentPosition != null && _userPinIcon != null) {
-      _markers.add(Marker(
-        markerId: const MarkerId('driver_self'),
-        position: LatLng(_currentPosition!.latitude, _currentPosition!.longitude),
-        icon: _userPinIcon!,
-        rotation: _emaHeading,
-        anchor: const Offset(0.5, 0.5),
-        flat: true,
-        zIndex: 999,
-      ));
-    }
-
-    if (_activeRide != null) {
-      if (_pickupIcon != null) _markers.add(Marker(markerId: const MarkerId('pickup'), position: LatLng(_activeRide!.pickupLat, _activeRide!.pickupLng), icon: _pickupIcon!, anchor: const Offset(0.5, 0.5), zIndex: 35));
-      if (_dropIcon != null) _markers.add(Marker(markerId: const MarkerId('destination'), position: LatLng(_activeRide!.destLat, _activeRide!.destLng), icon: _dropIcon!, anchor: const Offset(0.5, 0.5), zIndex: 35));
-
-      final List<LatLng> points = _overviewRoutePoints.isNotEmpty
-          ? _overviewRoutePoints
-          : [
-        if (_currentPosition != null) LatLng(_currentPosition!.latitude, _currentPosition!.longitude),
-        (_activeRide!.status.toLowerCase() == 'in_progress' || _activeRide!.status.toLowerCase() == 'arrived_destination')
-            ? LatLng(_activeRide!.destLat, _activeRide!.destLng)
-            : LatLng(_activeRide!.pickupLat, _activeRide!.pickupLng)
-      ];
-
-      if (points.isNotEmpty) {
-        final isDark = Theme.of(context).brightness == Brightness.dark;
-        _polylines.add(Polyline(polylineId: const PolylineId('active_trip_halo'), width: 10, points: points, color: isDark ? Colors.white.withOpacity(0.85) : Colors.white.withOpacity(0.92), startCap: Cap.roundCap, endCap: Cap.roundCap, jointType: JointType.round));
-        _polylines.add(Polyline(polylineId: const PolylineId('active_trip_line'), width: 5, points: points, color: AppColors.primary, startCap: Cap.roundCap, endCap: Cap.roundCap, jointType: JointType.round));
-      }
-    }
-  }
-
-  Future<void> _bootstrap() async {
-    if (mounted) setState(() => _booting = true);
-
-    try {
-      _prefs = await SharedPreferences.getInstance();
-      await _preloadIcons();
-
-      await Future.wait<void>([
-        _fetchUser(),
-        _fetchDashboard(initial: true),
-      ]);
-
-      _startHardwareCompass();
-      _startDashboardPolling(forceNow: false);
-
-      if (_driver?.isOnline == true) {
-        await _startLocationEngine();
-      }
-
-      await Future.delayed(const Duration(milliseconds: 300));
-    } catch (e) {
-      if (!mounted) return;
-      _statusMessage = e.toString().replaceFirst('Exception: ', '');
-      showToastNotification(context: context, title: 'Dashboard unavailable', message: _statusMessage ?? 'Please try again.', isSuccess: false);
-    } finally {
-      if (mounted) {
-        setState(() => _booting = false);
-        _pushMapState();
-        _scheduleMapPaddingUpdate();
+  Future<void> _boot() async {
+    final prefs = await SharedPreferences.getInstance();
+    if (!mounted) return;
+    final hub = DriverHubApi(_api, () => _userId);
+    _hub = hub;
+    final session = DriverSessionController(api: hub, location: _location, prefs: prefs);
+    _eventSub = session.events.listen(_onEvent);
+    setState(() {
+      _prefs = prefs;
+      _session = session;
+    });
+    unawaited(_fetchUser());
+    await session.start();
+    if (!mounted) return;
+    // Background-safe: only prime GPS if permission already exists. Asking is
+    // reserved for explicit actions (go online, trip actions).
+    if (await DriverLocationPermissionGate.hasAccess()) {
+      unawaited(_location.currentFix());
+    } else if (mounted && (session.isOnline || session.activeRide != null)) {
+      // Restored as online / on a trip without location access: ask once.
+      final ok = await DriverLocationPermissionGate.ensure(context, userTriggered: false);
+      if (ok && mounted) {
+        _location.retry();
+        unawaited(_location.currentFix());
       }
     }
   }
@@ -264,684 +113,333 @@ class _DriverHomePageState extends State<DriverHomePage> with WidgetsBindingObse
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
-    _dashboardTimer?.cancel();
-    _heartbeatTimer?.cancel();
-    _locationSub?.cancel();
-    _compassSub?.cancel();
-    _compassThrottleTimer?.cancel();
-    _markersNotifier.dispose();
-    _polylinesNotifier.dispose();
-    _circlesNotifier.dispose();
-    try { _mapController?.dispose(); } catch (_) {}
+    _eventSub?.cancel();
+    _session?.dispose();
+    _location.dispose();
+    _mapController.dispose();
+    _mapPadding.dispose();
     super.dispose();
   }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.paused || state == AppLifecycleState.inactive || state == AppLifecycleState.detached) {
-      _dashboardTimer?.cancel();
-      _heartbeatTimer?.cancel();
-      _locationSub?.pause();
-      return;
-    }
-
-    if (state == AppLifecycleState.resumed) {
-      _locationSub?.resume();
-      _startDashboardPolling(forceNow: true);
-      if (_driver?.isOnline == true) {
-        _startLocationEngine();
-      }
-    }
-  }
-
-  void _startHardwareCompass() {
-    _compassSub?.cancel();
-    _compassSub = FlutterCompass.events?.listen((CompassEvent event) {
-      if (event.heading == null) return;
-
-      double targetHeading = event.heading! % 360.0;
-      if (targetHeading < 0) targetHeading += 360.0;
-
-      double diff = targetHeading - _emaHeading;
-      while (diff < -180.0) diff += 360.0;
-      while (diff > 180.0) diff -= 360.0;
-      _emaHeading += diff * _smoothingFactor;
-
-      if (_compassThrottleTimer?.isActive ?? false) return;
-      _compassThrottleTimer = Timer(const Duration(milliseconds: 60), () {
-        if (mounted) _pushMapState();
-      });
-    });
-  }
-
-  Future<void> _preloadIcons() async {
-    final theme = Theme.of(context);
-    final cs = theme.colorScheme;
-    final isDark = theme.brightness == Brightness.dark;
-
-    try {
-      final results = await Future.wait<BitmapDescriptor>([
-        MapGraphicsEngine.createPremiumAvatarPin(avatarImage: null, isDark: isDark, cs: cs),
-        MapGraphicsEngine.createRingDotMarker(const Color(0xFF1A73E8)),
-        MapGraphicsEngine.createRingDotMarker(const Color(0xFF00A651)),
-      ]);
-
-      _userPinIcon = results[0];
-      _pickupIcon = results[1];
-      _dropIcon = results[2];
-    } catch (e) {
-      debugPrint('Error preloading icons: $e');
+    // `inactive` also fires for permission dialogs / the notification shade:
+    // reacting to it would tear down tracking and re-prompt in a loop.
+    switch (state) {
+      case AppLifecycleState.resumed:
+        _session?.setForeground(true);
+        break;
+      case AppLifecycleState.paused:
+      case AppLifecycleState.hidden:
+      case AppLifecycleState.detached:
+        _session?.setForeground(false);
+        break;
+      case AppLifecycleState.inactive:
+        break;
     }
   }
+
+  // ---------------------------------------------------------------------------
+  // Events
+
+  void _onEvent(DriverEvent e) {
+    if (!mounted) return;
+    switch (e) {
+      case NewOfferEvent():
+        if (_session?.booting == true) return;
+        HapticFeedback.heavyImpact();
+        SystemSound.play(SystemSoundType.alert);
+        if (!_panelExpanded) setState(() => _panelExpanded = true);
+      case RideEndedRemotelyEvent(:final ride):
+        HapticFeedback.mediumImpact();
+        _toast('Trip ended', '${ride.riderName.isNotEmpty ? ride.riderName : 'The customer'} canceled this trip.', ok: false);
+      case RideRestoredEvent():
+        _toast('Trip restored', 'Picking up where you left off.', ok: true);
+      case SessionEndedEvent():
+        break; // ApiTransport.onUnauthorized routes to login.
+    }
+  }
+
+  void _toast(String title, String message, {required bool ok}) {
+    if (!mounted) return;
+    showToastNotification(context: context, title: title, message: message, isSuccess: ok);
+  }
+
+  static String _errorText(Object e) => e.toString().replaceFirst('Exception: ', '');
+
+  // ---------------------------------------------------------------------------
+  // Profile header
 
   Future<void> _fetchUser() async {
-    if (!mounted) return;
+    final uid = _userId;
+    if (uid.isEmpty || _busyProfile) return;
     setState(() => _busyProfile = true);
-
     try {
-      final uid = _prefs.getString('user_id')?.trim() ?? '';
-      if (uid.isEmpty) return;
-
-      final res = await _api.request(ApiConstants.userInfoEndpoint, method: 'POST', data: {'user': uid}).timeout(const Duration(seconds: 10));
+      final res = await _api.request(ApiConstants.userInfoEndpoint, method: 'POST', data: {'user': uid}, timeout: const Duration(seconds: 10));
       final body = jsonDecode(res.body);
-
-      if (res.statusCode == 200 && body is Map && body['error'] == false) {
-        final raw = body['user'];
-        if (raw is Map) {
-          if (!mounted) return;
-          setState(() { _user = raw.map((k, v) => MapEntry<String, dynamic>(k.toString(), v)); });
-        }
+      if (body is Map && body['error'] == false && body['user'] is Map && mounted) {
+        setState(() => _user = (body['user'] as Map).map((k, v) => MapEntry<String, dynamic>(k.toString(), v)));
       }
     } catch (_) {
-      _dashboardConnected = false;
+      // Header falls back to placeholders; dashboard connectivity is tracked separately.
     } finally {
       if (mounted) setState(() => _busyProfile = false);
     }
   }
 
-  Future<void> _fetchDashboard({bool initial = false}) async {
-    try {
-      final uid = _prefs.getString('user_id')?.trim() ?? '';
-      if (uid.isEmpty) throw Exception('User ID missing');
-
-      final res = await _api.request(_driverHubEndpoint, method: 'POST', data: {'action': 'dashboard', 'user': uid}).timeout(const Duration(seconds: 10));
-      final body = jsonDecode(res.body);
-
-      if (res.statusCode != 200 || body is! Map || body['error'] == true) {
-        throw Exception(body is Map ? ((body['message'] ?? body['error_msg'])?.toString()) : 'Unable to load dashboard');
-      }
-
-      final data = body['data'];
-      if (data is! Map) throw Exception('Dashboard payload missing');
-
-      final driver = DriverProfile.fromJson(data['driver'] as Map? ?? const {});
-      final activeRide = data['active_ride'] is Map ? RideJob.fromJson(data['active_ride'] as Map) : null;
-      final queue = (data['queue'] is List) ? (data['queue'] as List).whereType<Map>().map(RideJob.fromJson).toList(growable: false) : const <RideJob>[];
-
-      if (!mounted) return;
-
-      setState(() {
-        _driver = driver;
-        _activeRide = activeRide;
-        _queue = queue;
-        _dashboardConnected = true;
-        _statusMessage = (data['message'] ?? body['message'])?.toString();
-        _lastDashboardSyncAt = DateTime.now();
-        if (_activeRide != null) _panelExpanded = true;
-      });
-
-      _scheduleMapPaddingUpdate();
-      await _primeCurrentLocation(initial: initial);
-      _fetchOverviewRoute();
-      _pushMapState();
-    } catch (e) {
-      rethrow;
-    }
-  }
-
-  Future<void> _fetchOverviewRoute() async {
-    if (_activeRide == null || _currentPosition == null) {
-      if (_overviewRoutePoints.isNotEmpty) {
-        _overviewRoutePoints.clear();
-        _pushMapState();
-      }
-      return;
-    }
-
-    final status = _activeRide!.status.toLowerCase();
-    final LatLng origin = LatLng(_currentPosition!.latitude, _currentPosition!.longitude);
-    final LatLng dest = (status == 'in_progress' || status == 'arrived_destination')
-        ? LatLng(_activeRide!.destLat, _activeRide!.destLng)
-        : LatLng(_activeRide!.pickupLat, _activeRide!.pickupLng);
-
-    final String routeId = '${_activeRide!.id}_${origin.latitude.toStringAsFixed(3)}_${dest.latitude.toStringAsFixed(3)}';
-    if (_lastRouteId == routeId) return;
-
-    try {
-      final Uri url = Uri.parse('https://routes.googleapis.com/directions/v2:computeRoutes');
-      final Map<String, dynamic> body = {
-        'origin': {'location': {'latLng': {'latitude': origin.latitude, 'longitude': origin.longitude}}},
-        'destination': {'location': {'latLng': {'latitude': dest.latitude, 'longitude': dest.longitude}}},
-        'travelMode': 'DRIVE',
-        'routingPreference': 'TRAFFIC_AWARE_OPTIMAL',
-        'polylineQuality': 'OVERVIEW',
-      };
-      final Map<String, String> headers = {
-        'Content-Type': 'application/json',
-        'X-Goog-Api-Key': ApiConstants.kGoogleApiKey,
-        'X-Goog-FieldMask': 'routes.polyline.encodedPolyline',
-      };
-
-      final http.Response res = await http.post(url, headers: headers, body: jsonEncode(body)).timeout(const Duration(seconds: 5));
-      if (res.statusCode == 200) {
-        final decoded = jsonDecode(res.body) as Map<String, dynamic>;
-        final List<Map<String, dynamic>> routes = (decoded['routes'] as List?)?.whereType<Map>().map((e) => e.cast<String, dynamic>()).toList() ?? [];
-        if (routes.isNotEmpty) {
-          final String encoded = routes.first['polyline']?['encodedPolyline']?.toString() ?? '';
-          if (encoded.isNotEmpty) {
-            _lastRouteId = routeId;
-            _overviewRoutePoints = _decodePolyline(encoded);
-            _pushMapState();
-            _fitMapToContext();
-          }
-        }
-      }
-    } catch (_) {}
-  }
-
-  List<LatLng> _decodePolyline(String enc) {
-    final List<LatLng> out = [];
-    int idx = 0, lat = 0, lng = 0;
-    while (idx < enc.length) {
-      int b, shift = 0, result = 0;
-      do { b = enc.codeUnitAt(idx++) - 63; result |= (b & 0x1f) << shift; shift += 5; } while (b >= 0x20);
-      lat += (result & 1) != 0 ? ~(result >> 1) : (result >> 1);
-      shift = 0; result = 0;
-      do { b = enc.codeUnitAt(idx++) - 63; result |= (b & 0x1f) << shift; shift += 5; } while (b >= 0x20);
-      lng += (result & 1) != 0 ? ~(result >> 1) : (result >> 1);
-      out.add(LatLng(lat / 1e5, lng / 1e5));
-    }
-    return out;
-  }
-
-  void _startDashboardPolling({required bool forceNow}) {
-    _dashboardTimer?.cancel();
-    if (forceNow) _safeDashboardRefresh();
-    _dashboardTimer = Timer.periodic(_dashboardPollInterval, (_) => _safeDashboardRefresh());
-  }
-
-  Future<void> _safeDashboardRefresh() async {
-    if (_fetchingDashboard) return;
-    _fetchingDashboard = true;
-    try {
-      await _fetchDashboard();
-    } catch (_) {
-      if (mounted) setState(() => _dashboardConnected = false);
-    } finally {
-      _fetchingDashboard = false;
-    }
-  }
-
-  Future<void> _primeCurrentLocation({bool initial = false}) async {
-    try {
-      if (!await _ensureLocationPermission()) return;
-      final fix = await Geolocator.getCurrentPosition(desiredAccuracy: LocationAccuracy.bestForNavigation);
-      _currentPosition = fix;
-
-      if (_latKalman == null) {
-        _latKalman = _Kalman1D(x: fix.latitude);
-        _lngKalman = _Kalman1D(x: fix.longitude);
-      } else {
-        _latKalman!.update(fix.latitude);
-        _lngKalman!.update(fix.longitude);
-      }
-
-      if (initial) _initialCamera = CameraPosition(target: LatLng(fix.latitude, fix.longitude), zoom: 15.8);
-      _pushMapState();
-    } catch (_) {}
-  }
-
-  LocationSettings _platformLocationSettings() {
-    if (kIsWeb) return const LocationSettings(accuracy: LocationAccuracy.best, distanceFilter: 3);
-    if (defaultTargetPlatform == TargetPlatform.android) {
-      return AndroidSettings(
-        accuracy: LocationAccuracy.bestForNavigation, distanceFilter: 3, intervalDuration: const Duration(seconds: 1), forceLocationManager: false,
-      );
-    }
-    if (defaultTargetPlatform == TargetPlatform.iOS) {
-      return AppleSettings(accuracy: LocationAccuracy.bestForNavigation, distanceFilter: 3, activityType: ActivityType.automotiveNavigation, pauseLocationUpdatesAutomatically: false, showBackgroundLocationIndicator: false);
-    }
-    return const LocationSettings(accuracy: LocationAccuracy.best, distanceFilter: 3);
-  }
-
-  // --- NEW METHOD FOR PROMINENT DISCLOSURE (DRIVER SPECIFIC) ---
-  Future<bool> _showProminentLocationDisclosure() async {
-    return await showDialog<bool>(
-      context: context,
-      barrierDismissible: false,
-      builder: (BuildContext context) {
-        final isDark = Theme.of(context).brightness == Brightness.dark;
-        final cs = Theme.of(context).colorScheme;
-        return AlertDialog(
-          backgroundColor: isDark ? cs.surface : Colors.white,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-          title: Text(
-            'Location Data Usage',
-            style: TextStyle(fontWeight: FontWeight.bold, color: isDark ? cs.onSurface : Colors.black87),
-          ),
-          content: Text(
-            'Pick Me collects location data to enable ride tracking, match you with nearby users requesting rides, and calculate accurate trip distances, even when the app is closed or not in use.',
-            style: TextStyle(fontSize: 15, height: 1.4, color: isDark ? cs.onSurfaceVariant : Colors.black54),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(context).pop(false),
-              child: const Text('Decline', style: TextStyle(color: Colors.grey, fontWeight: FontWeight.bold)),
-            ),
-            ElevatedButton(
-              style: ElevatedButton.styleFrom(
-                backgroundColor: const Color(0xFF1A73E8),
-                foregroundColor: Colors.white,
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-              ),
-              onPressed: () => Navigator.of(context).pop(true),
-              child: const Text('I Agree', style: TextStyle(fontWeight: FontWeight.bold)),
-            ),
-          ],
-        );
-      },
-    ) ?? false;
-  }
-
-  // --- UPDATED PERMISSION REQUEST LOGIC ---
-  Future<bool> _ensureLocationPermission() async {
-    if (!await Geolocator.isLocationServiceEnabled()) {
-      if (mounted) await LocationPermissionModal.show(context: context, title: 'Location off', message: 'Turn on location services to go online.', isServiceIssue: true);
-      return false;
-    }
-
-    var perm = await Geolocator.checkPermission();
-
-    if (perm == LocationPermission.denied) {
-      final userConsented = await _showProminentLocationDisclosure();
-      if (userConsented) {
-        perm = await Geolocator.requestPermission();
-      } else {
-        return false;
-      }
-    }
-
-    if (perm == LocationPermission.denied || perm == LocationPermission.deniedForever) {
-      if (mounted) await LocationPermissionModal.show(context: context, title: 'Permission needed', message: 'Grant location access to publish your live driver position.', isServiceIssue: false);
-      return false;
-    }
-    return true;
-  }
-
-  Future<void> _refreshCurrentPosition({bool silent = true}) async {
-    try {
-      if (!await _ensureLocationPermission()) return;
-      _currentPosition = await Geolocator.getCurrentPosition(desiredAccuracy: LocationAccuracy.bestForNavigation);
-      _pushMapState();
-    } catch (_) {
-      if (!silent && mounted) showToastNotification(context: context, title: 'Fix unavailable', message: 'Unable to refresh live location.', isSuccess: false);
-    }
-  }
-
-  Future<void> _startLocationEngine() async {
-    if (!await _ensureLocationPermission()) return;
-    await _refreshCurrentPosition();
-    await _locationSub?.cancel();
-
-    _locationSub = Geolocator.getPositionStream(locationSettings: _platformLocationSettings()).listen(
-          (pos) {
-        if (_latKalman != null && _lngKalman != null) {
-          double lat = _latKalman!.update(pos.latitude);
-          double lng = _lngKalman!.update(pos.longitude);
-          _currentPosition = Position(longitude: lng, latitude: lat, timestamp: pos.timestamp, accuracy: pos.accuracy, altitude: pos.altitude, altitudeAccuracy: pos.altitudeAccuracy, heading: pos.heading, headingAccuracy: pos.headingAccuracy, speed: pos.speed, speedAccuracy: pos.speedAccuracy);
-        } else {
-          _currentPosition = pos;
-        }
-        _pushMapState();
-        _fetchOverviewRoute();
-      },
-      onError: (_) { if (mounted) showToastNotification(context: context, title: 'Stream interrupted', message: 'Live location stream will retry.', isSuccess: false); },
-    );
-
-    _heartbeatTimer?.cancel();
-    _heartbeatTimer = Timer.periodic(_heartbeatInterval, (_) => _pushHeartbeat());
-    await _pushHeartbeat();
-  }
-
-  Future<void> _stopLocationEngine() async {
-    _heartbeatTimer?.cancel(); _heartbeatTimer = null;
-    await _locationSub?.cancel(); _locationSub = null;
-  }
-
-  Future<void> _pushHeartbeat() async {
-    final driver = _driver;
-    if (!mounted || driver == null || !driver.isOnline) return;
-
-    Position? pos = _currentPosition;
-    if (pos == null) { await _refreshCurrentPosition(); pos = _currentPosition; }
-    if (pos == null) return;
-
-    try {
-      await _api.request(
-        _driverHubEndpoint, method: 'POST',
-        data: {
-          'action': 'heartbeat', 'user': _prefs.getString('user_id')?.trim() ?? '',
-          'lat': pos.latitude.toStringAsFixed(7), 'lng': pos.longitude.toStringAsFixed(7),
-          'heading': _emaHeading.toStringAsFixed(2),
-          'phase': _phaseForHeartbeat(_activeRide?.status),
-        },
-      ).timeout(const Duration(seconds: 5));
-
-      if (mounted) setState(() => _lastHeartbeatAt = DateTime.now());
-    } catch (_) {}
-  }
-
-  String _phaseForHeartbeat(String? rideStatus) {
-    switch ((rideStatus ?? '').trim().toLowerCase()) {
-      case 'accepted': case 'enroute_pickup': return 'enroute_pickup';
-      case 'arrived_pickup': return 'waiting_pickup';
-      case 'in_progress': return 'enroute_destination';
-      case 'arrived_destination': return 'arrived_destination';
-      default: return 'idle';
-    }
-  }
+  // ---------------------------------------------------------------------------
+  // Online / offline
 
   Future<void> _toggleOnline(bool value) async {
-    final driver = _driver;
-    if (driver == null || _busyOnlineToggle) return;
-    setState(() => _busyOnlineToggle = true);
-
+    final s = _session;
+    if (s == null || _onlineFlow || s.busyOnline) return;
+    _onlineFlow = true;
     try {
-      final uid = _prefs.getString('user_id')?.trim() ?? '';
-      final res = await _api.request(_driverHubEndpoint, method: 'POST', data: {'action': 'set_online', 'user': uid, 'is_online': value ? '1' : '0'});
-      final body = jsonDecode(res.body);
-
-      if (res.statusCode != 200 || body is! Map || body['error'] == true) {
-        throw Exception(body is Map ? (body['message'] ?? body['error_msg']) : 'Unable to update online status');
+      DriverLocationFix? fix;
+      if (value) {
+        if (!await DriverLocationPermissionGate.ensure(context)) return;
+        if (!mounted) return;
+        _location.retry();
+        fix = await _location.currentFix();
+        if (!mounted) return;
+        if (fix == null) {
+          _toast('Waiting for GPS', 'We could not get your location yet. Move to open sky and try again.', ok: false);
+          return;
+        }
       }
-
-      if (!mounted) return;
-      setState(() {
-        _driver = driver.copyWith(isOnline: value);
-        _statusMessage = (body['message'] ?? 'Status updated').toString();
-      });
-
-      if (value) { await _startLocationEngine(); } else { await _stopLocationEngine(); }
-      await _fetchDashboard();
+      await s.setOnline(value, fix: fix);
       HapticFeedback.mediumImpact();
     } catch (e) {
-      if (mounted) showToastNotification(context: context, title: 'Update failed', message: e.toString().replaceFirst('Exception: ', ''), isSuccess: false);
+      _toast('Update failed', _errorText(e), ok: false);
     } finally {
-      if (mounted) setState(() => _busyOnlineToggle = false);
+      _onlineFlow = false;
     }
   }
 
-  Future<void> _acceptRide(RideJob ride) async {
-    if (_busyRideAction) return;
+  // ---------------------------------------------------------------------------
+  // Offers
 
-    final bool authorized = await TransactionPinBottomSheet.show(context, _api);
-    if (!authorized) return;
-
-    setState(() => _busyRideAction = true);
-
+  Future<void> _accept(RideJob ride) async {
+    final s = _session;
+    if (s == null || _acceptFlow || s.busyRideAction) return;
+    _acceptFlow = true;
+    s.holdOffer(ride.id, true);
     try {
-      final res = await _api.request(_driverHubEndpoint, method: 'POST', data: {'action': 'accept_ride', 'user': _prefs.getString('user_id')?.trim() ?? '', 'ride_id': ride.id.toString()});
-      final body = jsonDecode(res.body);
-
-      if (res.statusCode != 200 || body is! Map || body['error'] == true) throw Exception(body is Map ? (body['message'] ?? body['error_msg']) : 'Ride acceptance failed');
-
+      final authorized = await TransactionPinBottomSheet.show(context, _api);
+      if (!mounted || !authorized) return;
+      final outcome = await s.acceptOffer(ride);
       if (!mounted) return;
-      HapticFeedback.heavyImpact();
-      showToastNotification(context: context, title: 'Ride accepted', message: (body['message'] ?? 'Trip assigned to you.').toString(), isSuccess: true);
-      await _fetchDashboard();
+      switch (outcome) {
+        case AcceptOutcome.accepted:
+          HapticFeedback.heavyImpact();
+          _toast('Ride accepted', 'Head to the pickup point.', ok: true);
+        case AcceptOutcome.taken:
+          HapticFeedback.mediumImpact();
+          _toast('Request taken', 'Another driver accepted this request first.', ok: false);
+        case AcceptOutcome.failed:
+          break;
+      }
     } catch (e) {
-      if (mounted) showToastNotification(context: context, title: 'Unable to accept', message: e.toString().replaceFirst('Exception: ', ''), isSuccess: false);
+      _toast('Unable to accept', _errorText(e), ok: false);
     } finally {
-      if (mounted) setState(() => _busyRideAction = false);
+      _acceptFlow = false;
+      if (mounted) s.holdOffer(ride.id, false);
     }
   }
 
-  double _distanceMeters(LatLng a, LatLng b) => Geolocator.distanceBetween(a.latitude, a.longitude, b.latitude, b.longitude);
-
-  String? _localRideActionGuard(RideJob ride, String action) {
-    final pos = _currentPosition;
-    final normalized = action.trim().toLowerCase();
-
-    if (normalized == 'enroute_pickup' || normalized == 'head_to_pickup' || normalized.contains('cancel')) return null;
-
-    if (pos == null) return 'Current GPS fix unavailable. Wait for location to stabilise.';
-    if (pos.timestamp != null && DateTime.now().difference(pos.timestamp!) > _driverFixMaxAge) return 'Location fix is stale. Wait for GPS update.';
-
-    final gpsErrorMargin = pos.accuracy > 0 ? pos.accuracy : 10.0;
-    final compensation = math.min(gpsErrorMargin, 150.0);
-
-    final driverLL = LatLng(pos.latitude, pos.longitude);
-    final pickupLL = LatLng(ride.pickupLat, ride.pickupLng);
-    final destLL = LatLng(ride.destLat, ride.destLng);
-
-    if (normalized == 'arrived_pickup' && _distanceMeters(driverLL, pickupLL) > (_pickupArrivalRadiusM + compensation)) {
-      return 'You must be at the pickup point. Current gap: ${_distanceMeters(driverLL, pickupLL).toStringAsFixed(0)}m.';
-    }
-    if (normalized == 'start_trip' && _distanceMeters(driverLL, pickupLL) > (_tripStartRadiusM + compensation)) {
-      return 'Trip can only start at pickup. Current gap: ${_distanceMeters(driverLL, pickupLL).toStringAsFixed(0)}m.';
-    }
-    if (normalized == 'arrived_destination' && _distanceMeters(driverLL, destLL) > (_destinationArrivalRadiusM + compensation)) {
-      return 'You need to reach destination first. Current gap: ${_distanceMeters(driverLL, destLL).toStringAsFixed(0)}m.';
-    }
-    if ((normalized == 'complete' || normalized == 'complete_trip') && _distanceMeters(driverLL, destLL) > (_rideCompleteRadiusM + compensation)) {
-      return 'Ride can only be completed at destination. Current gap: ${_distanceMeters(driverLL, destLL).toStringAsFixed(0)}m.';
-    }
-    return null;
+  void _decline(RideJob ride) {
+    HapticFeedback.selectionClick();
+    _session?.declineOffer(ride.id);
   }
 
-  TripNavPhase _driverTripPhaseFor(String status) {
-    switch (status.trim().toLowerCase()) {
-      case 'completed': return TripNavPhase.completed;
-      case 'canceled': case 'cancelled': return TripNavPhase.cancelled;
-      case 'arrived_pickup': return TripNavPhase.waitingPickup;
-      case 'in_progress': case 'arrived_destination': return TripNavPhase.enRoute;
-      default: return TripNavPhase.driverToPickup;
-    }
+  // ---------------------------------------------------------------------------
+  // Trip transitions
+
+  Future<bool> _confirmCancel(RideJob ride) async {
+    final charged = ride.rideStatus.cancelIsCharged;
+    final result = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Cancel this trip?'),
+        content: Text(charged
+            ? 'The trip has already started. Cancelling now still deducts the app fee from your wallet and counts as a cancelled trip.'
+            : 'The customer will be notified and this counts as a cancelled trip on your profile.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.of(ctx).pop(false), child: const Text('Keep trip')),
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            style: TextButton.styleFrom(foregroundColor: Colors.red),
+            child: const Text('Cancel trip'),
+          ),
+        ],
+      ),
+    );
+    return result ?? false;
   }
 
-  Future<Map<String, dynamic>?> _driverTripSnapshotProvider() async {
-    final ride = _activeRide;
-    final driver = _driver;
-    if (ride == null || driver == null) return null;
-
+  /// Runs one transition including its UI preconditions (confirm, permission,
+  /// delivery PIN). With [rethrowErrors] failures propagate to the caller
+  /// (TripNavigationPage) so it does not advance its phase optimistically.
+  Future<void> _runRideAction(DriverRideAction action, {bool rethrowErrors = false}) async {
+    final s = _session;
+    final ride = s?.activeRide;
     try {
-      final uid = _prefs.getString('user_id')?.trim() ?? '';
-      if (uid.isEmpty) return null;
-      final res = await _api.request(_driverHubEndpoint, method: 'POST', data: {'action': 'dashboard', 'user': uid}).timeout(const Duration(seconds: 10));
-      final body = jsonDecode(res.body);
-      if (res.statusCode != 200 || body is! Map || body['error'] == true) return null;
+      if (s == null || ride == null) throw const DriverActionRejected('There is no active trip.');
+      if (_rideFlow || s.busyRideAction) throw const DriverActionRejected('Please wait, the previous action is still in progress.');
+      _rideFlow = true;
+      try {
+        if (action == DriverRideAction.cancel) {
+          if (!await _confirmCancel(ride)) throw const DriverActionRejected('Trip was not cancelled.');
+        }
+        if (action.needsGps && !await DriverLocationPermissionGate.hasAccess()) {
+          if (!mounted || !await DriverLocationPermissionGate.ensure(context)) {
+            throw const DriverActionRejected('Location access is required for this step.');
+          }
+          _location.retry();
+        }
+        if (action == DriverRideAction.complete && ride.requiresDeliveryOtp && !s.isOtpVerified(ride.id)) {
+          if (!mounted) throw const DriverActionRejected('Screen closed.');
+          final verified = await DeliveryOtpSheet.show(
+            context,
+            recipientPhone: ride.handoffPhone ?? '',
+            verify: (otp) => s.verifyDeliveryOtp(ride.id, otp),
+          );
+          if (!verified) throw const DriverActionRejected('Delivery PIN not verified.');
+        }
+        await s.performRideAction(action);
+      } finally {
+        _rideFlow = false;
+      }
+      HapticFeedback.selectionClick();
+      if (!rethrowErrors) {
+        if (action == DriverRideAction.complete) {
+          _toast('Trip completed', 'Nice work! Earnings have been recorded.', ok: true);
+        } else if (action == DriverRideAction.cancel) {
+          _toast('Trip cancelled', 'You are available for new requests.', ok: true);
+        }
+      }
+    } catch (e) {
+      if (rethrowErrors) rethrow;
+      final silent = e is DriverActionRejected && e.message == 'Trip was not cancelled.';
+      if (!silent) _toast('Action failed', _errorText(e), ok: false);
+    }
+  }
 
-      final data = body['data'];
-      final activeRide = data['active_ride'];
-      final live = data['driver_live'];
-      final status = (activeRide['status'] ?? ride.status).toString();
-
-      return <String, dynamic>{
-        'ride_id': activeRide['id']?.toString() ?? ride.id.toString(),
-        'status': status, 'phase': status, 'ride_status': status,
-        'driver_id': driver.id.toString(),
-        'driver_lat': (live is Map ? live['lat'] : null) ?? _currentPosition?.latitude ?? ride.pickupLat,
-        'driver_lng': (live is Map ? live['lng'] : null) ?? _currentPosition?.longitude ?? ride.pickupLng,
-        'driver_heading': _emaHeading,
-        'pickup_lat': activeRide['pickup_lat'] ?? ride.pickupLat,
-        'pickup_lng': activeRide['pickup_lng'] ?? ride.pickupLng,
-        'pickup_text': activeRide['pickup_text'] ?? ride.pickupText,
-        'destination_lat': activeRide['dest_lat'] ?? ride.destLat,
-        'destination_lng': activeRide['dest_lng'] ?? ride.destLng,
-        'destination_text': activeRide['dest_text'] ?? ride.destText,
-        'rider_lat': activeRide['pickup_lat'] ?? ride.pickupLat,
-        'rider_lng': activeRide['pickup_lng'] ?? ride.pickupLng,
-      };
-    } catch (_) {
-      return null;
+  TripNavPhase _navPhaseFor(DriverRideStatus status) {
+    switch (status) {
+      case DriverRideStatus.arrivedPickup:
+        return TripNavPhase.waitingPickup;
+      case DriverRideStatus.inProgress:
+        return TripNavPhase.enRoute;
+      case DriverRideStatus.arrivedDestination:
+        return TripNavPhase.arrivedDestination;
+      case DriverRideStatus.completed:
+        return TripNavPhase.completed;
+      case DriverRideStatus.canceled:
+        return TripNavPhase.cancelled;
+      default:
+        return TripNavPhase.driverToPickup;
     }
   }
 
   Future<void> _openTripNavigation() async {
-    final ride = _activeRide;
-    final driver = _driver;
-    if (ride == null || driver == null) return;
-
-    await Navigator.of(context).push(
-      MaterialPageRoute(
-        builder: (_) => TripNavigationPage(
-          args: TripNavigationArgs(
-            userId: ride.riderId,
-            driverId: driver.id.toString(),
-            tripId: ride.id.toString(),
-            pickup: LatLng(ride.pickupLat, ride.pickupLng),
-            destination: LatLng(ride.destLat, ride.destLng),
-            originText: ride.pickupText,
-            destinationText: ride.destText,
-            driverName: driver.name,
-            vehicleType: driver.vehicleType,
-            carPlate: driver.carPlate,
-            rating: driver.rating,
-            initialDriverLocation: _currentPosition == null ? null : LatLng(_currentPosition!.latitude, _currentPosition!.longitude),
-            initialRiderLocation: LatLng(ride.pickupLat, ride.pickupLng),
-            initialPhase: _driverTripPhaseFor(ride.status),
-            liveSnapshotProvider: _driverTripSnapshotProvider,
-            onArrivedPickup: () async => _performRideAction('arrived_pickup'),
-            onStartTrip: () async => _performRideAction('start_trip'),
-            onArrivedDestination: () async => _performRideAction('arrived_destination'),
-            onCompleteTrip: () async {
-              final String type = (ride.rideType).trim().toLowerCase();
-
-              if (type == 'send_me' || type == 'dispatch') {
-                final phoneToCall = type == 'dispatch' ? (ride.recipientPhone ?? ride.riderPhone ?? 'Customer') : (ride.riderPhone ?? 'Customer');
-
-                final bool isVerified = await DeliveryOtpSheet.show(
-                  context,
-                  _api,
-                  _prefs.getString('user_id')?.trim() ?? '',
-                  ride.id.toString(),
-                  phoneToCall,
-                );
-
-                if (isVerified) {
-                  await _performRideAction('complete_trip');
-                }
-              } else {
-                await _performRideAction('complete_trip');
-              }
-            },
-            onCancelTrip: () async => _performRideAction('cancel'),
-            role: TripNavigationRole.driver,
-            tickEvery: const Duration(seconds: 1),
-            routeMinGap: const Duration(seconds: 20),
-            arrivalMeters: 35.0,
-            routeMoveThresholdMeters: 25.0,
-            autoFollowCamera: true,
-            showArrivedPickupButton: const {'accepted', 'driver_assigned', 'driver_arriving', 'enroute_pickup'}.contains(ride.status.trim().toLowerCase()),
-            showStartTripButton: ride.status.trim().toLowerCase() == 'arrived_pickup',
-            showArrivedDestinationButton: ride.status.trim().toLowerCase() == 'in_progress',
-            showCompleteTripButton: ride.status.trim().toLowerCase() == 'arrived_destination',
-            showCancelButton: true,
-            showMetaCard: true,
-            showDebugPanel: false,
-            enableLivePickupTracking: false,
-            preserveStopOrder: true,
-            autoCloseOnCancel: false,
+    final s = _session;
+    final ride = s?.activeRide;
+    final driver = s?.driver;
+    if (s == null || ride == null || driver == null || _navOpen) return;
+    _navOpen = true;
+    try {
+      final fix = _location.fix.value;
+      await Navigator.of(context).push(
+        MaterialPageRoute<void>(
+          builder: (_) => TripNavigationPage(
+            args: TripNavigationArgs(
+              userId: ride.riderId,
+              driverId: '${driver.id}',
+              tripId: '${ride.id}',
+              rideType: ride.rideType.replaceAll('_', ' '),
+              pickup: LatLng(ride.pickupLat, ride.pickupLng),
+              destination: LatLng(ride.destLat, ride.destLng),
+              originText: ride.pickupText,
+              destinationText: ride.destText,
+              driverName: driver.name,
+              vehicleType: driver.vehicleType,
+              carPlate: driver.carPlate,
+              rating: driver.rating,
+              initialDriverLocation: fix?.latLng,
+              initialRiderLocation: LatLng(ride.pickupLat, ride.pickupLng),
+              initialPhase: _navPhaseFor(ride.rideStatus),
+              // Local snapshot (no network): the session controller is already polling.
+              liveSnapshotProvider: () async => s.navigationSnapshot(ride.id),
+              onArrivedPickup: () => _runRideAction(DriverRideAction.arrivedPickup, rethrowErrors: true),
+              onStartTrip: () => _runRideAction(DriverRideAction.startTrip, rethrowErrors: true),
+              onArrivedDestination: () => _runRideAction(DriverRideAction.arrivedDestination, rethrowErrors: true),
+              onCompleteTrip: () => _runRideAction(DriverRideAction.complete, rethrowErrors: true),
+              onCancelTrip: () => _runRideAction(DriverRideAction.cancel, rethrowErrors: true),
+              role: TripNavigationRole.driver,
+              tickEvery: const Duration(seconds: 1),
+              routeMinGap: const Duration(seconds: 20),
+              arrivalMeters: 35.0,
+              routeMoveThresholdMeters: 25.0,
+              autoFollowCamera: true,
+              // The page gates each button by its live phase; these only enable them.
+              showArrivedPickupButton: true,
+              showStartTripButton: true,
+              showArrivedDestinationButton: true,
+              showCompleteTripButton: true,
+              showCancelButton: true,
+              showMetaCard: true,
+              showDebugPanel: false,
+              enableLivePickupTracking: false,
+              preserveStopOrder: true,
+              autoCloseOnCancel: true,
+            ),
           ),
         ),
-      ),
-    );
-
-    if (mounted) {
-      await _fetchDashboard();
-    }
-  }
-
-  Future<void> _performRideAction(String action, {bool showFeedback = true}) async {
-    final ride = _activeRide;
-    if (ride == null || _busyRideAction) return;
-
-    final String? guard = _localRideActionGuard(ride, action);
-    if (guard != null) {
-      if (showFeedback && mounted) showToastNotification(context: context, title: 'Action blocked', message: guard, isSuccess: false);
-      return;
-    }
-
-    if (mounted) setState(() => _busyRideAction = true);
-
-    try {
-      await _refreshCurrentPosition(silent: false);
-      final pos = _currentPosition;
-      final res = await _api.request(
-        _driverHubEndpoint, method: 'POST',
-        data: {
-          'action': 'ride_action', 'user': _prefs.getString('user_id')?.trim() ?? '',
-          'ride_id': ride.id.toString(), 'ride_action': action,
-          if (pos != null) 'lat': pos.latitude.toStringAsFixed(7),
-          if (pos != null) 'lng': pos.longitude.toStringAsFixed(7),
-          if (pos != null) 'heading': _emaHeading.toStringAsFixed(2),
-          if (pos != null) 'accuracy': pos.accuracy.toStringAsFixed(2),
-        },
-      ).timeout(const Duration(seconds: 10));
-
-      final body = jsonDecode(res.body);
-      if (res.statusCode != 200 || body is! Map || body['error'] == true) throw Exception(body is Map ? (body['message'] ?? body['error_msg']) : 'Ride update failed');
-
-      if (mounted && showFeedback) showToastNotification(context: context, title: 'Trip updated', message: (body['message'] ?? 'Driver trip status updated.').toString(), isSuccess: true);
-      HapticFeedback.selectionClick();
-      await _fetchDashboard();
-      await _pushHeartbeat();
-    } catch (e) {
-      if (mounted && showFeedback) showToastNotification(context: context, title: 'Ride action failed', message: e.toString().replaceFirst('Exception: ', ''), isSuccess: false);
+      );
     } finally {
-      if (mounted) setState(() => _busyRideAction = false);
+      _navOpen = false;
+      if (mounted) unawaited(s.refresh(fresh: true));
     }
-  }
-
-  void _fitMapToContext() {
-    final map = _mapController;
-    if (map == null) return;
-
-    final points = <LatLng>[];
-    if (_currentPosition != null) points.add(LatLng(_currentPosition!.latitude, _currentPosition!.longitude));
-    if (_activeRide != null) {
-      points.add(LatLng(_activeRide!.pickupLat, _activeRide!.pickupLng));
-      points.add(LatLng(_activeRide!.destLat, _activeRide!.destLng));
-    }
-
-    if (points.isEmpty) return;
-    if (points.length == 1) {
-      map.animateCamera(CameraUpdate.newLatLngZoom(points.first, 16.0));
-      return;
-    }
-
-    double minLat = points.first.latitude, maxLat = points.first.latitude;
-    double minLng = points.first.longitude, maxLng = points.first.longitude;
-    for (final point in points.skip(1)) {
-      if (point.latitude < minLat) minLat = point.latitude;
-      if (point.latitude > maxLat) maxLat = point.latitude;
-      if (point.longitude < minLng) minLng = point.longitude;
-      if (point.longitude > maxLng) maxLng = point.longitude;
-    }
-
-    map.animateCamera(CameraUpdate.newLatLngBounds(LatLngBounds(southwest: LatLng(minLat - 0.005, minLng - 0.005), northeast: LatLng(maxLat + 0.005, maxLng + 0.005)), 140));
   }
 
   void _openWallet() {
-    showModalBottomSheet(
+    showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
       builder: (_) => FundAccountSheet(
         account: _user,
-        balance: double.tryParse((_user?['user_bal'] ?? _user?['bal'])?.toString() ?? '0') ?? 0.0,
-        currency: (_user?['user_currency'] ?? 'NGN').toString(),
+        balance: double.tryParse('${_user?['user_bal'] ?? _user?['bal'] ?? 0}') ?? 0.0,
+        currency: '${_user?['user_currency'] ?? 'NGN'}',
       ),
+    );
+  }
+
+  // ---------------------------------------------------------------------------
+  // Layout
+
+  void _updateMapPadding(double panelHeight) {
+    _panelHeight = panelHeight;
+    if (!mounted) return;
+    final mq = MediaQuery.of(context);
+    final uiScale = UIScale.of(context);
+    final scale = (uiScale.shortest / 390.0).clamp(0.56, 1.12);
+    final top = mq.padding.top + _headerVisualH * scale;
+    final bottomNavH = uiScale.compact ? 110.0 : uiScale.inset(116.0);
+    final bottom = (panelHeight + bottomNavH + uiScale.gap(12)).clamp(20.0, mq.size.height * 0.6);
+    final next = EdgeInsets.fromLTRB(8, top, 8, bottom);
+    if (next != _mapPadding.value) _mapPadding.value = next;
+  }
+
+  Widget _buildMapLayer(DriverSessionController? s) {
+    if (s == null) return const SizedBox.shrink();
+    // Cached instance: page rebuilds never rebuild the GoogleMap subtree.
+    return _mapLayer ??= DriverMapView(
+      controller: _mapController,
+      fix: _location.fix,
+      activeRide: s.activeRideListenable,
+      padding: _mapPadding,
     );
   }
 
@@ -953,10 +451,12 @@ class _DriverHomePageState extends State<DriverHomePage> with WidgetsBindingObse
     final mq = MediaQuery.of(context);
     final safeTop = mq.padding.top;
     final headerHeight = safeTop + _headerVisualH;
-
-    final panelExpandedHeight = uiScale.landscape ? (mq.size.height * 0.45).clamp(250.0, 320.0) : (mq.size.height * 0.45).clamp(300.0, 420.0);
-
     final bottomNavH = uiScale.compact ? 110.0 : uiScale.inset(116.0);
+    final panelMaxHeight = uiScale.landscape
+        ? (mq.size.height * 0.45).clamp(250.0, 320.0)
+        : (mq.size.height * 0.45).clamp(300.0, 420.0);
+    final activeCardMaxHeight = (mq.size.height - headerHeight - bottomNavH - 24).clamp(240.0, mq.size.height * 0.62);
+    final s = _session;
 
     return Scaffold(
       key: _scaffoldKey,
@@ -966,137 +466,152 @@ class _DriverHomePageState extends State<DriverHomePage> with WidgetsBindingObse
       extendBodyBehindAppBar: true,
       body: Stack(
         children: [
-          // ── 1. MAP LAYER ─────────────────────────────────
-          Positioned.fill(
-            child: _booting
-                ? Container(color: theme.scaffoldBackgroundColor)
-                : _IsolatedDriverMapLayer(
-              markersNotifier: _markersNotifier,
-              polylinesNotifier: _polylinesNotifier,
-              circlesNotifier: _circlesNotifier,
-              initialCameraPosition: _initialCamera,
-              padding: _mapPadding,
-              isDark: theme.brightness == Brightness.dark,
-              onMapCreated: (controller) {
-                _mapController = controller;
-                _fitMapToContext();
-              },
+          Positioned.fill(child: _buildMapLayer(s)),
+
+          Positioned(
+            top: 0, left: 0, right: 0,
+            child: IgnorePointer(
+              child: Container(
+                height: headerHeight + 18,
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                    colors: [Colors.black.withValues(alpha: .64), Colors.transparent],
+                  ),
+                ),
+              ),
             ),
           ),
 
-          // ── 2. OVERLAYS (header, banner, FAB) ────────────
-          if (!_booting) ...[
-            Positioned(
-              top: 0, left: 0, right: 0,
-              child: IgnorePointer(
-                child: Container(
-                  height: headerHeight + 18,
-                  decoration: BoxDecoration(gradient: LinearGradient(begin: Alignment.topCenter, end: Alignment.bottomCenter, colors: [Colors.black.withOpacity(.64), Colors.transparent])),
-                ),
-              ),
+          Positioned(
+            top: safeTop, left: 0, right: 0,
+            child: HeaderBar(
+              user: _user,
+              busyProfile: _busyProfile,
+              hasActiveTask: s?.activeRide != null,
+              onMenu: () => _scaffoldKey.currentState?.openDrawer(),
+              onWallet: _openWallet,
+              onNotifications: () => Navigator.pushNamed(context, AppRoutes.notifications),
             ),
+          ),
 
-            Positioned(
-              top: safeTop, left: 0, right: 0,
-              child: HeaderBar(user: _user, busyProfile: _busyProfile, onMenu: () => _scaffoldKey.currentState?.openDrawer(), onWallet: _openWallet, onNotifications: () => Navigator.pushNamed(context, AppRoutes.notifications)),
-            ),
-
-            if (!_dashboardConnected)
-              Positioned(
-                top: headerHeight + 8, left: uiScale.inset(14), right: uiScale.inset(14),
-                child: Material(
-                  color: Colors.orange.shade700, borderRadius: BorderRadius.circular(uiScale.radius(12)),
-                  child: Padding(
-                    padding: EdgeInsets.all(uiScale.inset(10)),
-                    child: Row(children: [Icon(Icons.wifi_off_rounded, size: uiScale.icon(18), color: Colors.white), SizedBox(width: uiScale.gap(8)), Expanded(child: Text('Connection issue. Dashboard will retry automatically.', style: TextStyle(color: Colors.white, fontSize: uiScale.font(12), fontWeight: FontWeight.w700)))]),
-                  ),
-                ),
-              ),
-
-            Positioned(
-              right: uiScale.inset(14),
-              bottom: bottomNavH + (_sheetHeight > 0 ? _sheetHeight : 150.0) + uiScale.gap(16),
-              child: FloatingActionButton.small(
-                heroTag: 'driver_locate_fab',
-                onPressed: () {
-                  if (_mapController != null && _currentPosition != null) _mapController!.animateCamera(CameraUpdate.newLatLngZoom(LatLng(_currentPosition!.latitude, _currentPosition!.longitude), 16.4));
-                },
-                child: const Icon(Icons.my_location_rounded),
-              ),
-            ),
-
-            // ── 3. DRIVER TERMINAL PANEL ──────────────────────
-            Positioned(
-              left: 0,
-              right: 0,
-              bottom: 0,
-              child: KeyedSubtree(
-                key: _sheetKey,
-                child: Padding(
-                  padding: EdgeInsets.only(bottom: bottomNavH),
-                  child: Padding(
-                    padding: EdgeInsets.symmetric(horizontal: uiScale.inset(12)),
-                    child: _booting
-                        ? _BootingPanel(uiScale: uiScale, cs: cs)
-                        : (_activeRide != null)
-                        ? _AdvancedActiveRideCard(
-                      ride: _activeRide!,
-                      uiScale: uiScale,
-                      onNavigate: _openTripNavigation,
-                    )
-                        : DriverCommandCenter(
-                      uiScale: uiScale,
-                      height: panelExpandedHeight,
-                      expanded: _panelExpanded,
-                      driver: _driver,
-                      activeRide: _activeRide,
-                      queue: _queue,
-                      statusMessage: _statusMessage,
-                      lastSyncAt: _lastDashboardSyncAt,
-                      lastHeartbeatAt: _lastHeartbeatAt,
-                      busyOnlineToggle: _busyOnlineToggle,
-                      busyRideAction: _busyRideAction,
-                      onExpandToggle: () {
-                        setState(() => _panelExpanded = !_panelExpanded);
-                        _scheduleMapPaddingUpdate();
-                      },
-                      onOnlineToggle: _toggleOnline,
-                      onWallet: _openWallet,
-                      onHistory: () => Navigator.pushNamed(context, AppRoutes.history),
-                      onProfile: () => Navigator.pushNamed(context, AppRoutes.profile),
-                      onRefresh: () => unawaited(_safeDashboardRefresh()),
-                      onAccept: _acceptRide,
-                      onRideAction: (action) => unawaited(_performRideAction(action)),
-                      onNavigate: _openTripNavigation,
+          if (s != null)
+            ListenableBuilder(
+              listenable: s,
+              builder: (context, _) => (s.connected || s.booting)
+                  ? const SizedBox.shrink()
+                  : Positioned(
+                      top: headerHeight + 8, left: uiScale.inset(14), right: uiScale.inset(14),
+                      child: Material(
+                        color: Colors.orange.shade700,
+                        borderRadius: BorderRadius.circular(uiScale.radius(12)),
+                        child: Padding(
+                          padding: EdgeInsets.all(uiScale.inset(10)),
+                          child: Row(children: [
+                            Icon(Icons.wifi_off_rounded, size: uiScale.icon(18), color: Colors.white),
+                            SizedBox(width: uiScale.gap(8)),
+                            Expanded(
+                              child: Text('Connection issue. Retrying automatically…',
+                                  style: TextStyle(color: Colors.white, fontSize: uiScale.font(12), fontWeight: FontWeight.w700)),
+                            ),
+                          ]),
+                        ),
+                      ),
                     ),
-                  ),
-                ),
+            ),
+
+          // Locate / recenter button.
+          Positioned(
+            right: uiScale.inset(14),
+            bottom: bottomNavH + (_panelHeight > 0 ? _panelHeight : 150.0) + uiScale.gap(16),
+            child: ValueListenableBuilder<bool>(
+              valueListenable: _mapController.following,
+              builder: (context, following, _) => FloatingActionButton.small(
+                heroTag: 'driver_locate_fab',
+                tooltip: following ? 'Show whole trip' : 'Re-center',
+                onPressed: () {
+                  HapticFeedback.selectionClick();
+                  if (following && s?.activeRide != null) {
+                    _mapController.showOverview();
+                  } else {
+                    _mapController.recenter();
+                  }
+                },
+                child: Icon(following ? Icons.my_location_rounded : Icons.location_searching_rounded),
               ),
             ),
-          ],
+          ),
+
+          // Bottom panel.
+          Positioned(
+            left: 0,
+            right: 0,
+            bottom: 0,
+            child: Padding(
+              padding: EdgeInsets.only(bottom: bottomNavH, left: uiScale.inset(12), right: uiScale.inset(12)),
+              child: _MeasureSize(
+                onChange: (size) {
+                  _updateMapPadding(size.height);
+                  if (mounted) setState(() {}); // repositions the FAB only
+                },
+                child: s == null
+                    ? _BootingPanel(uiScale: uiScale, cs: cs)
+                    : ListenableBuilder(
+                        listenable: Listenable.merge([s, _location.lastSentAt]),
+                        builder: (context, _) => _buildPanel(s, uiScale, panelMaxHeight, activeCardMaxHeight),
+                      ),
+              ),
+            ),
+          ),
         ],
       ),
+    );
+  }
 
-      /*
-      bottomNavigationBar: Transform.translate(
-        offset: const Offset(0, -1),
-        child: CustomBottomNavBar(
-          currentIndex: _currentIndex,
-          onTap: (i) {
-            HapticFeedback.selectionClick();
-            setState(() => _currentIndex = i);
-            switch (i) {
-              case 0: Navigator.pushNamed(context, AppRoutes.rideHistory); break;
-              case 1: Navigator.pushNamed(context, AppRoutes.transactions); break;
-              case 2: break;
-              case 3: Navigator.pushNamed(context, AppRoutes.settings); break;
-              case 4: Navigator.pushNamed(context, AppRoutes.profile); break;
-            }
-          },
-        ),
-      ),
-
-       */
+  Widget _buildPanel(DriverSessionController s, UIScale uiScale, double panelMaxHeight, double activeCardMaxHeight) {
+    final cs = Theme.of(context).colorScheme;
+    if (s.booting) return _BootingPanel(uiScale: uiScale, cs: cs);
+    if (s.driver == null) {
+      return _BootErrorPanel(
+        uiScale: uiScale,
+        message: s.bootError ?? 'Unable to load your driver profile.',
+        onRetry: () => unawaited(s.refresh(fresh: true)),
+      );
+    }
+    final ride = s.activeRide;
+    if (ride != null) {
+      return ActiveRideCard(
+        key: ValueKey('active_${ride.id}'),
+        ride: ride,
+        uiScale: uiScale,
+        maxHeight: activeCardMaxHeight,
+        pendingAction: s.pendingAction,
+        otpVerified: s.isOtpVerified(ride.id),
+        onAction: (a) => unawaited(_runRideAction(a)),
+        onNavigate: () => unawaited(_openTripNavigation()),
+      );
+    }
+    return DriverCommandCenter(
+      uiScale: uiScale,
+      height: panelMaxHeight,
+      expanded: _panelExpanded,
+      driver: s.driver,
+      offers: s.offers,
+      lastSyncAt: s.lastSyncAt,
+      lastHeartbeatAt: _location.lastSentAt.value,
+      connected: s.connected,
+      busyOnlineToggle: s.busyOnline || _onlineFlow,
+      acceptingRideId: s.acceptingRideId,
+      driverPosition: _location.fix.value?.latLng,
+      onExpandToggle: () => setState(() => _panelExpanded = !_panelExpanded),
+      onOnlineToggle: (v) => unawaited(_toggleOnline(v)),
+      onWallet: _openWallet,
+      onHistory: () => Navigator.pushNamed(context, AppRoutes.history),
+      onProfile: () => Navigator.pushNamed(context, AppRoutes.profile),
+      onRefresh: () => unawaited(s.refresh(fresh: true)),
+      onAccept: (ride) => unawaited(_accept(ride)),
+      onDecline: _decline,
     );
   }
 }
@@ -1111,7 +626,7 @@ class _BootingPanel extends StatelessWidget {
     return Container(
       height: 150,
       decoration: BoxDecoration(
-        color: cs.surface.withOpacity(0.95),
+        color: cs.surface.withValues(alpha: 0.95),
         borderRadius: BorderRadius.circular(uiScale.radius(28)),
       ),
       child: const Center(child: CircularProgressIndicator()),
@@ -1119,442 +634,62 @@ class _BootingPanel extends StatelessWidget {
   }
 }
 
-class _IsolatedDriverMapLayer extends StatelessWidget {
-  final ValueNotifier<Set<Marker>> markersNotifier;
-  final ValueNotifier<Set<Polyline>> polylinesNotifier;
-  final ValueNotifier<Set<Circle>> circlesNotifier;
-  final CameraPosition initialCameraPosition;
-  final EdgeInsets padding;
-  final bool isDark;
-  final void Function(GoogleMapController) onMapCreated;
-
-  const _IsolatedDriverMapLayer({
-    super.key,
-    required this.markersNotifier,
-    required this.polylinesNotifier,
-    required this.circlesNotifier,
-    required this.initialCameraPosition,
-    required this.padding,
-    required this.isDark,
-    required this.onMapCreated,
-  });
-
-  String? _darkStyle() {
-    if (!isDark) return null;
-    return '''[{"elementType":"geometry","stylers":[{"color":"#212121"}]},{"elementType":"labels.icon","stylers":[{"visibility":"off"}]},{"elementType":"labels.text.fill","stylers":[{"color":"#757575"}]},{"elementType":"labels.text.stroke","stylers":[{"color":"#212121"}]},{"featureType":"administrative","elementType":"geometry","stylers":[{"color":"#757575"}]},{"featureType":"administrative.country","elementType":"labels.text.fill","stylers":[{"color":"#9e9e9e"}]},{"featureType":"administrative.land_parcel","stylers":[{"visibility":"off"}]},{"featureType":"administrative.locality","elementType":"labels.text.fill","stylers":[{"color":"#bdbdbd"}]},{"featureType":"poi","elementType":"labels.text.fill","stylers":[{"color":"#757575"}]},{"featureType":"poi.park","elementType":"geometry","stylers":[{"color":"#181818"}]},{"featureType":"poi.park","elementType":"labels.text.fill","stylers":[{"color":"#616161"}]},{"featureType":"poi.park","elementType":"labels.text.stroke","stylers":[{"color":"#1b1b1b"}]},{"featureType":"road","elementType":"geometry.fill","stylers":[{"color":"#2c2c2c"}]},{"featureType":"road","elementType":"labels.text.fill","stylers":[{"color":"#8a8a8a"}]},{"featureType":"road.arterial","elementType":"geometry","stylers":[{"color":"#373737"}]},{"featureType":"road.highway","elementType":"geometry","stylers":[{"color":"#3c3c3c"}]},{"featureType":"road.highway.controlled_access","elementType":"geometry","stylers":[{"color":"#4e4e4e"}]},{"featureType":"road.local","elementType":"labels.text.fill","stylers":[{"color":"#616161"}]},{"featureType":"transit","elementType":"labels.text.fill","stylers":[{"color":"#757575"}]},{"featureType":"water","elementType":"geometry","stylers":[{"color":"#000000"}]},{"featureType":"water","elementType":"labels.text.fill","stylers":[{"color":"#3d3d3d"}]}]''';
-  }
+class _BootErrorPanel extends StatelessWidget {
+  final UIScale uiScale;
+  final String message;
+  final VoidCallback onRetry;
+  const _BootErrorPanel({required this.uiScale, required this.message, required this.onRetry});
 
   @override
   Widget build(BuildContext context) {
-    return RepaintBoundary(
-      child: ValueListenableBuilder<Set<Marker>>(
-        valueListenable: markersNotifier,
-        builder: (context, markers, _) {
-          return ValueListenableBuilder<Set<Polyline>>(
-            valueListenable: polylinesNotifier,
-            builder: (context, polylines, _) {
-              return ValueListenableBuilder<Set<Circle>>(
-                valueListenable: circlesNotifier,
-                builder: (context, circles, _) {
-                  return GoogleMap(
-                    initialCameraPosition: initialCameraPosition,
-                    padding: padding,
-                    myLocationEnabled: false,
-                    myLocationButtonEnabled: false,
-                    zoomControlsEnabled: false,
-                    compassEnabled: false,
-                    mapToolbarEnabled: false,
-                    rotateGesturesEnabled: true,
-                    tiltGesturesEnabled: true,
-                    buildingsEnabled: false,
-                    indoorViewEnabled: false,
-                    trafficEnabled: false,
-                    markers: markers,
-                    polylines: polylines,
-                    circles: circles,
-                    onMapCreated: (c) {
-                      if (isDark) c.setMapStyle(_darkStyle());
-                      onMapCreated(c);
-                    },
-                  );
-                },
-              );
-            },
-          );
-        },
+    final cs = Theme.of(context).colorScheme;
+    return Container(
+      padding: EdgeInsets.all(uiScale.inset(18)),
+      decoration: BoxDecoration(
+        color: cs.surface.withValues(alpha: 0.97),
+        borderRadius: BorderRadius.circular(uiScale.radius(28)),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.cloud_off_rounded, color: AppColors.primary, size: uiScale.icon(32)),
+          SizedBox(height: uiScale.gap(8)),
+          Text(message, textAlign: TextAlign.center, style: TextStyle(fontSize: uiScale.font(13), fontWeight: FontWeight.w700)),
+          SizedBox(height: uiScale.gap(12)),
+          FilledButton.icon(onPressed: onRetry, icon: const Icon(Icons.refresh_rounded), label: const Text('Retry')),
+        ],
       ),
     );
   }
 }
 
-// ── NEW: DYNAMIC & HIGHLY SENSITIVE ACTIVE RIDE CARD ────────────────────────
-class _AdvancedActiveRideCard extends StatelessWidget {
-  final RideJob ride;
-  final UIScale uiScale;
-  final VoidCallback onNavigate;
-
-  const _AdvancedActiveRideCard({
-    required this.ride,
-    required this.uiScale,
-    required this.onNavigate,
-  });
-
-  Future<void> _call(BuildContext context, String? phone) async {
-    if (phone == null || phone.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Phone number not available.')),
-      );
-      return;
-    }
-
-    final cleanPhone = phone.replaceAll(RegExp(r'[^\d+]'), '');
-    final uri = Uri.parse('tel:$cleanPhone');
-
-    if (await canLaunchUrl(uri)) {
-      await launchUrl(uri);
-    } else {
-      if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Could not open the dialer.')),
-        );
-      }
-    }
-  }
-
-  void _showFullImage(BuildContext context, String imageUrl) {
-    showDialog(
-      context: context,
-      builder: (ctx) => Dialog(
-        backgroundColor: Colors.transparent,
-        insetPadding: EdgeInsets.all(uiScale.inset(12)),
-        child: Stack(
-          alignment: Alignment.center,
-          children: [
-            InteractiveViewer(
-              panEnabled: true,
-              boundaryMargin: EdgeInsets.zero,
-              minScale: 1.0,
-              maxScale: 4.0,
-              child: ClipRRect(
-                borderRadius: BorderRadius.circular(uiScale.radius(16)),
-                child: Image.network(imageUrl, fit: BoxFit.contain),
-              ),
-            ),
-            Positioned(
-              top: 16,
-              right: 16,
-              child: IconButton(
-                icon: const Icon(Icons.close_rounded, color: Colors.white, size: 32),
-                onPressed: () => Navigator.pop(ctx),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
+/// Reports its child's size after layout (post-frame, only on change).
+class _MeasureSize extends SingleChildRenderObjectWidget {
+  final ValueChanged<Size> onChange;
+  const _MeasureSize({required this.onChange, required super.child});
 
   @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final cs = theme.colorScheme;
-    final os = cs.onSurface;
-    final isDark = theme.brightness == Brightness.dark;
+  RenderObject createRenderObject(BuildContext context) => _RenderMeasureSize(onChange);
 
-    final String rawType = ride.rideType.trim().toLowerCase();
+  @override
+  void updateRenderObject(BuildContext context, covariant _RenderMeasureSize renderObject) {
+    renderObject.onChange = onChange;
+  }
+}
 
-    // Strict typing: We separate these entirely
-    final bool isDispatch = rawType == 'dispatch';
-    final bool isSendMe = rawType == 'send_me';
-    // isRide is explicitly for passengers (campus, street, etc)
-    final bool isRide = !isDispatch && !isSendMe;
+class _RenderMeasureSize extends RenderProxyBox {
+  _RenderMeasureSize(this.onChange);
+  ValueChanged<Size> onChange;
+  Size? _last;
 
-    // Phone parsing
-    final String riderPhone = ride.riderPhone ?? '';
-    final String receiverPhone = ride.recipientPhone ?? '';
-
-    // Dynamic Styling Variables
-    String displayTitle = rawType.replaceAll('_', ' ').toUpperCase();
-    Color badgeColor = AppColors.primary;
-    IconData typeIcon = Icons.local_taxi_rounded;
-
-    if (isDispatch) {
-      badgeColor = Colors.brown.shade600;
-      typeIcon = Icons.inventory_2_rounded;
-    } else if (isSendMe) {
-      badgeColor = Colors.orange.shade600;
-      typeIcon = Icons.shopping_bag_rounded;
-    } else if (rawType == 'campus_ride') {
-      badgeColor = Colors.blue.shade600;
-      typeIcon = Icons.school_rounded;
-    } else if (rawType == 'street_ride') {
-      badgeColor = Colors.green.shade600;
-      typeIcon = Icons.signpost_rounded;
-    }
-
-    // Dynamic Labels based exactly on type
-    final String originLabel = isDispatch ? 'SENDER' : (isSendMe ? 'REQUESTER / CUSTOMER' : 'RIDER');
-    final String destLabel = isDispatch ? 'RECEIVER' : (isSendMe ? 'TASK DESTINATION' : 'DROPOFF POINT');
-
-    final double feePercent = ride.appFeePercentage;
-    final double driverPercent = 100.0 - feePercent;
-    final double totalFare = ride.price;
-    final double appFee = totalFare * (feePercent / 100);
-    final double driverEarnings = totalFare - appFee;
-    final String currency = ride.currency;
-    final String payMethod = ride.payMethod.toUpperCase();
-
-    // Formatter for Commas
-    final formatCurrency = intl.NumberFormat('#,##0.00', 'en_US');
-
-    return Container(
-      width: double.infinity,
-      decoration: BoxDecoration(
-        color: isDark ? cs.surface : Colors.white,
-        borderRadius: BorderRadius.circular(uiScale.radius(24)),
-        boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.08), blurRadius: 20, offset: const Offset(0, 8))],
-        border: Border.all(color: cs.outlineVariant.withOpacity(0.3), width: 1.0),
-      ),
-      child: SingleChildScrollView(
-        padding: EdgeInsets.all(uiScale.inset(16)),
-        physics: const BouncingScrollPhysics(),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // ── Header ────────────────────────────────────
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Text('Active $displayTitle', style: TextStyle(color: os, fontSize: uiScale.font(14), fontWeight: FontWeight.w900, letterSpacing: 0.3)),
-                Container(
-                  padding: EdgeInsets.symmetric(horizontal: uiScale.inset(10), vertical: uiScale.inset(4)),
-                  decoration: BoxDecoration(color: badgeColor.withOpacity(0.15), borderRadius: BorderRadius.circular(20)),
-                  child: Row(children: [
-                    Icon(typeIcon, color: badgeColor, size: uiScale.icon(10)),
-                    SizedBox(width: uiScale.gap(6)),
-                    Text('Live', style: TextStyle(color: badgeColor, fontSize: uiScale.font(10), fontWeight: FontWeight.w800)),
-                  ]),
-                ),
-              ],
-            ),
-
-            // ── OTP warning ───────────────────────────────
-            if (ride.deliveryOtp != null && ride.deliveryOtp!.isNotEmpty) ...[
-              SizedBox(height: uiScale.gap(12)),
-              Container(
-                padding: EdgeInsets.all(uiScale.inset(8)),
-                decoration: BoxDecoration(color: Colors.orange.withOpacity(0.15), borderRadius: BorderRadius.circular(uiScale.radius(8))),
-                child: Row(children: [
-                  Icon(Icons.shield_rounded, color: Colors.orange.shade700, size: uiScale.icon(14)),
-                  SizedBox(width: uiScale.gap(8)),
-                  Expanded(child: Text('Secure OTP required at destination to complete dropoff.', style: TextStyle(color: Colors.orange.shade800, fontSize: uiScale.font(10), fontWeight: FontWeight.w700))),
-                ]),
-              ),
-            ],
-
-            SizedBox(height: uiScale.gap(16)),
-
-            // ── Strict Dispatch Package info ─────────────────────────────
-            if (isDispatch && ride.packageImage != null && ride.packageImage!.isNotEmpty) ...[
-              GestureDetector(
-                onTap: () => _showFullImage(context, ride.packageImage!),
-                child: ClipRRect(
-                  borderRadius: BorderRadius.circular(uiScale.radius(12)),
-                  child: Stack(
-                    alignment: Alignment.center,
-                    children: [
-                      Image.network(
-                        ride.packageImage!,
-                        width: double.infinity,
-                        height: uiScale.gap(120),
-                        fit: BoxFit.cover,
-                        errorBuilder: (_, __, ___) => Container(height: uiScale.gap(120), color: cs.surfaceVariant, child: const Icon(Icons.inventory_2_rounded)),
-                      ),
-                      Container(padding: const EdgeInsets.all(8), decoration: const BoxDecoration(color: Colors.black54, shape: BoxShape.circle), child: const Icon(Icons.fullscreen_rounded, color: Colors.white, size: 24)),
-                    ],
-                  ),
-                ),
-              ),
-              SizedBox(height: uiScale.gap(8)),
-              Text('${(ride.packageSize ?? 'PACKAGE').toUpperCase()} • ${ride.packageWeight.toStringAsFixed(1)}kg', style: TextStyle(color: os.withOpacity(0.6), fontSize: uiScale.font(10), fontWeight: FontWeight.w800, letterSpacing: 0.5)),
-              SizedBox(height: uiScale.gap(16)),
-            ],
-
-            // ── Instructions Block (Highly visible for Send Me) ───────
-            if (ride.instructions != null && ride.instructions!.isNotEmpty) ...[
-              Container(
-                padding: EdgeInsets.all(uiScale.inset(12)),
-                decoration: BoxDecoration(
-                  color: isSendMe ? badgeColor.withOpacity(0.1) : (isDark ? Colors.black26 : Colors.grey.shade100),
-                  borderRadius: BorderRadius.circular(uiScale.radius(12)),
-                  border: Border.all(color: isSendMe ? badgeColor.withOpacity(0.3) : cs.outlineVariant.withOpacity(0.5), width: isSendMe ? 1.0 : 0.5),
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        Icon(isSendMe ? Icons.assignment_rounded : Icons.info_outline_rounded, size: uiScale.icon(14), color: isSendMe ? badgeColor : os.withOpacity(0.6)),
-                        SizedBox(width: uiScale.gap(6)),
-                        Text(isSendMe ? 'TASK INSTRUCTIONS' : 'NOTE', style: TextStyle(color: isSendMe ? badgeColor : os.withOpacity(0.7), fontSize: uiScale.font(9), fontWeight: FontWeight.w900, letterSpacing: 0.5)),
-                      ],
-                    ),
-                    SizedBox(height: uiScale.gap(6)),
-                    Text(
-                      ride.instructions!,
-                      style: TextStyle(color: os.withOpacity(0.9), fontSize: uiScale.font(12), fontWeight: isSendMe ? FontWeight.w600 : FontWeight.w500, height: 1.4),
-                    ),
-                  ],
-                ),
-              ),
-              SizedBox(height: uiScale.gap(16)),
-            ],
-
-            // ── Tree location layout ───────────────────────
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Column(children: [
-                  Icon(Icons.radio_button_checked, color: badgeColor, size: uiScale.icon(16)),
-                  Container(width: 2, height: uiScale.gap(45), color: os.withOpacity(0.15)),
-                  Icon(Icons.location_on, color: Colors.red.shade600, size: uiScale.icon(16)),
-                ]),
-                SizedBox(width: uiScale.gap(12)),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(originLabel, style: TextStyle(color: os.withOpacity(0.5), fontSize: uiScale.font(8), fontWeight: FontWeight.w800, letterSpacing: 0.5)),
-                      Text(ride.pickupText, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(color: os, fontSize: uiScale.font(13), fontWeight: FontWeight.w800)),
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                            Text(ride.riderName.isNotEmpty ? ride.riderName : (isDispatch ? 'Sender' : 'Customer'), style: TextStyle(color: os.withOpacity(0.6), fontSize: uiScale.font(11), fontWeight: FontWeight.w600)),
-                            if (riderPhone.isNotEmpty) Text(riderPhone, style: TextStyle(color: os.withOpacity(0.45), fontSize: uiScale.font(9), fontWeight: FontWeight.w700)),
-                          ]),
-                          if (riderPhone.isNotEmpty)
-                            GestureDetector(
-                              onTap: () => _call(context, riderPhone),
-                              child: Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                                decoration: BoxDecoration(color: badgeColor.withOpacity(0.1), borderRadius: BorderRadius.circular(12)),
-                                child: Row(children: [
-                                  Icon(Icons.call, color: badgeColor, size: uiScale.icon(12)),
-                                  const SizedBox(width: 4),
-                                  Text(isDispatch ? 'Call Sender' : 'Call Customer', style: TextStyle(color: badgeColor, fontWeight: FontWeight.w700, fontSize: uiScale.font(10))),
-                                ]),
-                              ),
-                            ),
-                        ],
-                      ),
-                      SizedBox(height: uiScale.gap(16)),
-                      Text(destLabel, style: TextStyle(color: os.withOpacity(0.5), fontSize: uiScale.font(8), fontWeight: FontWeight.w800, letterSpacing: 0.5)),
-                      Text(ride.destText, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(color: os, fontSize: uiScale.font(13), fontWeight: FontWeight.w800)),
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                            // Show 'Receiver' for dispatch, otherwise just generic 'Destination'
-                            Text(isDispatch ? 'Receiver' : 'Destination', style: TextStyle(color: os.withOpacity(0.6), fontSize: uiScale.font(11), fontWeight: FontWeight.w600)),
-                            if (!isRide && receiverPhone.isNotEmpty && receiverPhone != riderPhone)
-                              Text(receiverPhone, style: TextStyle(color: os.withOpacity(0.45), fontSize: uiScale.font(9), fontWeight: FontWeight.w700)),
-                          ]),
-                          if (!isRide && receiverPhone.isNotEmpty && receiverPhone != riderPhone)
-                            GestureDetector(
-                              onTap: () => _call(context, receiverPhone),
-                              child: Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                                decoration: BoxDecoration(color: Colors.blue.withOpacity(0.1), borderRadius: BorderRadius.circular(12)),
-                                child: Row(children: [
-                                  Icon(Icons.call, color: Colors.blue, size: uiScale.icon(12)),
-                                  const SizedBox(width: 4),
-                                  Text(isDispatch ? 'Call Receiver' : 'Call Contact', style: TextStyle(color: Colors.blue, fontWeight: FontWeight.w700, fontSize: uiScale.font(10))),
-                                ]),
-                              ),
-                            ),
-                        ],
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-
-            SizedBox(height: uiScale.gap(20)),
-
-            // ── Financial breakdown ────────────────────────
-            Container(
-              padding: EdgeInsets.all(uiScale.inset(14)),
-              decoration: BoxDecoration(
-                color: isDark ? Colors.black26 : Colors.grey.shade50,
-                borderRadius: BorderRadius.circular(uiScale.radius(16)),
-                border: Border.all(color: cs.outlineVariant.withOpacity(0.4)),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Text('TOTAL FARE', style: TextStyle(color: os.withOpacity(0.5), fontSize: uiScale.font(9), fontWeight: FontWeight.w800, letterSpacing: 1.0)),
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                        decoration: BoxDecoration(
-                          color: payMethod == 'WALLET' ? Colors.blue.withOpacity(0.1) : Colors.orange.withOpacity(0.1),
-                          borderRadius: BorderRadius.circular(6),
-                          border: Border.all(color: payMethod == 'WALLET' ? Colors.blue.withOpacity(0.3) : Colors.orange.withOpacity(0.3)),
-                        ),
-                        child: Row(mainAxisSize: MainAxisSize.min, children: [
-                          Icon(payMethod == 'WALLET' ? Icons.account_balance_wallet_rounded : Icons.payments_rounded, color: payMethod == 'WALLET' ? Colors.blue : Colors.orange.shade700, size: uiScale.icon(10)),
-                          const SizedBox(width: 4),
-                          Text(payMethod, style: TextStyle(color: payMethod == 'WALLET' ? Colors.blue : Colors.orange.shade700, fontSize: uiScale.font(9), fontWeight: FontWeight.w900, letterSpacing: 0.5)),
-                        ]),
-                      ),
-                    ],
-                  ),
-                  Text('$currency ${formatCurrency.format(totalFare)}', style: TextStyle(color: os, fontSize: uiScale.font(20), fontWeight: FontWeight.w900)),
-                  Padding(
-                    padding: EdgeInsets.symmetric(vertical: uiScale.gap(12)),
-                    child: Divider(color: cs.outlineVariant.withOpacity(0.4), height: 1, thickness: 1),
-                  ),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                        Text('YOUR EARNINGS (${driverPercent.toStringAsFixed(0)}%)', style: TextStyle(color: Colors.green, fontSize: uiScale.font(8.5), fontWeight: FontWeight.w800, letterSpacing: 0.5)),
-                        Text('$currency ${formatCurrency.format(driverEarnings)}', style: TextStyle(color: Colors.green, fontSize: uiScale.font(14), fontWeight: FontWeight.w900)),
-                      ]),
-                      Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
-                        Text('APP FEE (${feePercent.toStringAsFixed(0)}%)', style: TextStyle(color: os.withOpacity(0.5), fontSize: uiScale.font(8.5), fontWeight: FontWeight.w800, letterSpacing: 0.5)),
-                        Text('$currency ${formatCurrency.format(appFee)}', style: TextStyle(color: os.withOpacity(0.7), fontSize: uiScale.font(14), fontWeight: FontWeight.w800)),
-                      ]),
-                    ],
-                  ),
-                ],
-              ),
-            ),
-
-            SizedBox(height: uiScale.gap(20)),
-
-            // ── Navigate button ───────────────────────────
-            GestureDetector(
-              onTap: onNavigate,
-              child: Container(
-                height: uiScale.gap(48),
-                alignment: Alignment.center,
-                decoration: BoxDecoration(color: badgeColor, borderRadius: BorderRadius.circular(uiScale.radius(14))),
-                child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-                  Icon(Icons.navigation_rounded, color: Colors.white, size: uiScale.icon(16)),
-                  SizedBox(width: uiScale.gap(8)),
-                  Text('Open Navigation', style: TextStyle(color: Colors.white, fontSize: uiScale.font(13), fontWeight: FontWeight.w900, letterSpacing: 0.5)),
-                ]),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
+  @override
+  void performLayout() {
+    super.performLayout();
+    final s = size;
+    if (s == _last) return;
+    _last = s;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (attached) onChange(s);
+    });
   }
 }

@@ -3,7 +3,6 @@ import 'dart:convert';
 import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:http/http.dart' as http;
 
 import '../../themes/app_theme.dart';
 import '../../utility/notification.dart';
@@ -23,14 +22,13 @@ class ForgotPasswordScreen extends StatefulWidget {
 class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
   final _emailController = TextEditingController();
   final _formKey = GlobalKey<FormState>();
-  late ApiClient _apiClient;
+  final ApiClient _apiClient = ApiClient();
 
   bool _busy = false;
 
   @override
   void initState() {
     super.initState();
-    _apiClient = ApiClient(http.Client(), context);
   }
 
   @override
@@ -40,7 +38,7 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
   }
 
   Future<void> _handlePasswordReset() async {
-    if (!(_formKey.currentState?.validate() ?? false)) return;
+    if (_busy || !(_formKey.currentState?.validate() ?? false)) return;
 
     setState(() => _busy = true);
     final email = _emailController.text.trim();
@@ -60,7 +58,7 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
         showToastNotification(
           context: context,
           title: 'Success',
-          message: responseData['message'] ?? 'Password reset link sent',
+          message: (responseData['message'] ?? 'Password reset link sent').toString(),
           isSuccess: true,
         );
         Navigator.pop(context);
@@ -69,16 +67,19 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
         showToastNotification(
           context: context,
           title: 'Error',
-          message: responseData['message'] ?? 'Unable to reset password',
+          message: (responseData['message'] ?? 'Unable to reset password').toString(),
           isSuccess: false,
         );
       }
-    } catch (e) {
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      showToastNotification(context: context, title: 'Error', message: e.message, isSuccess: false);
+    } catch (_) {
       if (!mounted) return;
       showToastNotification(
         context: context,
-        title: 'Error',
-        message: e.toString(),
+        title: 'Connection Error',
+        message: 'Please check your internet connection',
         isSuccess: false,
       );
     } finally {

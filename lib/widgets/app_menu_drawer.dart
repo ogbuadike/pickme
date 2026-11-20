@@ -13,16 +13,16 @@
 
 import 'dart:convert';
 import 'dart:math' as math;
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../api/api_client.dart';
 import '../api/url.dart';
 import '../routes/routes.dart';
 import '../themes/app_theme.dart';
-import '../utility/notification.dart';
+import '../utility/session_manager.dart';
 import 'fund_account_sheet.dart';
 
 class AppMenuDrawer extends StatefulWidget {
@@ -94,7 +94,7 @@ class _AppMenuDrawerState extends State<AppMenuDrawer>
 
       if (uid == null) throw Exception('User ID not found');
 
-      final api = ApiClient(http.Client(), context);
+      final api = ApiClient();
 
       final res = await api.request(
         ApiConstants.userInfoEndpoint,
@@ -103,7 +103,7 @@ class _AppMenuDrawerState extends State<AppMenuDrawer>
       );
 
       final body = jsonDecode(res.body);
-      if (body['error'] == false && body['user'] != null) {
+      if (body is Map && body['error'] == false && body['user'] is Map) {
 
         final String newBalStr = body['user']['user_bal']?.toString() ?? '0.0';
         final String newLastTranStr = body['user']['user_last_tran']?.toString() ?? '';
@@ -141,7 +141,7 @@ class _AppMenuDrawerState extends State<AppMenuDrawer>
         }
       }
     } catch (e) {
-      debugPrint('Balance refresh failed: $e');
+      if (kDebugMode) debugPrint('Balance refresh failed: ${e.runtimeType}');
     } finally {
       if (mounted) setState(() => _isRefreshingBalance = false);
     }
@@ -170,20 +170,24 @@ class _AppMenuDrawerState extends State<AppMenuDrawer>
   /// Navigate with haptic feedback
   void _nav(String route) {
     HapticFeedback.selectionClick();
-    Navigator.pop(context); // close drawer first
-    Navigator.pushNamed(context, route);
+    final nav = Navigator.of(context);
+    nav.pop(); // close drawer first
+    nav.pushNamed(route);
   }
 
   /// Show fund account sheet
   void _showFundSheet(double displayBalance) {
     HapticFeedback.mediumImpact();
-    Navigator.pop(context); // close drawer
+    final nav = Navigator.of(context);
+    final background = Theme.of(context).scaffoldBackgroundColor;
+    nav.pop(); // close drawer
     final currency = widget.user?['user_currency']?.toString() ?? 'NGN';
 
+    // Use the navigator's context: the drawer's own context goes away.
     showModalBottomSheet(
-      context: context,
+      context: nav.context,
       isScrollControlled: false,
-      backgroundColor: Theme.of(context).scaffoldBackgroundColor,
+      backgroundColor: background,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
       ),
@@ -210,16 +214,12 @@ class _AppMenuDrawerState extends State<AppMenuDrawer>
           ),
           TextButton(
             onPressed: () async {
+              // Capture the root navigator first: the drawer may be disposed
+              // while the server logout is in flight.
+              final nav = Navigator.of(context, rootNavigator: true);
               Navigator.pop(ctx);
-              final prefs = await SharedPreferences.getInstance();
-              await prefs.remove('user_id');
-              await prefs.remove('user_pin');
-              await prefs.remove('user_driver_id');
-              await prefs.remove('user_driver_status');
-              await prefs.remove('user_is_driver');
-              if (mounted) {
-                Navigator.pushReplacementNamed(context, AppRoutes.login);
-              }
+              await SessionManager.instance.logout();
+              nav.pushNamedAndRemoveUntil(AppRoutes.login, (_) => false);
             },
             style: TextButton.styleFrom(foregroundColor: AppColors.error),
             child: const Text('Sign Out'),

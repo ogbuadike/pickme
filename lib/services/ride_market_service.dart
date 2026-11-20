@@ -1,20 +1,24 @@
 // lib/services/ride_market_service.dart
-// RideMarketService — ApiClient-style requests (same pattern as login/set_pin)
-// ✅ Updated to support NEW driver-based pricing + images + rank badge data.
-// ✅ Sends trip_km to drivers endpoint (and offers endpoint optionally) so PHP returns estimated_total.
-// ✅ Adds stable driver ordering in-service (prevents “shuffle” across ticks for ALL consumers).
-// ✅ Fingerprint now includes trip_km + pricing (so UI updates when destination/trip changes).
-// ✅ NOW supports user_id (rider id) on BOTH offers + drivers requests (via userId / userIdProvider).
-// - Resilient JSON parsing for dynamic backend output
-// - Polls offers + nearby drivers (cursor supported)
-// - NO print(); logs are assert-guarded (zero overhead in release)
-// - No overlapping ticks (prevents hangs on slow devices)
-// - Snapshot dedupe (won't spam UI with identical data)
-
+//
+// RideMarketService — polls ride_offers.php + drivers_nearby.php for the
+// Street Ride / Campus Ride "select a driver" market.
+//
+//  * one active stream per instance; restarting the stream invalidates any
+//    tick still in flight (generation counter) so stale results never leak
+//    into a new route;
+//  * ticks never overlap; failures back off exponentially with jitter
+//    (429 honours Retry-After) and a single failed tick never wipes the last
+//    good driver list;
+//  * polling pauses while the app is in the background;
+//  * offers change slowly and are fetched at a lower cadence and cached;
+//  * very large responses are decoded off the UI isolate;
+//  * stable driver ordering across ticks, snapshot de-duplication.
 import 'dart:async';
 import 'dart:convert';
 import 'dart:math' as math;
 
+import 'package:flutter/foundation.dart';
+import 'package:flutter/widgets.dart' show AppLifecycleListener, AppLifecycleState;
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 
 import '../api/api_client.dart';
@@ -42,6 +46,9 @@ class RideOffer {
   final double? estimatedTotal;
   final String? vehicleType;
 
+  /// Driver behind this offer (ride_offers.php returns one offer per driver).
+  final String? driverId;
+
   const RideOffer({
     required this.id,
     required this.provider,
@@ -58,6 +65,7 @@ class RideOffer {
     this.baseFare,
     this.estimatedTotal,
     this.vehicleType,
+    this.driverId,
   });
 
   static int _asInt(dynamic v, [int fallback = 0]) {
@@ -110,6 +118,7 @@ class RideOffer {
       baseFare: baseFare,
       estimatedTotal: estTotal,
       vehicleType: (m['vehicle_type'] ?? m['vehicle'] ?? m['type'])?.toString(),
+      driverId: (m['driver_id'] ?? m['driverId'])?.toString(),
     );
   }
 }
@@ -203,13 +212,6 @@ class DriverCar {
     if (v is int) return v;
     if (v is num) return v.round();
     return int.tryParse(v.toString());
-  }
-
-  static int _asInt(dynamic v, [int fallback = 0]) {
-    if (v == null) return fallback;
-    if (v is int) return v;
-    if (v is num) return v.round();
-    return int.tryParse(v.toString()) ?? fallback;
   }
 
   static List<String> _asStringList(dynamic v) {
@@ -321,6 +323,78 @@ class RideMarketSnapshot {
   const RideMarketSnapshot({required this.offers, required this.drivers});
 }
 
+// ── Isolate-friendly parsers (top-level so `compute` can run them) ──────────
+
+/// Bodies larger than this are decoded on a background isolate.
+const int _kIsolateParseThreshold = 96 * 1024;
+
+Map<String, dynamic> _decodeMapSync(String body) {
+  try {
+    final dynamic j = jsonDecode(body);
+    if (j is Map<String, dynamic>) return j;
+    if (j is Map) return j.cast<String, dynamic>();
+  } catch (_) {}
+  return <String, dynamic>{};
+}
+
+bool _isErrorTrue(dynamic v) {
+  if (v == null) return false;
+  if (v is bool) return v;
+  final String s = v.toString().trim().toLowerCase();
+  return s == '1' || s == 'true' || s == 'yes';
+}
+
+List<dynamic> _readList(Map<String, dynamic> m, List<String> keys) {
+  for (final String k in keys) {
+    final dynamic v = m[k];
+    if (v is List) return v;
+  }
+  return const <dynamic>[];
+}
+
+class _DriversParse {
+  final bool ok;
+  final List<DriverCar> drivers;
+  final String? cursor;
+  const _DriversParse(this.ok, this.drivers, this.cursor);
+}
+
+_DriversParse _parseDrivers(String body) {
+  final Map<String, dynamic> j = _decodeMapSync(body);
+  if (j.isEmpty || _isErrorTrue(j['error'])) return const _DriversParse(false, <DriverCar>[], null);
+  final List<DriverCar> drivers = _readList(j, const <String>['drivers', 'delta', 'driversNearby', 'data', 'results'])
+      .whereType<Map>()
+      .map((Map e) => DriverCar.fromJson(e.cast<String, dynamic>()))
+      .where((DriverCar x) =>
+          x.id.isNotEmpty &&
+          x.ll.latitude.isFinite &&
+          x.ll.longitude.isFinite &&
+          !(x.ll.latitude == 0.0 && x.ll.longitude == 0.0))
+      .toList(growable: true);
+  return _DriversParse(true, drivers, j['cursor']?.toString());
+}
+
+class _OffersParse {
+  final bool ok;
+  final List<RideOffer> offers;
+  const _OffersParse(this.ok, this.offers);
+}
+
+_OffersParse _parseOffers(String body) {
+  final Map<String, dynamic> j = _decodeMapSync(body);
+  if (j.isEmpty || _isErrorTrue(j['error'])) return const _OffersParse(false, <RideOffer>[]);
+  final List<RideOffer> offers = _readList(j, const <String>['offers', 'data', 'results'])
+      .whereType<Map>()
+      .map((Map e) => RideOffer.fromJson(e.cast<String, dynamic>()))
+      .toList(growable: false);
+  return _OffersParse(true, offers);
+}
+
+Future<R> _parseMaybeInBackground<R>(R Function(String) parser, String body) {
+  if (body.length < _kIsolateParseThreshold) return Future<R>.value(parser(body));
+  return compute<String, R>(parser, body);
+}
+
 class RideMarketService {
   final ApiClient api;
   final double searchRadiusKm;
@@ -329,14 +403,25 @@ class RideMarketService {
   Timer? _timer;
   StreamController<RideMarketSnapshot>? _controller;
   String? _cursor;
-
+  int _generation = 0;
   bool _inFlight = false;
+  bool _backgrounded = false;
+  AppLifecycleListener? _lifecycle;
+  void Function()? _resumeTick;
 
-  // Dedupe: don't spam UI with identical snapshots
+  int _consecutiveFailures = 0;
+  final math.Random _rng = math.Random();
+
+  // Last good data (a failed tick never wipes the UI).
+  List<RideOffer> _lastOffers = const <RideOffer>[];
+  List<DriverCar> _lastDrivers = const <DriverCar>[];
+  DateTime _lastOffersAt = DateTime.fromMillisecondsSinceEpoch(0);
+
+  // Dedupe: don't spam the UI with identical snapshots.
   String _lastFingerprint = '';
   DateTime _lastEmitAt = DateTime.fromMillisecondsSinceEpoch(0);
 
-  // ✅ Stable ordering (prevents “shuffle” across ticks)
+  // Stable ordering (prevents "shuffle" across ticks).
   final Map<String, int> _stableDriverOrder = <String, int>{};
   int _stableSeq = 0;
 
@@ -347,59 +432,22 @@ class RideMarketService {
   });
 
   void _dbg(String msg, [Object? data]) {
-    assert(() {
-      if (!debug) return true;
-      final d = data == null ? '' : ' → $data';
-      // ignore: avoid_print
-      // debugPrint('[RideMarketService] $msg$d');
-      return true;
-    }());
+    if (!debug || !kDebugMode) return;
+    debugPrint('[RideMarketService] $msg${data == null ? '' : ' -> $data'}');
   }
 
-  bool _isErrorTrue(dynamic v) {
-    if (v == null) return false;
-    if (v is bool) return v;
-    final s = v.toString().trim().toLowerCase();
-    return s == '1' || s == 'true' || s == 'yes';
-  }
-
-  Map<String, dynamic> _decodeMap(String body) {
-    try {
-      final j = jsonDecode(body);
-      if (j is Map<String, dynamic>) return j;
-      if (j is Map) return j.cast<String, dynamic>();
-    } catch (_) {}
-    return <String, dynamic>{};
-  }
-
-  List<dynamic> _readList(Map<String, dynamic> m, List<String> keys) {
-    for (final k in keys) {
-      final v = m[k];
-      if (v is List) return v;
-    }
-    return const [];
-  }
-
-  double _haversineKm(LatLng a, LatLng b) {
-    const r = 6371.0;
+  static double _haversineKm(LatLng a, LatLng b) {
+    const double r = 6371.0;
     double toRad(double deg) => deg * (math.pi / 180.0);
-
-    final dLat = toRad(b.latitude - a.latitude);
-    final dLng = toRad(b.longitude - a.longitude);
-
-    final la1 = toRad(a.latitude);
-    final la2 = toRad(b.latitude);
-
-    final h = math.sin(dLat / 2) * math.sin(dLat / 2) +
-        math.cos(la1) * math.cos(la2) * math.sin(dLng / 2) * math.sin(dLng / 2);
-
-    final c = 2 * math.asin(math.min(1.0, math.sqrt(h)));
-    return r * c;
+    final double dLat = toRad(b.latitude - a.latitude);
+    final double dLng = toRad(b.longitude - a.longitude);
+    final double h = math.sin(dLat / 2) * math.sin(dLat / 2) +
+        math.cos(toRad(a.latitude)) * math.cos(toRad(b.latitude)) * math.sin(dLng / 2) * math.sin(dLng / 2);
+    return r * 2 * math.asin(math.min(1.0, math.sqrt(h)));
   }
 
   String _fingerprint(double tripKm, List<RideOffer> offers, List<DriverCar> drivers) {
-    // Stable fingerprint: includes tripKm + pricing bits (so fare updates propagate)
-    final sb = StringBuffer()
+    final StringBuffer sb = StringBuffer()
       ..write('km')
       ..write(tripKm.toStringAsFixed(2))
       ..write('|o')
@@ -407,311 +455,312 @@ class RideMarketService {
       ..write('|d')
       ..write(drivers.length)
       ..write('|');
-
-    for (final d in drivers) {
-      final lat = d.ll.latitude.toStringAsFixed(5);
-      final lng = d.ll.longitude.toStringAsFixed(5);
-      final hdg = d.heading.toStringAsFixed(0);
-      final ppk = (d.pricePerKm ?? 0).toStringAsFixed(0);
+    for (final RideOffer o in offers) {
+      sb
+        ..write(o.id)
+        ..write(':')
+        ..write(o.price)
+        ..write(';');
+    }
+    for (final DriverCar d in drivers) {
       sb
         ..write(d.id)
         ..write(':')
-        ..write(lat)
+        ..write(d.ll.latitude.toStringAsFixed(5))
         ..write(',')
-        ..write(lng)
+        ..write(d.ll.longitude.toStringAsFixed(5))
         ..write('@')
-        ..write(hdg)
+        ..write(d.heading.toStringAsFixed(0))
         ..write('#')
-        ..write(ppk)
+        ..write((d.estimatedTotal ?? d.pricePerKm ?? 0).toStringAsFixed(0))
         ..write(';');
-      if (sb.length > 1800) break; // cap work on huge lists
+      if (sb.length > 4000) break; // cap work on huge lists
     }
     return sb.toString();
   }
 
+  void _ensureLifecycle() {
+    if (_lifecycle != null) return;
+    try {
+      _lifecycle = AppLifecycleListener(onStateChange: (AppLifecycleState state) {
+        final bool bg = state == AppLifecycleState.paused ||
+            state == AppLifecycleState.hidden ||
+            state == AppLifecycleState.detached;
+        if (bg == _backgrounded) return;
+        _backgrounded = bg;
+        if (!bg) _resumeTick?.call();
+      });
+    } catch (_) {
+      // No binding (tests) - ignore lifecycle.
+    }
+  }
+
   /// Starts a polling stream (single active stream per service instance).
-  ///
-  /// ✅ New: pass userId (or userIdProvider) so backend can personalize / log / filter.
-  /// ✅ New: pass tripKm (or tripKmProvider) so backend returns estimated_total.
+  /// Cancelling the subscription (or calling [stop]/[dispose]) stops polling.
   Stream<RideMarketSnapshot> stream({
     required LatLng origin,
     required LatLng destination,
-    String rideType = 'street_ride', // <--- ADDED THIS
+    String rideType = 'street_ride',
     Duration pollInterval = const Duration(seconds: 2),
     bool simulateOnFailure = false,
-
-    // optional dynamic providers
     LatLng Function()? originProvider,
     LatLng Function()? destinationProvider,
-
-    // ✅ NEW: user id support
     String? userId,
     String Function()? userIdProvider,
-
-    // ✅ NEW: trip distance in KM (used for driver price_total/estimated_total)
     double? tripKm,
     double Function()? tripKmProvider,
-
-    // optional switches
     bool driversOnly = false,
     bool offersOnly = false,
-
     Duration requestTimeout = const Duration(seconds: 8),
-
-    // optional: choose vehicle filter you send to backend
     String vehicle = 'car',
+    double? radiusKm,
+
+    /// Offers barely change between ticks; refresh them at this cadence.
+    Duration offersRefreshEvery = const Duration(seconds: 10),
   }) {
-    // stop any previous stream cleanly
-    _timer?.cancel();
-    _timer = null;
-    _controller?.close();
-    _controller = StreamController<RideMarketSnapshot>.broadcast();
+    _stopInternal(closeController: true);
+    final int gen = ++_generation;
+    final StreamController<RideMarketSnapshot> controller = StreamController<RideMarketSnapshot>.broadcast();
+    _controller = controller;
     _cursor = null;
     _inFlight = false;
+    _consecutiveFailures = 0;
     _lastFingerprint = '';
     _lastEmitAt = DateTime.fromMillisecondsSinceEpoch(0);
-
-    // keep stable ordering across restarts? (reset for a new stream)
+    _lastOffers = const <RideOffer>[];
+    _lastDrivers = const <DriverCar>[];
+    _lastOffersAt = DateTime.fromMillisecondsSinceEpoch(0);
     _stableDriverOrder.clear();
     _stableSeq = 0;
+    _ensureLifecycle();
 
-    final controller = _controller!;
-    _dbg('stream start');
+    final double radius = (radiusKm ?? searchRadiusKm).clamp(0.5, 50.0).toDouble();
+    _dbg('stream start', rideType);
 
     LatLng getO() => originProvider?.call() ?? origin;
     LatLng getD() => destinationProvider?.call() ?? destination;
-
-    String getUid() {
-      final v = userIdProvider?.call() ?? userId ?? '';
-      final s = v.trim();
-      return s;
+    String getUid() => (userIdProvider?.call() ?? userId ?? '').trim();
+    double getTripKm(LatLng o, LatLng d) {
+      double v = tripKmProvider?.call() ?? tripKm ?? 0;
+      if (!(v > 0)) v = _haversineKm(o, d); // no route distance yet
+      if (v.isNaN || v.isInfinite || v < 0) return 0.0;
+      return v.clamp(0.0, 500.0).toDouble();
     }
 
-    double getTripKm(LatLng o, LatLng d) {
-      final v = tripKmProvider?.call() ?? tripKm ?? _haversineKm(o, d);
-      if (v.isNaN || v.isInfinite) return 0.0;
-      // keep sane bounds
-      return v.clamp(0.0, 500.0);
+    bool alive() => gen == _generation && !controller.isClosed;
+
+    void scheduleNext(Duration delay) {
+      _timer?.cancel();
+      _timer = null;
+      if (!alive() || _backgrounded) return;
+      _timer = Timer(delay, () {
+        _timer = null;
+        _resumeTick?.call();
+      });
+    }
+
+    Duration nextDelay({Duration? retryAfter}) {
+      if (_consecutiveFailures == 0) return pollInterval;
+      final int exp = math.min(_consecutiveFailures, 4);
+      int ms = math.min(pollInterval.inMilliseconds * (1 << exp), 30000);
+      if (retryAfter != null) ms = math.max(ms, retryAfter.inMilliseconds);
+      return Duration(milliseconds: ms + (ms * 0.3 * _rng.nextDouble()).round());
     }
 
     Future<void> tick() async {
-      if (controller.isClosed) return;
-      if (_inFlight) return; // no overlap
+      if (!alive() || _inFlight || _backgrounded) return;
       _inFlight = true;
-
-      List<RideOffer> offers = const [];
-      List<DriverCar> drivers = const [];
-
+      Duration? retryAfter;
+      bool anyFailed = false;
       try {
-        final o = getO();
-        final d = getD();
-        final uid = getUid();
-        final tripKmVal = getTripKm(o, d);
+        final LatLng o = getO();
+        final LatLng d = getD();
+        final String uid = getUid();
+        final double tripKmVal = getTripKm(o, d);
 
-        // ---------- OFFERS ----------
-        if (!driversOnly) {
+        List<RideOffer>? offers;
+        List<DriverCar>? drivers;
+
+        final bool offersDue = !driversOnly &&
+            (_lastOffers.isEmpty || DateTime.now().difference(_lastOffersAt) >= offersRefreshEvery);
+
+        Future<void> fetchOffers() async {
           try {
-            final offData = <String, String>{
-              'origin': '${o.latitude},${o.longitude}',
-              'destination': '${d.latitude},${d.longitude}',
-              'radius_km': searchRadiusKm.toStringAsFixed(1),
+            final Map<String, String> data = <String, String>{
+              // ride_offers.php reads $in['origin']['lat'] -> PHP array syntax.
+              'origin[lat]': o.latitude.toString(),
+              'origin[lng]': o.longitude.toString(),
+              'destination[lat]': d.latitude.toString(),
+              'destination[lng]': d.longitude.toString(),
+              'radius_km': radius.toStringAsFixed(1),
               'vehicle': vehicle,
-              // ✅ send trip_km for backends that use it
               'trip_km': tripKmVal.toStringAsFixed(3),
-              'ride_type': rideType, // <--- ADDED THIS
+              'ride_type': rideType,
+              if (uid.isNotEmpty) 'user_id': uid,
             };
-
-            // ✅ user id (optional)
-            if (uid.isNotEmpty) {
-              offData['user_id'] = uid;
-              //offData['rider_id'] = uid; // harmless alias if backend ignores
-            }
-
-            final offRes = await api
-                .request(
+            final res = await api.request(
               ApiConstants.rideOffersEndpoint,
               method: 'POST',
-              data: offData, // ✅ Map<String,String>
-            )
-                .timeout(requestTimeout);
-
-            final offJ = _decodeMap(offRes.body);
-            if (!_isErrorTrue(offJ['error'])) {
-              final rawOffers = _readList(offJ, ['offers', 'data', 'results']);
-              offers = rawOffers
-                  .whereType<Map>()
-                  .map((e) => RideOffer.fromJson(e.cast<String, dynamic>()))
-                  .toList(growable: false);
+              data: data,
+              retryCount: 0,
+              idempotent: true,
+              timeout: requestTimeout,
+            );
+            final _OffersParse p = await _parseMaybeInBackground(_parseOffers, res.body);
+            if (p.ok) {
+              offers = p.offers;
             } else {
-              _dbg('offers error=true', offJ['message'] ?? '');
+              _dbg('offers error=true');
             }
           } catch (e) {
-            _dbg('offers fetch failed', e);
+            anyFailed = true;
+            if (e is ApiException && e.isRateLimited) retryAfter = e.retryAfter;
+            _dbg('offers fetch failed', e.runtimeType);
           }
         }
 
-        // ---------- DRIVERS ----------
-        if (!offersOnly) {
+        Future<void> fetchDrivers() async {
           try {
-            final drvData = <String, String>{
+            final Map<String, String> data = <String, String>{
               'lat': o.latitude.toString(),
               'lng': o.longitude.toString(),
-              'radius_km': searchRadiusKm.toStringAsFixed(1),
+              'radius_km': radius.toStringAsFixed(1),
               'vehicle': vehicle,
               'cursor': _cursor ?? '',
-              // ✅ critical for new PHP pricing
               'trip_km': tripKmVal.toStringAsFixed(3),
-              'ride_type': rideType, // <--- ADDED THIS
+              'ride_type': rideType,
+              if (uid.isNotEmpty) 'user_id': uid,
             };
-
-            // ✅ user id (optional)
-            if (uid.isNotEmpty) {
-              drvData['user_id'] = uid;
-              drvData['rider_id'] = uid; // harmless alias if backend ignores
-            }
-
-            final drvRes = await api
-                .request(
+            final res = await api.request(
               ApiConstants.driversNearbyEndpoint,
               method: 'POST',
-              data: drvData, // ✅ Map<String,String>
-            )
-                .timeout(requestTimeout);
-
-            final drvJ = _decodeMap(drvRes.body);
-            if (!_isErrorTrue(drvJ['error'])) {
-              final rawDrivers = _readList(drvJ, ['drivers', 'delta', 'driversNearby', 'data', 'results']);
-              drivers = rawDrivers
-                  .whereType<Map>()
-                  .map((e) => DriverCar.fromJson(e.cast<String, dynamic>()))
-                  .where((x) => x.id.isNotEmpty && x.ll.latitude != 0.0 && x.ll.longitude != 0.0)
-                  .toList(growable: false);
-
-              // ✅ stable ordering to stop shuffling across ticks
-              for (final d0 in drivers) {
-                _stableDriverOrder.putIfAbsent(d0.id, () => _stableSeq++);
-              }
-              drivers.sort((a, b) => (_stableDriverOrder[a.id] ?? 0).compareTo(_stableDriverOrder[b.id] ?? 0));
-
-              _cursor = drvJ['cursor']?.toString() ?? _cursor;
+              data: data,
+              retryCount: 0,
+              idempotent: true,
+              timeout: requestTimeout,
+            );
+            final _DriversParse p = await _parseMaybeInBackground(_parseDrivers, res.body);
+            if (p.ok) {
+              drivers = p.drivers;
+              _cursor = p.cursor ?? _cursor;
             } else {
-              _dbg('drivers error=true', drvJ['message'] ?? '');
+              anyFailed = true;
+              _dbg('drivers error=true');
             }
           } catch (e) {
-            _dbg('drivers fetch failed', e);
+            anyFailed = true;
+            if (e is ApiException && e.isRateLimited) retryAfter = e.retryAfter;
+            _dbg('drivers fetch failed', e.runtimeType);
           }
         }
 
-        // ---------- SIMULATE (optional) ----------
-        if (simulateOnFailure && offers.isEmpty && drivers.isEmpty) {
-          final o = getO();
-          final d = getD();
-          final tripKmVal = getTripKm(o, d);
+        await Future.wait<void>(<Future<void>>[
+          if (offersDue) fetchOffers(),
+          if (!offersOnly) fetchDrivers(),
+        ]);
+        if (!alive()) return; // route changed / stopped while in flight
 
-          offers = List.generate(3, (i) {
-            return RideOffer(
-              id: 'sim-offer-$i',
-              provider: 'SimProvider ${i + 1}',
-              category: 'Standard',
-              etaToPickupMin: 2 + i,
-              price: 700 + (i * 120),
-              surge: i == 1,
-              driverName: 'SimDriver ${i + 1}',
-              rating: 4.7 - (i * 0.1),
-              carPlate: 'SIM-${100 + i}',
-              currency: 'NGN',
-              pricePerKm: 220 + (i * 20),
-              baseFare: 200,
-              estimatedTotal: (200 + (220 + (i * 20)) * tripKmVal),
-              vehicleType: 'car',
-            );
-          });
-
-          drivers = List.generate(8, (i) {
-            final lat = o.latitude + (i + 1) * 0.0009;
-            final lng = o.longitude + (i + 1) * 0.0007;
-            final id = 'sim-${i + 1}';
-
-            final ppk = 220.0 + (i * 10);
-            final base = 200.0;
-            final total = tripKmVal > 0 ? (base + ppk * tripKmVal) : 0.0;
-
-            return DriverCar(
-              id: id,
-              ll: LatLng(lat, lng),
-              heading: (i * 35).toDouble(),
-              name: 'Sim ${i + 1}',
-              category: 'Economy',
-              rating: 4.8,
-              carPlate: 'SIM-${i + 1}',
-              distanceKm: (i + 1) * 0.4,
-              etaMin: 2 + i,
-
-              vehicleType: 'car',
-              seats: 4,
-              vehicleImages: const [],
-              vehicleDescription: 'Sim car, AC, clean interior',
-              carImageUrl: null,
-              avatarUrl: null,
-              rank: (i % 4 == 0) ? 'Gold' : 'Verified',
-
-              currency: 'NGN',
-              pricePerKm: ppk,
-              baseFare: base,
-              tripKm: tripKmVal,
-              estimatedTotal: total,
-            );
-          });
-
-          for (final d0 in drivers) {
+        if (offers != null) {
+          _lastOffers = offers!;
+          _lastOffersAt = DateTime.now();
+        }
+        if (drivers != null) {
+          final List<DriverCar> list = drivers!;
+          for (final DriverCar d0 in list) {
             _stableDriverOrder.putIfAbsent(d0.id, () => _stableSeq++);
           }
-          drivers.sort((a, b) => (_stableDriverOrder[a.id] ?? 0).compareTo(_stableDriverOrder[b.id] ?? 0));
+          list.sort((DriverCar a, DriverCar b) =>
+              (_stableDriverOrder[a.id] ?? 0).compareTo(_stableDriverOrder[b.id] ?? 0));
+          _lastDrivers = List<DriverCar>.unmodifiable(list);
         }
 
-        // ---------- EMIT (dedupe) ----------
-        if (!controller.isClosed) {
-          final o = getO();
-          final d = getD();
-          final tripKmVal = getTripKm(o, d);
+        _consecutiveFailures = anyFailed ? _consecutiveFailures + 1 : 0;
 
-          final fp = _fingerprint(tripKmVal, offers, drivers);
-          final now = DateTime.now();
+        if (simulateOnFailure && _lastOffers.isEmpty && _lastDrivers.isEmpty && anyFailed) {
+          _lastDrivers = _simulatedDrivers(o, tripKmVal);
+        }
 
-          // allow emit if changed OR if 6s elapsed (keeps UI alive without spamming)
-          final allow = (fp != _lastFingerprint) || now.difference(_lastEmitAt) > const Duration(seconds: 6);
+        // A failed tick keeps the previous data; nothing new to emit unless
+        // this is the very first tick (so the UI can leave its loading state).
+        final bool firstEmit = _lastEmitAt.millisecondsSinceEpoch == 0;
+        if (offers == null && drivers == null && !firstEmit) return;
 
-          if (allow) {
-            _lastFingerprint = fp;
-            _lastEmitAt = now;
-            controller.add(RideMarketSnapshot(offers: offers, drivers: drivers));
-          }
+        final String fp = _fingerprint(tripKmVal, _lastOffers, _lastDrivers);
+        final DateTime now = DateTime.now();
+        if (fp != _lastFingerprint || now.difference(_lastEmitAt) > const Duration(seconds: 6)) {
+          _lastFingerprint = fp;
+          _lastEmitAt = now;
+          controller.add(RideMarketSnapshot(offers: _lastOffers, drivers: _lastDrivers));
         }
       } catch (e) {
-        _dbg('tick failed', e);
+        _consecutiveFailures++;
+        _dbg('tick failed', e.runtimeType);
       } finally {
         _inFlight = false;
+        if (alive()) scheduleNext(nextDelay(retryAfter: retryAfter));
       }
     }
 
-    // immediate + periodic polling
+    _resumeTick = () {
+      if (alive()) tick();
+    };
+
     tick();
-    _timer = Timer.periodic(pollInterval, (_) => tick());
 
     controller.onCancel = () {
       _dbg('stream cancelled');
-      _timer?.cancel();
-      _timer = null;
+      if (identical(_controller, controller)) _stopInternal(closeController: false);
     };
 
     return controller.stream;
   }
 
-  void dispose() {
-    _dbg('dispose');
+  List<DriverCar> _simulatedDrivers(LatLng o, double tripKmVal) {
+    return List<DriverCar>.generate(8, (int i) {
+      const double base = 200.0;
+      final double ppk = 220.0 + (i * 10);
+      return DriverCar(
+        id: 'sim-${i + 1}',
+        ll: LatLng(o.latitude + (i + 1) * 0.0009, o.longitude + (i + 1) * 0.0007),
+        heading: (i * 35).toDouble(),
+        name: 'Sim ${i + 1}',
+        category: 'Economy',
+        rating: 4.8,
+        carPlate: 'SIM-${i + 1}',
+        distanceKm: (i + 1) * 0.4,
+        etaMin: 2 + i,
+        vehicleType: 'car',
+        seats: 4,
+        rank: (i % 4 == 0) ? 'Gold' : 'Verified',
+        pricePerKm: ppk,
+        baseFare: base,
+        tripKm: tripKmVal,
+        estimatedTotal: tripKmVal > 0 ? (base + ppk * tripKmVal) : 0.0,
+      );
+    });
+  }
+
+  void _stopInternal({required bool closeController}) {
+    _generation++;
     _timer?.cancel();
     _timer = null;
-    _controller?.close();
-    _controller = null;
+    _resumeTick = null;
+    _inFlight = false;
+    if (closeController) {
+      final StreamController<RideMarketSnapshot>? c = _controller;
+      _controller = null;
+      if (c != null && !c.isClosed) c.close();
+    }
+    _lifecycle?.dispose();
+    _lifecycle = null;
+    _backgrounded = false;
+  }
+
+  /// Stops polling and closes the current stream.
+  void stop() => _stopInternal(closeController: true);
+
+  void dispose() {
+    _dbg('dispose');
+    _stopInternal(closeController: true);
   }
 }

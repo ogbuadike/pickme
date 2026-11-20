@@ -4,7 +4,7 @@ import 'package:flutter/services.dart';
 
 /// AdvancedDropdownModal
 /// - Single-select field with modal picker
-/// - Works with List<Map<String, dynamic>>
+/// - Works with `List<Map<String, dynamic>>`
 /// - Keys: displayKey (required). Optionals: idKey, subtitleKey, logoKey, descriptionKey
 /// - Extras: compact UI, recentItems, clear button, search with highlight & ranking
 class AdvancedDropdownModal extends StatelessWidget {
@@ -27,7 +27,7 @@ class AdvancedDropdownModal extends StatelessWidget {
   final bool allowClear; // Show clear (X) inside the field when a value is selected
 
   const AdvancedDropdownModal({
-    Key? key,
+    super.key,
     required this.label,
     this.value,
     required this.items,
@@ -41,7 +41,7 @@ class AdvancedDropdownModal extends StatelessWidget {
     this.compact = false,
     this.recentItems,
     this.allowClear = true,
-  }) : super(key: key);
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -64,7 +64,7 @@ class AdvancedDropdownModal extends StatelessWidget {
         Material(
           color: cs.surface,
           shape: StadiumBorder(
-            side: BorderSide(color: cs.surfaceVariant),
+            side: BorderSide(color: cs.surfaceContainerHighest),
           ),
           child: InkWell(
             borderRadius: BorderRadius.circular(100),
@@ -114,7 +114,7 @@ class AdvancedDropdownModal extends StatelessWidget {
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
-      barrierColor: Colors.black.withOpacity(.35),
+      barrierColor: Colors.black.withValues(alpha: .35),
       builder: (_) {
         return _SelectionSheet(
           title: modalTitle,
@@ -192,6 +192,7 @@ class _SelectionSheetState extends State<_SelectionSheet> {
   void _onSearchChanged(String q) {
     _debounce?.cancel();
     _debounce = Timer(const Duration(milliseconds: 140), () {
+      if (!mounted) return;
       final query = q.trim().toLowerCase();
       setState(() {
         if (query.isEmpty) {
@@ -312,10 +313,10 @@ class _SelectionSheetState extends State<_SelectionSheet> {
                         prefixIcon: Icon(Icons.search_rounded, color: cs.primary, size: widget.compact ? 20 : 22),
                         isDense: true,
                         filled: true,
-                        fillColor: cs.surfaceVariant.withOpacity(.35),
+                        fillColor: cs.surfaceContainerHighest.withValues(alpha: .35),
                         contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
                         border: OutlineInputBorder(
-                          borderSide: BorderSide(color: cs.surfaceVariant),
+                          borderSide: BorderSide(color: cs.surfaceContainerHighest),
                           borderRadius: BorderRadius.circular(28),
                         ),
                         focusedBorder: OutlineInputBorder(
@@ -417,10 +418,10 @@ class _SelectionSheetState extends State<_SelectionSheet> {
         decoration: BoxDecoration(
           color: cs.surface,
           borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: selected ? cs.primary : cs.surfaceVariant, width: selected ? 1.4 : 1),
+          border: Border.all(color: selected ? cs.primary : cs.surfaceContainerHighest, width: selected ? 1.4 : 1),
           boxShadow: [
             if (selected)
-              BoxShadow(color: cs.primary.withOpacity(.12), blurRadius: 12, offset: const Offset(0, 4)),
+              BoxShadow(color: cs.primary.withValues(alpha: .12), blurRadius: 12, offset: const Offset(0, 4)),
           ],
         ),
         child: Row(

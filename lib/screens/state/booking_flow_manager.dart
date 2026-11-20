@@ -1,17 +1,15 @@
-// lib/screens/home/state/booking_flow_manager.dart
+// lib/screens/state/booking_flow_manager.dart
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-import '../../../api/api_client.dart';
-import '../../../themes/app_theme.dart';
-import '../../../ui/ui_scale.dart';
-import '../../../utility/notification.dart';
-import '../../../services/booking_controller.dart';
+import '../../api/api_client.dart';
+import '../../themes/app_theme.dart';
+import '../../ui/ui_scale.dart';
+import '../../utility/notification.dart';
+import '../../services/booking_controller.dart';
 import '../trip_navigation_page.dart';
-
-import 'home_models.dart';
 
 class BookingFlowManager {
   static Future<void> initiateBooking({
@@ -39,6 +37,11 @@ class BookingFlowManager {
     required Future<Map<String, dynamic>?> Function() snapshotProvider,
     required Future<void> Function() onStartTrip,
     required Future<void> Function() onCancelTrip,
+    /// Planned route length in km (drives server-side fare validation).
+    double? tripKm,
+    /// Controller from a previous booking attempt; disposed before a new one
+    /// is created so no stale poller keeps running.
+    BookingController? previousController,
   }) async {
     final double userBalance = user != null
         ? double.tryParse(user['bal']?.toString() ?? user['user_bal']?.toString() ?? '0.0') ?? 0.0
@@ -61,10 +64,10 @@ class BookingFlowManager {
             margin: EdgeInsets.all(uiScale.inset(16)),
             padding: EdgeInsets.all(uiScale.inset(20)),
             decoration: BoxDecoration(
-              color: isDark ? cs.surface.withOpacity(0.95) : Colors.white.withOpacity(0.95),
+              color: isDark ? cs.surface.withValues(alpha: 0.95) : Colors.white.withValues(alpha: 0.95),
               borderRadius: BorderRadius.circular(uiScale.radius(24)),
-              border: Border.all(color: isDark ? cs.outline.withOpacity(0.5) : AppColors.mintBgLight, width: 1.5),
-              boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.2), blurRadius: 30, offset: const Offset(0, 10))],
+              border: Border.all(color: isDark ? cs.outline.withValues(alpha: 0.5) : AppColors.mintBgLight, width: 1.5),
+              boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.2), blurRadius: 30, offset: const Offset(0, 10))],
             ),
             child: Column(
               mainAxisSize: MainAxisSize.min,
@@ -74,7 +77,7 @@ class BookingFlowManager {
                     child: Container(
                         width: 40, height: 4,
                         margin: EdgeInsets.only(bottom: uiScale.gap(16)),
-                        decoration: BoxDecoration(color: isDark ? cs.onSurfaceVariant.withOpacity(0.5) : Colors.grey.withOpacity(0.3), borderRadius: BorderRadius.circular(2))
+                        decoration: BoxDecoration(color: isDark ? cs.onSurfaceVariant.withValues(alpha: 0.5) : Colors.grey.withValues(alpha: 0.3), borderRadius: BorderRadius.circular(2))
                     )
                 ),
                 Text(
@@ -87,15 +90,15 @@ class BookingFlowManager {
 
                 Container(
                   decoration: BoxDecoration(
-                    color: isDark ? cs.surfaceVariant.withOpacity(0.5) : AppColors.mintBgLight.withOpacity(0.3),
+                    color: isDark ? cs.surfaceContainerHighest.withValues(alpha: 0.5) : AppColors.mintBgLight.withValues(alpha: 0.3),
                     borderRadius: BorderRadius.circular(uiScale.radius(16)),
-                    border: Border.all(color: isDark ? cs.outline.withOpacity(0.5) : AppColors.mintBgLight),
+                    border: Border.all(color: isDark ? cs.outline.withValues(alpha: 0.5) : AppColors.mintBgLight),
                   ),
                   child: ListTile(
                     contentPadding: EdgeInsets.symmetric(horizontal: uiScale.inset(16), vertical: uiScale.inset(4)),
                     leading: Container(
                       padding: EdgeInsets.all(uiScale.inset(8)),
-                      decoration: BoxDecoration(color: (isDark ? cs.primary : Colors.blue).withOpacity(0.15), shape: BoxShape.circle),
+                      decoration: BoxDecoration(color: (isDark ? cs.primary : Colors.blue).withValues(alpha: 0.15), shape: BoxShape.circle),
                       child: Icon(Icons.account_balance_wallet_rounded, color: isDark ? cs.primary : Colors.blue),
                     ),
                     title: Text('Wallet (Automatic)', style: TextStyle(color: isDark ? cs.onSurface : AppColors.textPrimary, fontWeight: FontWeight.w800, fontSize: uiScale.font(15))),
@@ -118,15 +121,15 @@ class BookingFlowManager {
 
                 Container(
                   decoration: BoxDecoration(
-                    color: isDark ? cs.surfaceVariant.withOpacity(0.5) : AppColors.mintBgLight.withOpacity(0.3),
+                    color: isDark ? cs.surfaceContainerHighest.withValues(alpha: 0.5) : AppColors.mintBgLight.withValues(alpha: 0.3),
                     borderRadius: BorderRadius.circular(uiScale.radius(16)),
-                    border: Border.all(color: isDark ? cs.outline.withOpacity(0.5) : AppColors.mintBgLight),
+                    border: Border.all(color: isDark ? cs.outline.withValues(alpha: 0.5) : AppColors.mintBgLight),
                   ),
                   child: ListTile(
                     contentPadding: EdgeInsets.symmetric(horizontal: uiScale.inset(16), vertical: uiScale.inset(4)),
                     leading: Container(
                       padding: EdgeInsets.all(uiScale.inset(8)),
-                      decoration: BoxDecoration(color: Colors.green.withOpacity(0.15), shape: BoxShape.circle),
+                      decoration: BoxDecoration(color: Colors.green.withValues(alpha: 0.15), shape: BoxShape.circle),
                       child: const Icon(Icons.attach_money_rounded, color: Colors.green),
                     ),
                     title: Text('Cash (Manual)', style: TextStyle(color: isDark ? cs.onSurface : AppColors.textPrimary, fontWeight: FontWeight.w800, fontSize: uiScale.font(15))),
@@ -143,12 +146,24 @@ class BookingFlowManager {
       },
     );
 
-    if (selectedPaymentMethod == null) return;
+    if (selectedPaymentMethod == null || !context.mounted) return;
+
+    final String riderId = (prefs.getString('user_id') ?? user?['id']?.toString() ?? user?['user_id']?.toString() ?? '').trim();
+    if (riderId.isEmpty || riderId == 'guest') {
+      showToastNotification(
+        context: context,
+        title: 'Sign in required',
+        message: 'We could not identify your account. Please sign in again and retry.',
+        isSuccess: false,
+      );
+      return;
+    }
 
     onStopRideMarket();
 
-    final String riderId = prefs.getString('user_id') ?? user?['id']?.toString() ?? user?['user_id']?.toString() ?? 'guest';
-
+    try {
+      previousController?.dispose();
+    } catch (_) {}
     final booking = BookingController(apiClient);
     onBookingControllerCreated(booking);
 
@@ -164,7 +179,14 @@ class BookingFlowManager {
       payMethod: selectedPaymentMethod,
       rideType: rideType,
       instructions: instructions,
+      tripKm: (tripKm != null && tripKm.isFinite && tripKm > 0) ? tripKm : null,
     );
+
+    if (!context.mounted) {
+      // The screen went away while booking; don't leave a running market.
+      if (rideId == null || rideId.trim().isEmpty) onStartRideMarket();
+      return;
+    }
 
     if (rideId == null || rideId.trim().isEmpty) {
       final BookingError? err = booking.lastError;
@@ -195,12 +217,20 @@ class BookingFlowManager {
 
     final sub = activeStream?.listen(
           (dynamic event) {
+        if (event is BookingUpdate &&
+            event.rawStatus == RideStatusCode.canceled &&
+            (event.data['cancel_reason'] ?? event.data['reason'])?.toString() == 'no_driver_found') {
+          if (context.mounted) {
+            showToastNotification(context: context, title: 'No driver found', message: 'No driver accepted, try again', isSuccess: false);
+          }
+          return;
+        }
         String statusText = '';
         String msg = '';
         try { statusText = (event?.status ?? event?['status'] ?? '').toString().toLowerCase(); } catch (_) {}
         try { msg = (event?.displayMessage ?? event?['message'] ?? '').toString().trim(); } catch (_) {}
 
-        if ((statusText.contains('fail') || statusText.contains('error')) && msg.isNotEmpty) {
+        if ((statusText.contains('fail') || statusText.contains('error')) && msg.isNotEmpty && context.mounted) {
           showToastNotification(context: context, title: 'Trip error', message: msg, isSuccess: false);
         }
       },
@@ -245,7 +275,7 @@ class BookingFlowManager {
             showStartTripButton: true,
             showCancelButton: true,
             showMetaCard: true,
-            showDebugPanel: true,
+            showDebugPanel: false,
             enableLivePickupTracking: isCurrentPickup,
             preserveStopOrder: true,
             autoCloseOnCancel: true,

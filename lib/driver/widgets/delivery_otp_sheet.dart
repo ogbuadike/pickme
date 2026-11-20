@@ -1,29 +1,35 @@
 // lib/driver/widgets/delivery_otp_sheet.dart
-import 'dart:convert';
-import 'dart:ui' as ui;
+//
+// Collects the recipient's delivery PIN. The network call is injected
+// ([verify]), so error handling/idempotency live in DriverSessionController.
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import '../../api/api_client.dart';
+
 import '../../themes/app_theme.dart';
 import '../../ui/ui_scale.dart';
-import '../../utility/notification.dart';
-import '../../api/url.dart';
 
 class DeliveryOtpSheet extends StatefulWidget {
-  final ApiClient api;
-  final String userId;
-  final String rideId;
+  static const int pinLength = 4; // user_logistics.php issues 4-digit PINs
+
   final String recipientPhone;
 
-  const DeliveryOtpSheet({super.key, required this.api, required this.userId, required this.rideId, required this.recipientPhone});
+  /// Throws on rejection; its `toString()` is shown to the driver.
+  final Future<void> Function(String otp) verify;
 
-  static Future<bool> show(BuildContext context, ApiClient api, String userId, String rideId, String phone) async {
+  const DeliveryOtpSheet({super.key, required this.recipientPhone, required this.verify});
+
+  /// Resolves to true only when [verify] succeeded.
+  static Future<bool> show(
+    BuildContext context, {
+    required String recipientPhone,
+    required Future<void> Function(String otp) verify,
+  }) async {
     final result = await showModalBottomSheet<bool>(
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
-      barrierColor: Colors.black.withOpacity(0.85),
-      builder: (_) => DeliveryOtpSheet(api: api, userId: userId, rideId: rideId, recipientPhone: phone),
+      barrierColor: Colors.black.withValues(alpha: 0.85),
+      builder: (_) => DeliveryOtpSheet(recipientPhone: recipientPhone, verify: verify),
     );
     return result ?? false;
   }
@@ -35,36 +41,34 @@ class DeliveryOtpSheet extends StatefulWidget {
 class _DeliveryOtpSheetState extends State<DeliveryOtpSheet> {
   final TextEditingController _otpCtrl = TextEditingController();
   bool _isVerifying = false;
+  String? _error;
 
-  Future<void> _verify() async {
+  @override
+  void dispose() {
+    _otpCtrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _submit() async {
+    if (_isVerifying) return;
     final otp = _otpCtrl.text.trim();
-    if (otp.length < 4) {
-      showToastNotification(context: context, title: 'Invalid PIN', message: 'Enter the full OTP code.', isSuccess: false);
+    if (otp.length != DeliveryOtpSheet.pinLength) {
+      setState(() => _error = 'Enter the ${DeliveryOtpSheet.pinLength}-digit PIN.');
       return;
     }
-
-    setState(() => _isVerifying = true);
+    setState(() {
+      _isVerifying = true;
+      _error = null;
+    });
     try {
-      final res = await widget.api.request(
-        'driver_hub.php',
-        method: 'POST',
-        data: {
-          'action': 'verify_otp',
-          'user': widget.userId,
-          'ride_id': widget.rideId,
-          'otp': otp,
-        },
-      );
-      final body = jsonDecode(res.body);
-      if (res.statusCode == 200 && body['error'] == false) {
-        HapticFeedback.heavyImpact();
-        if (mounted) Navigator.pop(context, true);
-      } else {
-        throw Exception(body['message'] ?? 'Verification failed');
-      }
+      await widget.verify(otp);
+      if (!mounted) return;
+      HapticFeedback.heavyImpact();
+      Navigator.of(context).pop(true);
     } catch (e) {
+      if (!mounted) return;
       HapticFeedback.vibrate();
-      showToastNotification(context: context, title: 'Handoff Denied', message: e.toString().replaceFirst('Exception: ', ''), isSuccess: false);
+      setState(() => _error = e.toString().replaceFirst('Exception: ', ''));
     } finally {
       if (mounted) setState(() => _isVerifying = false);
     }
@@ -74,6 +78,7 @@ class _DeliveryOtpSheetState extends State<DeliveryOtpSheet> {
   Widget build(BuildContext context) {
     final uiScale = UIScale.of(context);
     final cs = Theme.of(context).colorScheme;
+    final phone = widget.recipientPhone.trim();
 
     return Padding(
       padding: EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
@@ -84,48 +89,67 @@ class _DeliveryOtpSheetState extends State<DeliveryOtpSheet> {
           borderRadius: BorderRadius.vertical(top: Radius.circular(uiScale.radius(24))),
           boxShadow: const [BoxShadow(color: Colors.black54, blurRadius: 20, offset: Offset(0, -5))],
         ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Container(width: 40, height: 4, decoration: BoxDecoration(color: cs.onSurface.withOpacity(0.2), borderRadius: BorderRadius.circular(2))),
-            SizedBox(height: uiScale.gap(20)),
-            Icon(Icons.security_rounded, size: uiScale.icon(40), color: AppColors.primary),
-            SizedBox(height: uiScale.gap(12)),
-            Text('Secure Package Handoff', style: TextStyle(fontSize: uiScale.font(18), fontWeight: FontWeight.w900)),
-            SizedBox(height: uiScale.gap(4)),
-            Text('Ask the recipient (${widget.recipientPhone}) for their 4-digit PIN to release the package.', textAlign: TextAlign.center, style: TextStyle(fontSize: uiScale.font(13), color: cs.onSurfaceVariant)),
-            SizedBox(height: uiScale.gap(24)),
-            TextField(
-              controller: _otpCtrl,
-              keyboardType: TextInputType.number,
-              maxLength: 4,
-              textAlign: TextAlign.center,
-              style: TextStyle(fontSize: uiScale.font(28), fontWeight: FontWeight.bold, letterSpacing: 12),
-              decoration: InputDecoration(
-                counterText: '',
-                filled: true,
-                fillColor: cs.onSurface.withOpacity(0.05),
-                border: OutlineInputBorder(borderRadius: BorderRadius.circular(uiScale.radius(12)), borderSide: BorderSide.none),
+        child: SafeArea(
+          top: false,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(width: 40, height: 4, decoration: BoxDecoration(color: cs.onSurface.withValues(alpha: 0.2), borderRadius: BorderRadius.circular(2))),
+              SizedBox(height: uiScale.gap(20)),
+              Icon(Icons.security_rounded, size: uiScale.icon(40), color: AppColors.primary),
+              SizedBox(height: uiScale.gap(12)),
+              Text('Secure Package Handoff', style: TextStyle(fontSize: uiScale.font(18), fontWeight: FontWeight.w900)),
+              SizedBox(height: uiScale.gap(4)),
+              Text(
+                phone.isEmpty
+                    ? 'Ask the recipient for their ${DeliveryOtpSheet.pinLength}-digit PIN to release the package.'
+                    : 'Ask the recipient ($phone) for their ${DeliveryOtpSheet.pinLength}-digit PIN to release the package.',
+                textAlign: TextAlign.center,
+                style: TextStyle(fontSize: uiScale.font(13), color: cs.onSurfaceVariant),
               ),
-            ),
-            SizedBox(height: uiScale.gap(24)),
-            SizedBox(
-              width: double.infinity,
-              height: uiScale.gap(50),
-              child: ElevatedButton(
-                onPressed: _isVerifying ? null : _verify,
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: AppColors.primary,
-                  foregroundColor: Colors.white,
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(uiScale.radius(16))),
+              SizedBox(height: uiScale.gap(24)),
+              TextField(
+                controller: _otpCtrl,
+                autofocus: true,
+                enabled: !_isVerifying,
+                keyboardType: TextInputType.number,
+                inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                maxLength: DeliveryOtpSheet.pinLength,
+                textAlign: TextAlign.center,
+                autofillHints: const [AutofillHints.oneTimeCode],
+                onSubmitted: (_) => _submit(),
+                onChanged: (v) {
+                  if (_error != null) setState(() => _error = null);
+                  if (v.length == DeliveryOtpSheet.pinLength) _submit();
+                },
+                style: TextStyle(fontSize: uiScale.font(28), fontWeight: FontWeight.bold, letterSpacing: 12),
+                decoration: InputDecoration(
+                  counterText: '',
+                  errorText: _error,
+                  filled: true,
+                  fillColor: cs.onSurface.withValues(alpha: 0.05),
+                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(uiScale.radius(12)), borderSide: BorderSide.none),
                 ),
-                child: _isVerifying
-                    ? const CircularProgressIndicator(color: Colors.white)
-                    : Text('Verify & Complete', style: TextStyle(fontSize: uiScale.font(15), fontWeight: FontWeight.bold)),
               ),
-            ),
-            SizedBox(height: uiScale.gap(16)),
-          ],
+              SizedBox(height: uiScale.gap(24)),
+              SizedBox(
+                width: double.infinity,
+                height: uiScale.gap(50),
+                child: ElevatedButton(
+                  onPressed: _isVerifying ? null : _submit,
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppColors.primary,
+                    foregroundColor: Colors.white,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(uiScale.radius(16))),
+                  ),
+                  child: _isVerifying
+                      ? const SizedBox(width: 22, height: 22, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2.4))
+                      : Text('Verify PIN', style: TextStyle(fontSize: uiScale.font(15), fontWeight: FontWeight.bold)),
+                ),
+              ),
+              SizedBox(height: uiScale.gap(8)),
+            ],
+          ),
         ),
       ),
     );

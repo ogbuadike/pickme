@@ -17,28 +17,7 @@
 //     originText: origin,
 //     destinationText: dest,
 //     distanceText: distanceText,
-//     durationText: durationText,Launching lib/main.dart on 2201117SG (wireless) in debug mode...
-// Running Gradle task 'assembleDebug'...
-// lib/widgets/driver_details_sheet.dart:1437:15: Error: The argument type 'num' can't be assigned to the parameter type 'double?'.
-//       height: h,
-//               ^
-// Target kernel_snapshot_program failed: Exception
-//
-//
-// FAILURE: Build failed with an exception.
-//
-// * What went wrong:
-// Execution failed for task ':app:compileFlutterBuildDebug'.
-// > Process 'command '/Volumes/Chibuikem_SSD/Flutter_SDK/flutter/bin/flutter'' finished with non-zero exit value 1
-//
-// * Try:
-// > Run with --stacktrace option to get the stack trace.
-// > Run with --info or --debug option to get more log output.
-// > Run with --scan to get full insights.
-// > Get more help at https://help.gradle.org.
-//
-// BUILD FAILED in 45s
-// Error: Gradle task assembleDebug failed with exit code 1
+//     durationText: durationText,
 //     tripDistanceKm: tripKm,
 //     userLocation: GeoPoint(userLat, userLng),
 //     pickupLocation: GeoPoint(pickupLat, pickupLng),
@@ -49,7 +28,6 @@
 
 import 'dart:convert';
 import 'dart:math' as math;
-import 'dart:ui' show Canvas, FontFeature, Offset, Size;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -128,12 +106,20 @@ class _DriverDetailsSheetState extends State<DriverDetailsSheet> {
   @override
   void didUpdateWidget(covariant DriverDetailsSheet oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.driver != widget.driver ||
-        oldWidget.userLocation != widget.userLocation ||
-        oldWidget.pickupLocation != widget.pickupLocation ||
-        oldWidget.dropLocation != widget.dropLocation) {
+    // Parents rebuild this sheet with fresh Map/GeoPoint instances (e.g. on
+    // keyboard/MediaQuery changes); only re-geocode when coordinates change.
+    if (!_sameCoords(oldWidget.userLocation, widget.userLocation) ||
+        !_sameCoords(oldWidget.pickupLocation, widget.pickupLocation) ||
+        !_sameCoords(oldWidget.dropLocation, widget.dropLocation) ||
+        _num(oldWidget.driver['lat'], 0) != _num(widget.driver['lat'], 0) ||
+        _num(oldWidget.driver['lng'], 0) != _num(widget.driver['lng'], 0)) {
       _primeAddressFutures();
     }
+  }
+
+  static bool _sameCoords(GeoPoint? a, GeoPoint? b) {
+    if (a == null || b == null) return a == b;
+    return a.lat == b.lat && a.lng == b.lng;
   }
 
   @override
@@ -306,27 +292,7 @@ class _DriverDetailsSheetState extends State<DriverDetailsSheet> {
         required String fallback,
       }) async {
     if (point == null) return fallback;
-
-    try {
-      final dynamic p = point;
-      final lat = (p.latitude ?? p.lat) as num;
-      final lng = (p.longitude ?? p.lng) as num;
-      return _addressFromLatLng(
-        lat.toDouble(),
-        lng.toDouble(),
-        fallback: fallback,
-      );
-    } catch (_) {
-      try {
-        final dynamic p = point;
-        final map = p.toJson() as Map<String, dynamic>;
-        final lat = _num(map['lat'] ?? map['latitude'], double.nan).toDouble();
-        final lng = _num(map['lng'] ?? map['longitude'], double.nan).toDouble();
-        return _addressFromLatLng(lat, lng, fallback: fallback);
-      } catch (_) {
-        return fallback;
-      }
-    }
+    return _addressFromLatLng(point.lat, point.lng, fallback: fallback);
   }
 
   Future<String> _addressFromLatLng(
@@ -535,8 +501,6 @@ class _DriverDetailsSheetState extends State<DriverDetailsSheet> {
     })();
 
     final cur = _currencySym();
-    final base = _baseFare();
-    final perKm = _perKm();
     final total = _calcTotal();
 
     final origin =
@@ -567,7 +531,7 @@ class _DriverDetailsSheetState extends State<DriverDetailsSheet> {
             ),
             boxShadow: [
               BoxShadow(
-                color: Colors.black.withOpacity(0.20),
+                color: Colors.black.withValues(alpha: 0.20),
                 blurRadius: 18,
                 offset: const Offset(0, -8),
               ),
@@ -671,7 +635,7 @@ class _DriverDetailsSheetState extends State<DriverDetailsSheet> {
                                           name,
                                           style: TextStyle(
                                             fontWeight: FontWeight.w900,
-                                            color: cs.onSurface.withOpacity(0.92),
+                                            color: cs.onSurface.withValues(alpha: 0.92),
                                             fontSize: ui.font(14).clamp(13.0, 15.0),
                                             height: 1.05,
                                             letterSpacing: -0.2,
@@ -727,7 +691,7 @@ class _DriverDetailsSheetState extends State<DriverDetailsSheet> {
                               children: [
                                 Icon(
                                   Icons.info_rounded,
-                                  color: cs.onSurface.withOpacity(0.60),
+                                  color: cs.onSurface.withValues(alpha: 0.60),
                                   size: ui.icon(18).clamp(18.0, 20.0),
                                 ),
                                 SizedBox(width: ui.gap(8).clamp(8.0, 10.0)),
@@ -736,7 +700,7 @@ class _DriverDetailsSheetState extends State<DriverDetailsSheet> {
                                     desc,
                                     style: TextStyle(
                                       fontWeight: FontWeight.w800,
-                                      color: cs.onSurface.withOpacity(0.78),
+                                      color: cs.onSurface.withValues(alpha: 0.78),
                                       height: 1.3,
                                       fontSize: ui.font(12).clamp(12.0, 13.0),
                                     ),
@@ -872,7 +836,7 @@ class _DriverDetailsSheetState extends State<DriverDetailsSheet> {
                                 ui,
                                 icon: Icons.timer_rounded,
                                 tone: const Color(0xFFB8860B),
-                                text: etaMin > 0 ? '${etaMin} min' : '—',
+                                text: etaMin > 0 ? '$etaMin min' : '—',
                                 mono: true,
                               ),
                             ],
@@ -1014,7 +978,7 @@ class _DriverDetailsSheetState extends State<DriverDetailsSheet> {
                   decoration: BoxDecoration(
                     color: Theme.of(context).cardColor,
                     border: Border(
-                      top: BorderSide(color: cs.onSurface.withOpacity(0.08)),
+                      top: BorderSide(color: cs.onSurface.withValues(alpha: 0.08)),
                     ),
                   ),
                   child: SizedBox(
@@ -1025,8 +989,8 @@ class _DriverDetailsSheetState extends State<DriverDetailsSheet> {
                       style: ElevatedButton.styleFrom(
                         backgroundColor: AppColors.primary,
                         foregroundColor: Colors.white,
-                        disabledBackgroundColor: cs.onSurface.withOpacity(0.12),
-                        disabledForegroundColor: cs.onSurface.withOpacity(0.45),
+                        disabledBackgroundColor: cs.onSurface.withValues(alpha: 0.12),
+                        disabledForegroundColor: cs.onSurface.withValues(alpha: 0.45),
                         shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(
                             ui.radius(16).clamp(14.0, 18.0),
@@ -1070,7 +1034,7 @@ class _DriverDetailsSheetState extends State<DriverDetailsSheet> {
       height: 5,
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(999),
-        color: cs.onSurface.withOpacity(0.18),
+        color: cs.onSurface.withValues(alpha: 0.18),
       ),
     );
   }
@@ -1099,7 +1063,7 @@ class _DriverDetailsSheetState extends State<DriverDetailsSheet> {
               textAlign: TextAlign.center,
               style: TextStyle(
                 fontWeight: FontWeight.w900,
-                color: cs.onSurface.withOpacity(0.90),
+                color: cs.onSurface.withValues(alpha: 0.90),
                 fontSize: ui.font(14).clamp(13.0, 15.0),
               ),
             ),
@@ -1142,7 +1106,7 @@ class _DriverDetailsSheetState extends State<DriverDetailsSheet> {
       decoration: BoxDecoration(
         color: cs.surface,
         borderRadius: BorderRadius.circular(ui.radius(14).clamp(14.0, 16.0)),
-        border: Border.all(color: cs.onSurface.withOpacity(0.08)),
+        border: Border.all(color: cs.onSurface.withValues(alpha: 0.08)),
       ),
       child: (header == null)
           ? child
@@ -1155,14 +1119,14 @@ class _DriverDetailsSheetState extends State<DriverDetailsSheet> {
                 Icon(
                   icon,
                   size: ui.icon(18).clamp(18.0, 20.0),
-                  color: cs.onSurface.withOpacity(0.60),
+                  color: cs.onSurface.withValues(alpha: 0.60),
                 ),
               if (icon != null) SizedBox(width: ui.gap(8).clamp(8.0, 10.0)),
               Text(
                 header,
                 style: TextStyle(
                   fontWeight: FontWeight.w900,
-                  color: cs.onSurface.withOpacity(0.88),
+                  color: cs.onSurface.withValues(alpha: 0.88),
                   fontSize: ui.font(12.5).clamp(12.5, 13.5),
                 ),
               ),
@@ -1180,7 +1144,7 @@ class _DriverDetailsSheetState extends State<DriverDetailsSheet> {
       t,
       style: TextStyle(
         fontWeight: FontWeight.w900,
-        color: cs.onSurface.withOpacity(0.55),
+        color: cs.onSurface.withValues(alpha: 0.55),
         fontSize: ui.font(10.5).clamp(10.0, 11.0),
         height: 1.0,
       ),
@@ -1195,9 +1159,9 @@ class _DriverDetailsSheetState extends State<DriverDetailsSheet> {
         vertical: ui.inset(6).clamp(5.0, 7.0),
       ),
       decoration: BoxDecoration(
-        color: c.withOpacity(0.12),
+        color: c.withValues(alpha: 0.12),
         borderRadius: BorderRadius.circular(999),
-        border: Border.all(color: c.withOpacity(0.22)),
+        border: Border.all(color: c.withValues(alpha: 0.22)),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
@@ -1228,9 +1192,9 @@ class _DriverDetailsSheetState extends State<DriverDetailsSheet> {
       }) {
     return DecoratedBox(
       decoration: BoxDecoration(
-        color: tone.withOpacity(0.10),
+        color: tone.withValues(alpha: 0.10),
         borderRadius: BorderRadius.circular(999),
-        border: Border.all(color: tone.withOpacity(0.22), width: 1),
+        border: Border.all(color: tone.withValues(alpha: 0.22), width: 1),
       ),
       child: Padding(
         padding: EdgeInsets.symmetric(
@@ -1248,7 +1212,7 @@ class _DriverDetailsSheetState extends State<DriverDetailsSheet> {
               overflow: TextOverflow.ellipsis,
               style: TextStyle(
                 fontWeight: FontWeight.w900,
-                color: cs.onSurface.withOpacity(0.86),
+                color: cs.onSurface.withValues(alpha: 0.86),
                 fontSize: ui.font(10.4).clamp(10.0, 11.0),
                 height: 1.0,
                 letterSpacing: -0.1,
@@ -1274,9 +1238,9 @@ class _DriverDetailsSheetState extends State<DriverDetailsSheet> {
         vertical: ui.inset(6).clamp(5.0, 7.0),
       ),
       decoration: BoxDecoration(
-        color: tone.withOpacity(0.10),
+        color: tone.withValues(alpha: 0.10),
         borderRadius: BorderRadius.circular(999),
-        border: Border.all(color: tone.withOpacity(0.22)),
+        border: Border.all(color: tone.withValues(alpha: 0.22)),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
@@ -1287,7 +1251,7 @@ class _DriverDetailsSheetState extends State<DriverDetailsSheet> {
             text,
             style: TextStyle(
               fontWeight: FontWeight.w900,
-              color: cs.onSurface.withOpacity(0.86),
+              color: cs.onSurface.withValues(alpha: 0.86),
               fontSize: ui.font(11).clamp(10.5, 11.5),
               height: 1.0,
             ),
@@ -1322,7 +1286,7 @@ class _DriverDetailsSheetState extends State<DriverDetailsSheet> {
       icons.add(Icon(
         Icons.star_outline_rounded,
         size: ui.icon(16).clamp(16.0, 18.0),
-        color: cs.onSurface.withOpacity(0.30),
+        color: cs.onSurface.withValues(alpha: 0.30),
       ));
     }
 
@@ -1334,7 +1298,7 @@ class _DriverDetailsSheetState extends State<DriverDetailsSheet> {
           r.toStringAsFixed(2),
           style: TextStyle(
             fontWeight: FontWeight.w900,
-            color: cs.onSurface.withOpacity(0.80),
+            color: cs.onSurface.withValues(alpha: 0.80),
             fontSize: ui.font(12).clamp(12.0, 13.0),
           ),
         ),
@@ -1352,15 +1316,15 @@ class _DriverDetailsSheetState extends State<DriverDetailsSheet> {
         height: size,
         decoration: BoxDecoration(
           shape: BoxShape.circle,
-          color: cs.onSurface.withOpacity(0.06),
-          border: Border.all(color: cs.onSurface.withOpacity(0.10)),
+          color: cs.onSurface.withValues(alpha: 0.06),
+          border: Border.all(color: cs.onSurface.withValues(alpha: 0.10)),
         ),
         child: Center(
           child: Text(
             initials,
             style: TextStyle(
               fontWeight: FontWeight.w900,
-              color: cs.onSurface.withOpacity(0.78),
+              color: cs.onSurface.withValues(alpha: 0.78),
               fontSize: ui.font(12).clamp(12.0, 13.0),
             ),
           ),
@@ -1386,7 +1350,7 @@ class _DriverDetailsSheetState extends State<DriverDetailsSheet> {
           loadingBuilder: (c, w, p) {
             if (p == null) return w;
             return Container(
-              color: cs.onSurface.withOpacity(0.06),
+              color: cs.onSurface.withValues(alpha: 0.06),
               child: const Center(
                 child: SizedBox(
                   width: 18,
@@ -1415,7 +1379,7 @@ class _DriverDetailsSheetState extends State<DriverDetailsSheet> {
       decoration: BoxDecoration(
         color: cs.surface,
         borderRadius: BorderRadius.circular(ui.radius(14).clamp(14.0, 16.0)),
-        border: Border.all(color: cs.onSurface.withOpacity(0.08)),
+        border: Border.all(color: cs.onSurface.withValues(alpha: 0.08)),
       ),
       child: ClipRRect(
         borderRadius: BorderRadius.circular(ui.radius(14).clamp(14.0, 16.0)),
@@ -1432,17 +1396,17 @@ class _DriverDetailsSheetState extends State<DriverDetailsSheet> {
                   fit: BoxFit.cover,
                   filterQuality: FilterQuality.low,
                   errorBuilder: (_, __, ___) => Container(
-                    color: cs.onSurface.withOpacity(0.06),
+                    color: cs.onSurface.withValues(alpha: 0.06),
                     child: Icon(
                       Icons.image_not_supported_rounded,
-                      color: cs.onSurface.withOpacity(0.55),
+                      color: cs.onSurface.withValues(alpha: 0.55),
                       size: ui.icon(36).clamp(34.0, 38.0),
                     ),
                   ),
                   loadingBuilder: (c, w, p) {
                     if (p == null) return w;
                     return Container(
-                      color: cs.onSurface.withOpacity(0.06),
+                      color: cs.onSurface.withValues(alpha: 0.06),
                       child: const Center(
                         child: SizedBox(
                           width: 18,
@@ -1472,7 +1436,7 @@ class _DriverDetailsSheetState extends State<DriverDetailsSheet> {
                     width: active ? 16 : 7,
                     height: 7,
                     decoration: BoxDecoration(
-                      color: Colors.white.withOpacity(active ? 0.95 : 0.55),
+                      color: Colors.white.withValues(alpha: active ? 0.95 : 0.55),
                       borderRadius: BorderRadius.circular(999),
                     ),
                   );
@@ -1507,7 +1471,7 @@ class _DriverDetailsSheetState extends State<DriverDetailsSheet> {
         decoration: BoxDecoration(
           color: cs.surface,
           borderRadius: BorderRadius.circular(ui.radius(14).clamp(14.0, 16.0)),
-          border: Border.all(color: cs.onSurface.withOpacity(0.08)),
+          border: Border.all(color: cs.onSurface.withValues(alpha: 0.08)),
         ),
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -1516,9 +1480,9 @@ class _DriverDetailsSheetState extends State<DriverDetailsSheet> {
               width: ui.inset(40).clamp(40.0, 44.0),
               height: ui.inset(40).clamp(40.0, 44.0),
               decoration: BoxDecoration(
-                color: tone.withOpacity(0.12),
+                color: tone.withValues(alpha: 0.12),
                 borderRadius: BorderRadius.circular(ui.radius(12).clamp(12.0, 14.0)),
-                border: Border.all(color: tone.withOpacity(0.22)),
+                border: Border.all(color: tone.withValues(alpha: 0.22)),
               ),
               child: Icon(icon, color: tone, size: ui.icon(20).clamp(20.0, 22.0)),
             ),
@@ -1531,7 +1495,7 @@ class _DriverDetailsSheetState extends State<DriverDetailsSheet> {
                     title,
                     style: TextStyle(
                       fontWeight: FontWeight.w900,
-                      color: cs.onSurface.withOpacity(0.70),
+                      color: cs.onSurface.withValues(alpha: 0.70),
                       fontSize: ui.font(12).clamp(12.0, 13.0),
                     ),
                   ),
@@ -1542,7 +1506,7 @@ class _DriverDetailsSheetState extends State<DriverDetailsSheet> {
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(
                       fontWeight: FontWeight.w900,
-                      color: cs.onSurface.withOpacity(0.90),
+                      color: cs.onSurface.withValues(alpha: 0.90),
                       fontSize: ui.font(12.5).clamp(12.0, 13.0),
                     ),
                   ),
@@ -1552,7 +1516,7 @@ class _DriverDetailsSheetState extends State<DriverDetailsSheet> {
             if (onTap != null)
               Icon(
                 Icons.copy_rounded,
-                color: cs.onSurface.withOpacity(0.55),
+                color: cs.onSurface.withValues(alpha: 0.55),
                 size: ui.icon(18).clamp(18.0, 20.0),
               ),
           ],
@@ -1579,7 +1543,7 @@ class _DriverDetailsSheetState extends State<DriverDetailsSheet> {
       decoration: BoxDecoration(
         color: cs.surface,
         borderRadius: BorderRadius.circular(ui.radius(14).clamp(14.0, 16.0)),
-        border: Border.all(color: cs.onSurface.withOpacity(0.08)),
+        border: Border.all(color: cs.onSurface.withValues(alpha: 0.08)),
       ),
       child: Row(
         children: [
@@ -1587,11 +1551,11 @@ class _DriverDetailsSheetState extends State<DriverDetailsSheet> {
             width: ui.inset(40).clamp(40.0, 44.0),
             height: ui.inset(40).clamp(40.0, 44.0),
             decoration: BoxDecoration(
-              color: tone.withOpacity(0.10),
+              color: tone.withValues(alpha: 0.10),
               borderRadius: BorderRadius.circular(ui.radius(12).clamp(12.0, 14.0)),
-              border: Border.all(color: tone.withOpacity(0.18)),
+              border: Border.all(color: tone.withValues(alpha: 0.18)),
             ),
-            child: Icon(icon, color: tone.withOpacity(0.95), size: ui.icon(20).clamp(20.0, 22.0)),
+            child: Icon(icon, color: tone.withValues(alpha: 0.95), size: ui.icon(20).clamp(20.0, 22.0)),
           ),
           SizedBox(width: ui.gap(10).clamp(10.0, 12.0)),
           Expanded(
@@ -1602,7 +1566,7 @@ class _DriverDetailsSheetState extends State<DriverDetailsSheet> {
                   title,
                   style: TextStyle(
                     fontWeight: FontWeight.w900,
-                    color: cs.onSurface.withOpacity(0.70),
+                    color: cs.onSurface.withValues(alpha: 0.70),
                     fontSize: ui.font(12).clamp(12.0, 13.0),
                   ),
                 ),
@@ -1611,7 +1575,7 @@ class _DriverDetailsSheetState extends State<DriverDetailsSheet> {
                   v,
                   style: TextStyle(
                     fontWeight: FontWeight.w900,
-                    color: cs.onSurface.withOpacity(0.90),
+                    color: cs.onSurface.withValues(alpha: 0.90),
                     fontSize: ui.font(14).clamp(13.5, 15.0),
                     fontFeatures: const [FontFeature.tabularFigures()],
                   ),
@@ -1638,7 +1602,7 @@ class _DriverDetailsSheetState extends State<DriverDetailsSheet> {
             k,
             style: TextStyle(
               fontWeight: FontWeight.w900,
-              color: cs.onSurface.withOpacity(0.70),
+              color: cs.onSurface.withValues(alpha: 0.70),
               fontSize: ui.font(11.5).clamp(11.5, 12.5),
             ),
           ),
@@ -1650,7 +1614,7 @@ class _DriverDetailsSheetState extends State<DriverDetailsSheet> {
             textAlign: TextAlign.right,
             style: TextStyle(
               fontWeight: FontWeight.w900,
-              color: cs.onSurface.withOpacity(0.90),
+              color: cs.onSurface.withValues(alpha: 0.90),
               fontSize: ui.font(11.5).clamp(11.5, 12.5),
               fontFeatures: mono ? const [FontFeature.tabularFigures()] : null,
             ),
@@ -1669,15 +1633,15 @@ class _DriverDetailsSheetState extends State<DriverDetailsSheet> {
         ui.inset(12).clamp(12.0, 14.0),
       ),
       decoration: BoxDecoration(
-        color: AppColors.primary.withOpacity(0.10),
+        color: AppColors.primary.withValues(alpha: 0.10),
         borderRadius: BorderRadius.circular(ui.radius(14).clamp(14.0, 16.0)),
-        border: Border.all(color: AppColors.primary.withOpacity(0.22)),
+        border: Border.all(color: AppColors.primary.withValues(alpha: 0.22)),
       ),
       child: Row(
         children: [
           Icon(
             Icons.payments_rounded,
-            color: AppColors.primary.withOpacity(0.95),
+            color: AppColors.primary.withValues(alpha: 0.95),
             size: ui.icon(20).clamp(20.0, 22.0),
           ),
           SizedBox(width: ui.gap(10).clamp(10.0, 12.0)),
@@ -1686,7 +1650,7 @@ class _DriverDetailsSheetState extends State<DriverDetailsSheet> {
               'Total',
               style: TextStyle(
                 fontWeight: FontWeight.w900,
-                color: cs.onSurface.withOpacity(0.88),
+                color: cs.onSurface.withValues(alpha: 0.88),
                 fontSize: ui.font(12).clamp(12.0, 13.0),
               ),
             ),
@@ -1697,58 +1661,10 @@ class _DriverDetailsSheetState extends State<DriverDetailsSheet> {
               textAlign: TextAlign.right,
               style: TextStyle(
                 fontWeight: FontWeight.w900,
-                color: cs.onSurface.withOpacity(0.92),
+                color: cs.onSurface.withValues(alpha: 0.92),
                 fontSize: ui.font(14).clamp(13.5, 15.0),
                 fontFeatures: const [FontFeature.tabularFigures()],
               ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _priceMetricTile(
-      ColorScheme cs,
-      UIScale ui, {
-        required String title,
-        required String value,
-        required Color tone,
-      }) {
-    return Container(
-      width: 145,
-      padding: EdgeInsets.fromLTRB(
-        ui.inset(10).clamp(10.0, 12.0),
-        ui.inset(10).clamp(10.0, 12.0),
-        ui.inset(10).clamp(10.0, 12.0),
-        ui.inset(10).clamp(10.0, 12.0),
-      ),
-      decoration: BoxDecoration(
-        color: tone.withOpacity(0.08),
-        borderRadius: BorderRadius.circular(ui.radius(12).clamp(12.0, 14.0)),
-        border: Border.all(color: tone.withOpacity(0.18)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            title,
-            style: TextStyle(
-              fontWeight: FontWeight.w800,
-              color: cs.onSurface.withOpacity(0.64),
-              fontSize: ui.font(10.5).clamp(10.0, 11.0),
-            ),
-          ),
-          SizedBox(height: ui.gap(4).clamp(4.0, 6.0)),
-          Text(
-            value,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: TextStyle(
-              fontWeight: FontWeight.w900,
-              color: cs.onSurface.withOpacity(0.92),
-              fontSize: ui.font(12.4).clamp(12.0, 13.0),
-              fontFeatures: const [FontFeature.tabularFigures()],
             ),
           ),
         ],
@@ -1784,9 +1700,9 @@ class _DriverDetailsSheetState extends State<DriverDetailsSheet> {
               ui.inset(10).clamp(10.0, 12.0),
             ),
             decoration: BoxDecoration(
-              color: cs.onSurface.withOpacity(0.03),
+              color: cs.onSurface.withValues(alpha: 0.03),
               borderRadius: BorderRadius.circular(ui.radius(12).clamp(12.0, 14.0)),
-              border: Border.all(color: cs.onSurface.withOpacity(0.08)),
+              border: Border.all(color: cs.onSurface.withValues(alpha: 0.08)),
             ),
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -1795,14 +1711,14 @@ class _DriverDetailsSheetState extends State<DriverDetailsSheet> {
                   width: ui.inset(34).clamp(34.0, 38.0),
                   height: ui.inset(34).clamp(34.0, 38.0),
                   decoration: BoxDecoration(
-                    color: AppColors.primary.withOpacity(0.10),
+                    color: AppColors.primary.withValues(alpha: 0.10),
                     borderRadius: BorderRadius.circular(ui.radius(12).clamp(12.0, 14.0)),
-                    border: Border.all(color: AppColors.primary.withOpacity(0.18)),
+                    border: Border.all(color: AppColors.primary.withValues(alpha: 0.18)),
                   ),
                   child: Icon(
                     icon,
                     size: ui.icon(18).clamp(18.0, 20.0),
-                    color: AppColors.primary.withOpacity(0.95),
+                    color: AppColors.primary.withValues(alpha: 0.95),
                   ),
                 ),
                 SizedBox(width: ui.gap(10).clamp(10.0, 12.0)),
@@ -1814,7 +1730,7 @@ class _DriverDetailsSheetState extends State<DriverDetailsSheet> {
                         label,
                         style: TextStyle(
                           fontWeight: FontWeight.w900,
-                          color: cs.onSurface.withOpacity(0.72),
+                          color: cs.onSurface.withValues(alpha: 0.72),
                           fontSize: ui.font(11.5).clamp(11.5, 12.5),
                         ),
                       ),
@@ -1825,7 +1741,7 @@ class _DriverDetailsSheetState extends State<DriverDetailsSheet> {
                         overflow: TextOverflow.ellipsis,
                         style: TextStyle(
                           fontWeight: FontWeight.w800,
-                          color: cs.onSurface.withOpacity(0.90),
+                          color: cs.onSurface.withValues(alpha: 0.90),
                           fontSize: ui.font(12).clamp(12.0, 13.0),
                           height: 1.28,
                         ),
@@ -1841,7 +1757,7 @@ class _DriverDetailsSheetState extends State<DriverDetailsSheet> {
                   Icon(
                     Icons.copy_rounded,
                     size: ui.icon(18).clamp(18.0, 20.0),
-                    color: cs.onSurface.withOpacity(0.55),
+                    color: cs.onSurface.withValues(alpha: 0.55),
                   ),
                 ],
               ],
@@ -1966,7 +1882,7 @@ class _RouteTreeAligned extends StatelessWidget {
       width: width,
       height: height,
       child: CustomPaint(
-        painter: _RouteTreePainter(color: cs.onSurface.withOpacity(0.22)),
+        painter: _RouteTreePainter(color: cs.onSurface.withValues(alpha: 0.22)),
       ),
     );
   }
@@ -2000,10 +1916,10 @@ class _RouteTreePainter extends CustomPainter {
       y += 5.0;
     }
 
-    canvas.drawCircle(Offset(x, topY), 6.0, Paint()..color = start.withOpacity(0.16));
+    canvas.drawCircle(Offset(x, topY), 6.0, Paint()..color = start.withValues(alpha: 0.16));
     canvas.drawCircle(Offset(x, topY), 4.0, Paint()..color = start);
 
-    canvas.drawCircle(Offset(x, bottomY), 6.0, Paint()..color = end.withOpacity(0.16));
+    canvas.drawCircle(Offset(x, bottomY), 6.0, Paint()..color = end.withValues(alpha: 0.16));
     canvas.drawCircle(Offset(x, bottomY), 4.0, Paint()..color = end);
   }
 
@@ -2044,7 +1960,7 @@ class _LabeledLine extends StatelessWidget {
               height: 1.0,
               fontWeight: FontWeight.w900,
               letterSpacing: 0.4,
-              color: cs.onSurface.withOpacity(0.42),
+              color: cs.onSurface.withValues(alpha: 0.42),
             ),
           ),
         ),
@@ -2062,7 +1978,7 @@ class _LabeledLine extends StatelessWidget {
               height: 1.0,
               letterSpacing: -0.2,
               fontWeight: strong ? FontWeight.w900 : FontWeight.w800,
-              color: cs.onSurface.withOpacity(strong ? 0.92 : 0.66),
+              color: cs.onSurface.withValues(alpha: strong ? 0.92 : 0.66),
             ),
           ),
         ),

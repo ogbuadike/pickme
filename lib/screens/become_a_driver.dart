@@ -17,7 +17,6 @@ import 'dart:ui';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:http/http.dart' as http;
 import 'package:image_picker/image_picker.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -58,7 +57,7 @@ class _BecomeADriverPageState extends State<BecomeADriverPage>
   late final Animation<double> _fadeAnim;
   late final Animation<Offset> _slideAnim;
 
-  late ApiClient _api;
+  final ApiClient _api = ApiClient();
   late SharedPreferences _prefs;
 
   bool _isFetchingAccount = false;
@@ -101,12 +100,11 @@ class _BecomeADriverPageState extends State<BecomeADriverPage>
   Future<void> _bootstrap() async {
     try {
       _prefs = await SharedPreferences.getInstance();
-      _api = ApiClient(http.Client(), context);
       _hydrateCachedUser();
       await _fetchUser(silent: _user.isNotEmpty);
       await _fetchApplicationStatus(silent: true);
-    } catch (e) {
-      _fail('Failed to initialize: $e');
+    } catch (_) {
+      _fail('Failed to initialize. Please try again.');
       if (mounted) {
         setState(() {
           _applicationStatus = 'not_started';
@@ -171,16 +169,19 @@ class _BecomeADriverPageState extends State<BecomeADriverPage>
           throw Exception('User payload missing');
         }
       } else {
-        throw Exception(data['error_msg'] ?? 'Unable to load profile');
+        throw Exception((data is Map ? data['error_msg'] : null) ?? 'Unable to load profile');
       }
-    } catch (e) {
-      _fail('Failed to load profile: $e');
+    } on ApiException catch (e) {
+      _fail(e.message);
+    } catch (_) {
+      _fail('Failed to load profile. Check your connection.');
     } finally {
-      if (!mounted) return;
-      if (silent) {
-        _isFetchingAccount = false;
-      } else {
-        setState(() => _isFetchingAccount = false);
+      if (mounted) {
+        if (silent) {
+          _isFetchingAccount = false;
+        } else {
+          setState(() => _isFetchingAccount = false);
+        }
       }
     }
   }
@@ -234,11 +235,12 @@ class _BecomeADriverPageState extends State<BecomeADriverPage>
         _applicationStatusNote = null;
       });
     } finally {
-      if (!mounted) return;
-      if (silent) {
-        _isCheckingApplicationStatus = false;
-      } else {
-        setState(() => _isCheckingApplicationStatus = false);
+      if (mounted) {
+        if (silent) {
+          _isCheckingApplicationStatus = false;
+        } else {
+          setState(() => _isCheckingApplicationStatus = false);
+        }
       }
     }
   }
@@ -1902,7 +1904,7 @@ class _ApplicationModalState extends State<_ApplicationModal> {
   late final TextEditingController _accountNumCtrl;
   late final TextEditingController _vehicleModelCtrl;
 
-  late final ApiClient _api;
+  final ApiClient _api = ApiClient();
   SharedPreferences? _prefs;
 
   int _currentStep = 0;
@@ -1925,7 +1927,6 @@ class _ApplicationModalState extends State<_ApplicationModal> {
   @override
   void initState() {
     super.initState();
-    _api = ApiClient(http.Client(), context);
     _phoneCtrl = TextEditingController(text: widget.initialPhone);
     _ninCtrl = TextEditingController();
     _bankNameCtrl = TextEditingController();
@@ -1986,17 +1987,6 @@ class _ApplicationModalState extends State<_ApplicationModal> {
 
   int _imageQualityFor(DriverUploadSlot slot) => slot.group == _UploadGroup.identity ? 76 : 72;
   double _maxWidthFor(DriverUploadSlot slot) => slot.group == _UploadGroup.identity ? 1680 : 1440;
-  int _previewCacheWidthFor(DriverUploadSlot slot) => slot.group == _UploadGroup.identity ? 960 : 1280;
-
-  String _formatBytes(int bytes) {
-    if (bytes <= 0) return '0 B';
-    const units = ['B', 'KB', 'MB', 'GB'];
-    double value = bytes.toDouble();
-    var unitIndex = 0;
-    while (value >= 1024 && unitIndex < units.length - 1) { value /= 1024; unitIndex++; }
-    final decimals = value >= 100 || unitIndex == 0 ? 0 : 1;
-    return '${value.toStringAsFixed(decimals)} ${units[unitIndex]}';
-  }
 
   Future<ImageSource?> _selectSource() async {
     final cs = widget.cs;
@@ -2692,25 +2682,6 @@ class _ReviewRow extends StatelessWidget {
       padding: EdgeInsets.only(bottom: isLast ? 0 : 12, top: 4), margin: EdgeInsets.only(bottom: isLast ? 0 : 10),
       decoration: BoxDecoration(border: isLast ? null : Border(bottom: BorderSide(color: cs.onSurface.withOpacity(0.08)))),
       child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [Expanded(flex: 4, child: Text(label, style: TextStyle(fontWeight: FontWeight.w700, color: cs.onSurface.withOpacity(0.62)))), const SizedBox(width: 12), Expanded(flex: 6, child: Text(value, textAlign: TextAlign.right, style: TextStyle(fontWeight: FontWeight.w800, color: cs.onSurface)))]),
-    );
-  }
-}
-
-class _ChecklistBox extends StatelessWidget {
-  final UIScale ui; final ColorScheme cs; final String title; final List<String> items;
-  const _ChecklistBox({required this.ui, required this.cs, required this.title, required this.items});
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: EdgeInsets.all(ui.inset(14)), decoration: BoxDecoration(color: cs.surface, borderRadius: BorderRadius.circular(ui.radius(18)), border: Border.all(color: cs.onSurface.withOpacity(0.10))),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(title, style: TextStyle(fontSize: ui.font(13.0), fontWeight: FontWeight.w900, color: cs.onSurface)),
-          SizedBox(height: ui.gap(10)),
-          ...items.map((item) => Padding(padding: const EdgeInsets.only(bottom: 8), child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [const Padding(padding: EdgeInsets.only(top: 2), child: Icon(Icons.check_circle_rounded, size: 16, color: AppColors.primary)), const SizedBox(width: 8), Expanded(child: Text(item, style: TextStyle(fontWeight: FontWeight.w600, color: cs.onSurface.withOpacity(0.72), height: 1.35)))]))),
-        ],
-      ),
     );
   }
 }

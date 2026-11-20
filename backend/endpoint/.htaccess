@@ -1,0 +1,47 @@
+# Pick Me API — endpoint directory hardening (Apache 2.4)
+Options -Indexes -MultiViews
+ServerSignature Off
+
+# Pass the Authorization header (app key) through to PHP under CGI / FastCGI / PHP-FPM.
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+    RewriteCond %{HTTP:Authorization} .
+    RewriteRule .* - [E=HTTP_AUTHORIZATION:%{HTTP:Authorization}]
+    # Never execute scripts from upload folders.
+    RewriteRule ^(uploads|img)/.*\.(php\d?|phtml|phar|pl|py|cgi|sh)$ - [F,L,NC]
+</IfModule>
+
+# 1) Deny everything by default: libraries, logs (*.log, error_log*), .env, JSON keys (fcm_vendor/*),
+#    dot-files, backups, SQL dumps.
+<FilesMatch ".">
+    Require all denied
+</FilesMatch>
+
+# 2) Public API endpoints and policy pages (keep in sync with backend/README.md).
+<FilesMatch "^(account_delete|become_driver|driver_hub|drivers_nearby|drivers_poll|drivers_update_location|get_countries|help_api|kyc_upgrade|logout|privacy|reset_pwd|ride_book|ride_cancel_booking|ride_complete_trip|ride_history|ride_offers|ride_start_trip|ride_status|send_token|set_pin|terms|transaction_history|user_info|user_login|user_logistics|user_register|user_settings|validate_pin|webhook)\.php$">
+    Require all granted
+</FilesMatch>
+
+# 3) Uploaded images (random, unguessable WebP names written by the API).
+<FilesMatch "\.(webp|jpe?g|png|gif)$">
+    Require all granted
+</FilesMatch>
+
+# Library files stay denied even though they end in .php (rule order: later sections win,
+# and these names are not in list 2): security.php, activities.php, auth.php, push_alert.php,
+# ride_api_bootstrap.php.
+
+<IfModule mod_headers.c>
+    Header always set X-Content-Type-Options "nosniff"
+    Header always unset X-Powered-By
+    Header always set Referrer-Policy "no-referrer"
+    # Uploaded images must never be interpreted as anything else.
+    <FilesMatch "\.(webp|jpe?g|png|gif)$">
+        Header always set Content-Security-Policy "default-src 'none'; sandbox"
+    </FilesMatch>
+</IfModule>
+
+<IfModule mod_php.c>
+    php_flag display_errors Off
+    php_flag expose_php Off
+</IfModule>

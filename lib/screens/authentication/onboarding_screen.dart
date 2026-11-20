@@ -24,7 +24,6 @@ class _OnboardingScreenState extends State<OnboardingScreen>
   late final AnimationController _particleController;
   late final AnimationController _pulseController;
   late final AnimationController _waveController;
-  late final AnimationController _shimmerController;
 
   late final Animation<double> _fadeAnimation;
   late final Animation<double> _scaleAnimation;
@@ -33,7 +32,6 @@ class _OnboardingScreenState extends State<OnboardingScreen>
   late final Animation<double> _particleAnimation;
   late final Animation<double> _pulseAnimation;
   late final Animation<double> _waveAnimation;
-  late final Animation<double> _shimmerAnimation;
 
   final List<OnboardingData> _pages = [
     OnboardingData(
@@ -128,11 +126,6 @@ class _OnboardingScreenState extends State<OnboardingScreen>
       vsync: this,
     );
 
-    _shimmerController = AnimationController(
-      duration: const Duration(milliseconds: 2500),
-      vsync: this,
-    );
-
     _fadeAnimation = Tween<double>(begin: 0, end: 1).animate(
       CurvedAnimation(
         parent: _mainController,
@@ -162,10 +155,6 @@ class _OnboardingScreenState extends State<OnboardingScreen>
     );
 
     _waveAnimation = Tween<double>(begin: 0, end: 2 * math.pi).animate(_waveController);
-
-    _shimmerAnimation = Tween<double>(begin: -2, end: 2).animate(
-      CurvedAnimation(parent: _shimmerController, curve: Curves.easeInOut),
-    );
   }
 
   void _startAnimations() {
@@ -173,7 +162,6 @@ class _OnboardingScreenState extends State<OnboardingScreen>
     _particleController.repeat();
     _pulseController.repeat(reverse: true);
     _waveController.repeat();
-    _shimmerController.repeat();
   }
 
   @override
@@ -183,7 +171,6 @@ class _OnboardingScreenState extends State<OnboardingScreen>
     _particleController.dispose();
     _pulseController.dispose();
     _waveController.dispose();
-    _shimmerController.dispose();
     super.dispose();
   }
 

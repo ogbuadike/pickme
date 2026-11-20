@@ -1,8 +1,15 @@
 // lib/screens/logistics_map_picker.dart
+//
+// Route picker for Send Me / Dispatch: pickup + drop-off, route + distance,
+// then the details sheet. After a successful booking it hands over to
+// LogisticsTrackingPage (searching / assigned / in transit / delivered).
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:geocoding/geocoding.dart' as geo;
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -13,7 +20,10 @@ import '../api/url.dart';
 import '../themes/app_theme.dart';
 import '../ui/ui_scale.dart';
 import '../utility/notification.dart';
+import '../services/logistics_service.dart';
+import 'logistics/logistics_tracking_page.dart';
 import 'logistics_booking_sheet.dart';
+import 'state/location_permission_modal.dart';
 
 import 'state/home_models.dart';
 import 'state/map_graphics_engine.dart';
@@ -26,12 +36,14 @@ class LogisticsMapPicker extends StatefulWidget {
   final ApiClient api;
   final String userId;
   final String rideType; // 'send_me' or 'dispatch'
+  final double? walletBalance;
 
   const LogisticsMapPicker({
     super.key,
     required this.api,
     required this.userId,
     required this.rideType,
+    this.walletBalance,
   });
 
   @override
@@ -42,7 +54,11 @@ class _LogisticsMapPickerState extends State<LogisticsMapPicker> with TickerProv
   static const double kHeaderVisualH = 60.0;
   static const String _kRecentsKey = 'recent_logistics_places_v1';
 
-  late SharedPreferences _prefs;
+  SharedPreferences? _prefs;
+  int _routeSeq = 0;
+  bool _routing = false;
+  bool _routeFailed = false;
+  bool _sheetOpen = false;
 
   GoogleMapController? _mapController;
   final ValueNotifier<Set<Marker>> _markersNotifier = ValueNotifier({});
@@ -105,10 +121,11 @@ class _LogisticsMapPickerState extends State<LogisticsMapPicker> with TickerProv
 
   Future<void> _bootstrap() async {
     _prefs = await SharedPreferences.getInstance();
+    if (!mounted) return;
     await _loadRecents();
     await _loadPremiumGraphics();
     await _fetchCurrentLocation();
-    WidgetsBinding.instance.addPostFrameCallback((_) => _scheduleMapPaddingUpdate());
+    if (mounted) WidgetsBinding.instance.addPostFrameCallback((_) => _scheduleMapPaddingUpdate());
   }
 
   void _initPoints() {
@@ -158,12 +175,6 @@ class _LogisticsMapPickerState extends State<LogisticsMapPicker> with TickerProv
   }
 
   // --- FOCUS & UI STATE HELPERS (FIXED) ---
-  int _indexOfFocus(FocusNode focus) {
-    for (int i = 0; i < _pts.length; i++) {
-      if (identical(_pts[i].focus, focus)) return i;
-    }
-    return 0;
-  }
 
   void _expand() {
     setState(() => _expanded = true);
@@ -215,11 +226,12 @@ class _LogisticsMapPickerState extends State<LogisticsMapPicker> with TickerProv
   }
 
   Future<void> _createUserPinIcon() async {
-    _userPinIcon = await MapGraphicsEngine.createPremiumAvatarPin(
-      avatarImage: null,
-      isDark: Theme.of(context).brightness == Brightness.dark,
-      cs: Theme.of(context).colorScheme,
+    if (!mounted) return;
+    _userPinIcon = await MapGraphicsEngine.createUserLocationDot(
+      devicePixelRatio: MediaQuery.devicePixelRatioOf(context),
+      withHeading: true,
     );
+    if (!mounted) return;
     if (_currentPosition != null) {
       _updateUserMarker(LatLng(_currentPosition!.latitude, _currentPosition!.longitude));
     }
@@ -237,14 +249,15 @@ class _LogisticsMapPickerState extends State<LogisticsMapPicker> with TickerProv
       anchor: const Offset(0.5, 0.5),
       flat: true,
       rotation: _userMarkerRotation,
-      zIndex: 999,
+      zIndexInt: 999,
     ));
     _pushMapState();
   }
 
   Future<void> _loadRecents() async {
-    final raw = _prefs.getString(_kRecentsKey);
-    if (raw == null || raw.isEmpty) return;
+    final prefs = _prefs;
+    final raw = prefs?.getString(_kRecentsKey);
+    if (prefs == null || raw == null || raw.isEmpty || !mounted) return;
     try {
       setState(() {
         _recents = (jsonDecode(raw) as List)
@@ -256,7 +269,7 @@ class _LogisticsMapPickerState extends State<LogisticsMapPicker> with TickerProv
         _sugs = _recents;
       });
     } catch (_) {
-      await _prefs.remove(_kRecentsKey);
+      await prefs.remove(_kRecentsKey);
     }
   }
 
@@ -265,19 +278,25 @@ class _LogisticsMapPickerState extends State<LogisticsMapPicker> with TickerProv
       ..removeWhere((e) => e.placeId == s.placeId)
       ..insert(0, s);
     final cap = up.take(20).toList();
-    _prefs.setString(_kRecentsKey, jsonEncode(cap.map((e) => e.toJson()).toList()));
-    setState(() => _recents = cap);
+    _prefs?.setString(_kRecentsKey, jsonEncode(cap.map((e) => e.toJson()).toList()));
+    if (mounted) setState(() => _recents = cap);
   }
 
-  Future<void> _fetchCurrentLocation() async {
+  /// Location goes through the shared gate (LocationPermissionModal): it
+  /// prompts at most once per session for automatic calls.
+  Future<void> _fetchCurrentLocation({bool userTriggered = false}) async {
     try {
-      var perm = await Geolocator.checkPermission();
-      if (perm == LocationPermission.denied) {
-        perm = await Geolocator.requestPermission();
-      }
-      if (perm == LocationPermission.denied || perm == LocationPermission.deniedForever) return;
+      final st = await LocationPermissionModal.ensure(
+        context,
+        userTriggered: userTriggered,
+        message: 'Pick Me uses your location to set the pickup point and find nearby riders.',
+      );
+      if (!mounted || !st.isGranted) return;
 
-      final pos = await Geolocator.getCurrentPosition(desiredAccuracy: LocationAccuracy.high);
+      final pos = await Geolocator.getCurrentPosition(
+        desiredAccuracy: LocationAccuracy.high,
+        timeLimit: const Duration(seconds: 10),
+      );
       if (!mounted) return;
       _currentPosition = pos;
 
@@ -298,8 +317,8 @@ class _LogisticsMapPickerState extends State<LogisticsMapPicker> with TickerProv
       circleId: const CircleId('accuracy'),
       center: c,
       radius: r,
-      fillColor: AppColors.primary.withOpacity(0.1),
-      strokeColor: AppColors.primary.withOpacity(0.35),
+      fillColor: AppColors.primary.withValues(alpha: 0.1),
+      strokeColor: AppColors.primary.withValues(alpha: 0.35),
       strokeWidth: 2,
     ));
     _pushMapState();
@@ -351,11 +370,24 @@ class _LogisticsMapPickerState extends State<LogisticsMapPicker> with TickerProv
       _pts.first
         ..latLng = ll
         ..placeId = null
-        ..controller.text = 'Current Location'
+        ..controller.text = 'Current location'
         ..isCurrent = true;
     });
     _putMarker(0, ll, _pts.first.controller.text);
     _focusNextUnfilled();
+    if (_pts.last.latLng != null) unawaited(_drawRoute());
+    // The courier needs a real address, not "Current location".
+    try {
+      final marks = await geo.placemarkFromCoordinates(ll.latitude, ll.longitude).timeout(const Duration(seconds: 6));
+      if (!mounted || marks.isEmpty || _pts.first.latLng != ll) return;
+      final p = marks.first;
+      final parts = <String>[
+        if ((p.name ?? '').isNotEmpty) p.name!,
+        if ((p.street ?? '').isNotEmpty && p.street != p.name) p.street!,
+        if ((p.locality ?? '').isNotEmpty) p.locality!,
+      ];
+      if (parts.isNotEmpty) setState(() => _pts.first.controller.text = parts.join(', '));
+    } catch (_) {}
   }
 
   void _updateMapMarkers() {
@@ -367,29 +399,64 @@ class _LogisticsMapPickerState extends State<LogisticsMapPicker> with TickerProv
     }
   }
 
+  static double _straightKm(LatLng a, LatLng b) {
+    const r = 6371.0;
+    double rad(double d) => d * math.pi / 180;
+    final dLat = rad(b.latitude - a.latitude), dLng = rad(b.longitude - a.longitude);
+    final h = math.sin(dLat / 2) * math.sin(dLat / 2) +
+        math.cos(rad(a.latitude)) * math.cos(rad(b.latitude)) * math.sin(dLng / 2) * math.sin(dLng / 2);
+    return 2 * r * math.asin(math.min(1.0, math.sqrt(h)));
+  }
+
   Future<void> _drawRoute() async {
-    final origin = _pts.first.latLng!;
-    final destination = _pts.last.latLng!;
-    final stops = <LatLng>[
-      for (int i = 1; i < _pts.length - 1; i++)
-        if (_pts[i].latLng != null) _pts[i].latLng!,
-    ];
+    final origin = _pts.first.latLng;
+    final destination = _pts.last.latLng;
+    if (origin == null || destination == null) return;
+    final int seq = ++_routeSeq;
+    setState(() {
+      _routing = true;
+      _routeFailed = false;
+    });
 
-    final result = await RoutingEngine.computeRoute(origin: origin, destination: destination, stops: stops);
+    RouteResult? result;
+    try {
+      result = await RoutingEngine.computeRoute(origin: origin, destination: destination, stops: const <LatLng>[]);
+    } catch (_) {
+      result = null;
+    }
+    if (!mounted || seq != _routeSeq) return; // a newer route request won
 
-    if (result != null && result.points.isNotEmpty) {
+    if (result == null || result.points.isEmpty) {
+      // Keep the flow usable: estimate road distance from the straight line.
+      final km = _straightKm(origin, destination) * 1.3;
+      setState(() {
+        _routing = false;
+        _routeFailed = true;
+        _calculatedDistanceKm = km;
+        _distanceText = '~${km.toStringAsFixed(1)} km';
+        _durationText = null;
+        _polylines.clear();
+      });
+      _pushMapState();
+      await _fitCurrentRoute();
+      return;
+    }
+
+    {
+      final RouteResult route = result;
       final isDark = Theme.of(context).brightness == Brightness.dark;
       setState(() {
-        _calculatedDistanceKm = result.distanceMeters / 1000.0;
-        _distanceText = '${(result.distanceMeters / 1000.0).toStringAsFixed(1)} km';
-        _durationText = _fmtDuration(result.durationSeconds);
+        _routing = false;
+        _calculatedDistanceKm = route.distanceMeters / 1000.0;
+        _distanceText = '${(route.distanceMeters / 1000.0).toStringAsFixed(1)} km';
+        _durationText = _fmtDuration(route.durationSeconds);
 
         _polylines.clear();
         _polylines.addAll([
           Polyline(
             polylineId: const PolylineId('halo'),
-            points: result.points,
-            color: isDark ? Colors.white.withOpacity(0.85) : Colors.white.withOpacity(0.92),
+            points: route.points,
+            color: isDark ? Colors.white.withValues(alpha: 0.85) : Colors.white.withValues(alpha: 0.92),
             width: 10,
             startCap: Cap.roundCap,
             endCap: Cap.roundCap,
@@ -397,8 +464,8 @@ class _LogisticsMapPickerState extends State<LogisticsMapPicker> with TickerProv
           ),
           Polyline(
             polylineId: const PolylineId('core'),
-            points: result.points,
-            color: widget.rideType == 'dispatch' ? Colors.amber.shade700 : AppColors.primary,
+            points: route.points,
+            color: _kind.brandColor,
             width: 4,
             startCap: Cap.roundCap,
             endCap: Cap.roundCap,
@@ -479,13 +546,20 @@ class _LogisticsMapPickerState extends State<LogisticsMapPicker> with TickerProv
   Future<void> _selectSug(Suggestion s) async {
     HapticFeedback.selectionClick();
     _ensurePlacesSession();
+    // The active field can change while details load: bind to the one tapped.
+    // Recents tapped on the collapsed sheet always fill the drop-off.
+    final RoutePoint target = _expanded ? _pts[_activeIdx.clamp(0, _pts.length - 1)] : _pts.last;
     try {
       final det = await _auto.placeDetails(placeId: s.placeId, sessionToken: _placesSession, apiKey: ApiConstants.kGoogleApiKey);
-      if (det.latLng == null) return;
       if (!mounted) return;
+      if (det.latLng == null) {
+        showToastNotification(context: context, title: 'Place error', message: 'Could not read that location.', isSuccess: false);
+        return;
+      }
+      if (!_pts.contains(target)) return;
 
       setState(() {
-        _pts[_activeIdx]
+        target
           ..latLng = det.latLng
           ..placeId = s.placeId
           ..controller.text = s.mainText
@@ -497,12 +571,16 @@ class _LogisticsMapPickerState extends State<LogisticsMapPicker> with TickerProv
       _placesSession = '';
 
       if (_pts.first.latLng != null && _pts.last.latLng != null) {
-        await _drawRoute();
         _collapse();
+        await _drawRoute();
       } else {
         _focusNextUnfilled();
       }
-    } catch (_) {}
+    } catch (_) {
+      if (mounted) {
+        showToastNotification(context: context, title: 'Network error', message: 'Failed to load place details.', isSuccess: false);
+      }
+    }
   }
 
   void _focusNextUnfilled() {
@@ -518,26 +596,14 @@ class _LogisticsMapPickerState extends State<LogisticsMapPicker> with TickerProv
 
   void _addStop() {
     HapticFeedback.selectionClick();
-    if (_pts.length >= 6) {
-      showToastNotification(context: context, title: 'Limit Reached', message: 'Maximum stops allowed is 4.', isSuccess: false);
-      return;
-    }
-    final insertAt = (_pts.length - 1).clamp(1, _pts.length);
-    final stopFocus = FocusNode();
-    final stopCtl = TextEditingController();
-    stopFocus.addListener(() {
-      if (stopFocus.hasFocus) _onFocused(_indexOfFocus(stopFocus));
-    });
-
-    setState(() {
-      _pts.insert(insertAt, RoutePoint(type: PointType.stop, controller: stopCtl, focus: stopFocus, hint: 'Add stop'));
-      _activeIdx = insertAt;
-    });
-
-    _expand();
-    Future.delayed(const Duration(milliseconds: 40), () {
-      if (mounted) stopFocus.requestFocus();
-    });
+    // user_logistics.php books a single pickup -> drop-off leg; extra stops
+    // would be silently dropped (and not priced), so they are not offered.
+    showToastNotification(
+      context: context,
+      title: 'One drop-off per request',
+      message: 'Book a separate ${_kind.productName} request for each extra stop.',
+      isSuccess: false,
+    );
   }
 
   void _removeStop(int index) {
@@ -572,57 +638,60 @@ class _LogisticsMapPickerState extends State<LogisticsMapPicker> with TickerProv
     if (_pts.first.latLng != null && _pts.last.latLng != null) _drawRoute();
   }
 
-  void _triggerBookingSheet() {
-    if (_pts.first.latLng == null || _pts.last.latLng == null) return;
-    HapticFeedback.mediumImpact();
-    LogisticsBookingSheet.show(
-      context,
-      api: widget.api,
-      userId: widget.userId,
-      rideType: widget.rideType,
-      pickup: _pts.first.latLng!,
-      pickupText: _pts.first.controller.text,
-      dest: _pts.last.latLng!,
-      destText: _pts.last.controller.text,
-      distanceKm: _calculatedDistanceKm,
-      onSuccess: (String rideId, String? otp) {
-        if (otp != null) {
-          _showSecureOtpDialog(otp);
-        } else {
-          showToastNotification(context: context, title: 'Errand Booked', message: 'Connecting you to a rider...', isSuccess: true);
-          Navigator.pop(context); // Go back to Home / Tracking
-        }
-      },
-    );
-  }
+  LogisticsKind get _kind => LogisticsKindX.tryParse(widget.rideType) ?? LogisticsKind.sendMe;
 
-  void _showSecureOtpDialog(String otp) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    showDialog(
-        context: context, barrierDismissible: false,
-        builder: (_) => AlertDialog(
-          backgroundColor: isDark ? Theme.of(context).colorScheme.surface : Colors.white,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-          title: const Text('Delivery Confirmed!', style: TextStyle(fontWeight: FontWeight.w900)),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Text('Share this secure PIN with the recipient. The driver will ask for it upon arrival to release the package.', textAlign: TextAlign.center),
-              const SizedBox(height: 24),
-              Container(padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 16), decoration: BoxDecoration(color: AppColors.primary.withOpacity(0.1), borderRadius: BorderRadius.circular(16)), child: Text(otp, style: TextStyle(fontSize: 42, fontWeight: FontWeight.w900, color: AppColors.primary, letterSpacing: 12))),
-            ],
-          ),
-          actions: [
-            SizedBox(
-              width: double.infinity, height: 50,
-              child: ElevatedButton(
-                onPressed: () { Navigator.pop(context); Navigator.pop(context); },
-                style: ElevatedButton.styleFrom(backgroundColor: AppColors.primary, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
-                child: const Text('I HAVE SHARED IT', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-              ),
-            )
-          ],
-        )
+  Future<void> _triggerBookingSheet() async {
+    final pickup = _pts.first.latLng, dest = _pts.last.latLng;
+    if (pickup == null || dest == null || _sheetOpen || _routing) return;
+    if (_calculatedDistanceKm <= 0.02) {
+      showToastNotification(
+        context: context,
+        title: 'Check the route',
+        message: 'Pickup and drop-off are the same place.',
+        isSuccess: false,
+      );
+      return;
+    }
+    HapticFeedback.mediumImpact();
+    _sheetOpen = true;
+    String? bookedRideId;
+    String? bookedOtp;
+    try {
+      await LogisticsBookingSheet.show(
+        context,
+        api: widget.api,
+        userId: widget.userId,
+        rideType: _kind.wire,
+        pickup: pickup,
+        pickupText: _pts.first.controller.text.trim(),
+        dest: dest,
+        destText: _pts.last.controller.text.trim(),
+        distanceKm: _calculatedDistanceKm,
+        walletBalance: widget.walletBalance,
+        onSuccess: (String rideId, String? otp) {
+          bookedRideId = rideId;
+          bookedOtp = otp;
+        },
+      );
+    } finally {
+      _sheetOpen = false;
+    }
+    final String? rideId = bookedRideId;
+    if (rideId == null || !mounted) return;
+    Navigator.of(context).pushReplacement(
+      MaterialPageRoute<void>(
+        builder: (_) => LogisticsTrackingPage(
+          api: widget.api,
+          userId: widget.userId,
+          kind: _kind,
+          rideId: rideId,
+          deliveryOtp: bookedOtp,
+          pickup: pickup,
+          destination: dest,
+          pickupText: _pts.first.controller.text.trim(),
+          destinationText: _pts.last.controller.text.trim(),
+        ),
+      ),
     );
   }
 
@@ -632,7 +701,7 @@ class _LogisticsMapPickerState extends State<LogisticsMapPicker> with TickerProv
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
     final cs = theme.colorScheme;
-    final themeColor = widget.rideType == 'dispatch' ? Colors.amber.shade700 : AppColors.primary;
+    final themeColor = _kind.brandColor;
     final mq = MediaQuery.of(context);
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -681,7 +750,7 @@ class _LogisticsMapPickerState extends State<LogisticsMapPicker> with TickerProv
                     decoration: BoxDecoration(
                       color: isDark ? cs.surface : Colors.white,
                       shape: BoxShape.circle,
-                      boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.15), blurRadius: 10)],
+                      boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.15), blurRadius: 10)],
                     ),
                     child: Icon(Icons.arrow_back_rounded, color: isDark ? Colors.white : Colors.black, size: 20),
                   ),
@@ -704,7 +773,7 @@ class _LogisticsMapPickerState extends State<LogisticsMapPicker> with TickerProv
                       CameraUpdate.newCameraPosition(CameraPosition(target: ll, zoom: 17, tilt: 45)),
                     );
                   } else {
-                    await _fetchCurrentLocation();
+                    await _fetchCurrentLocation(userTriggered: true);
                   }
                 },
                 child: const Icon(Icons.my_location, color: Colors.white),
@@ -726,7 +795,7 @@ class _LogisticsMapPickerState extends State<LogisticsMapPicker> with TickerProv
                     borderRadius: BorderRadius.vertical(top: Radius.circular(uiScale.radius(32))),
                     boxShadow: [
                       BoxShadow(
-                        color: Colors.black.withOpacity(0.15),
+                        color: Colors.black.withValues(alpha: 0.15),
                         blurRadius: 30,
                         offset: const Offset(0, -10),
                       )
@@ -744,7 +813,7 @@ class _LogisticsMapPickerState extends State<LogisticsMapPicker> with TickerProv
                       _expand(); // Triggers overlay perfectly
                     },
                     onRecentTap: _selectSug,
-                    sheetTitle: widget.rideType == 'dispatch' ? 'Dispatch Routes' : 'Errand Routes',
+                    sheetTitle: _kind.isDispatch ? 'Dispatch Routes' : 'Errand Routes',
                     sheetSubtitle: 'Enter pickup and destination to calculate fare.',
                   )
                       : Column(
@@ -754,9 +823,9 @@ class _LogisticsMapPickerState extends State<LogisticsMapPicker> with TickerProv
                         children: [
                           Icon(Icons.straighten_rounded, size: 20, color: themeColor),
                           const SizedBox(width: 8),
-                          Text(_distanceText ?? '', style: const TextStyle(fontWeight: FontWeight.w800)),
+                          Text(_routing ? 'Calculating…' : (_distanceText ?? ''), style: const TextStyle(fontWeight: FontWeight.w800)),
                           const Spacer(),
-                          Text(_durationText ?? '', style: const TextStyle(fontWeight: FontWeight.w800)),
+                          Text(_routeFailed ? 'Approximate distance' : (_durationText ?? ''), style: const TextStyle(fontWeight: FontWeight.w800)),
                         ],
                       ),
                       const SizedBox(height: 12),
@@ -764,10 +833,10 @@ class _LogisticsMapPickerState extends State<LogisticsMapPicker> with TickerProv
                         width: double.infinity,
                         height: uiScale.inset(58),
                         child: ElevatedButton(
-                          onPressed: _triggerBookingSheet,
+                          onPressed: _routing ? null : _triggerBookingSheet,
                           style: ElevatedButton.styleFrom(
                             backgroundColor: themeColor,
-                            foregroundColor: widget.rideType == 'dispatch' ? Colors.black : Colors.white,
+                            foregroundColor: _kind.onBrandColor,
                             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(uiScale.radius(18))),
                           ),
                           child: Text('Continue to Details', style: TextStyle(fontSize: uiScale.font(15), fontWeight: FontWeight.w900)),
@@ -899,5 +968,3 @@ class _IsolatedLogisticsMapLayer extends StatelessWidget {
     );
   }
 }
-
-enum BearingSource { route, gps, compass }

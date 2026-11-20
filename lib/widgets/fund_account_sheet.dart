@@ -1,8 +1,8 @@
 // lib/widgets/fund_account_sheet.dart
 import 'dart:convert';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import '../api/api_client.dart';
 import '../api/url.dart';
@@ -68,7 +68,7 @@ class _FundAccountSheetState extends State<FundAccountSheet> {
 
       if (uid == null) throw Exception('User ID not found');
 
-      final api = ApiClient(http.Client(), context);
+      final api = ApiClient();
 
       final res = await api.request(
         ApiConstants.userInfoEndpoint,
@@ -77,7 +77,7 @@ class _FundAccountSheetState extends State<FundAccountSheet> {
       );
 
       final body = jsonDecode(res.body);
-      if (body['error'] == false && body['user'] != null) {
+      if (body is Map && body['error'] == false && body['user'] is Map) {
         final String newBalStr = body['user']['user_bal']?.toString() ?? '0.0';
         final String newLastTranStr = body['user']['user_last_tran']?.toString() ?? '';
 
@@ -110,7 +110,7 @@ class _FundAccountSheetState extends State<FundAccountSheet> {
         }
       }
     } catch (e) {
-      debugPrint('Refresh failed: $e');
+      if (kDebugMode) debugPrint('Refresh failed: ${e.runtimeType}');
     } finally {
       if (mounted) setState(() => _isRefreshing = false);
     }

@@ -275,6 +275,7 @@ class _TransactionReceiptState extends State<TransactionReceipt> {
       final img = await boundary.toImage(pixelRatio: 3.0);
       final bytes = await img.toByteData(format: ui.ImageByteFormat.png);
       if (bytes == null) throw Exception('No bytes');
+      if (!mounted) return;
 
       showToastNotification(
           context: context,

@@ -5,16 +5,17 @@ import 'dart:ui' show ImageFilter;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_svg/flutter_svg.dart';
-import 'package:http/http.dart' as http;
 
 import '../../api/api_client.dart';
 import '../../api/url.dart';
 import '../../routes/routes.dart';
 import '../../themes/app_theme.dart';
-import '../../utility/deviceInfoService.dart';
+import '../../utility/device_info_service.dart';
 import '../../utility/notification.dart';
 import '../../widgets/inner_background.dart';
+import '../../ui/legal_links.dart';
 import '../../ui/ui_scale.dart';
+import '../../utility/session_manager.dart';
 
 class RegistrationScreen extends StatefulWidget {
   const RegistrationScreen({super.key});
@@ -34,7 +35,7 @@ class _RegistrationScreenState extends State<RegistrationScreen>
   final _formKey = GlobalKey<FormState>();
   final _deviceInfo = DeviceInfoService();
 
-  late final ApiClient _api;
+  final ApiClient _api = ApiClient();
   late final AnimationController _logoController;
   late final Animation<double> _logoRotation;
 
@@ -63,7 +64,6 @@ class _RegistrationScreenState extends State<RegistrationScreen>
   @override
   void initState() {
     super.initState();
-    _api = ApiClient(http.Client(), context);
     _pass.addListener(_computeStrength);
 
     _logoController = AnimationController(
@@ -106,9 +106,6 @@ class _RegistrationScreenState extends State<RegistrationScreen>
       // Direct file name to prevent ApiConstants missing variable issues
       final res = await _api.request('get_countries.php', method: 'GET').timeout(const Duration(seconds: 15));
 
-      print('--- COUNTRY FETCH STATUS: ${res.statusCode} ---');
-      print('--- COUNTRY FETCH BODY: ${res.body} ---');
-
       if (res.statusCode == 200) {
         final body = jsonDecode(res.body);
 
@@ -122,17 +119,13 @@ class _RegistrationScreenState extends State<RegistrationScreen>
               orElse: () => _countries.first,
             );
           });
-          print('--- COUNTRIES SUCCESSFULLY LOADED FROM DB ---');
         } else {
-          print('--- FAILED TO LOAD FROM DB: ${body['message']} ---');
         }
       } else {
-        print('--- SERVER ERROR: ${res.statusCode} ---');
       }
     } catch (e) {
       // If the API fails (e.g. no internet, bad endpoint), do nothing.
       // The app will just continue to use the _fallbackCountries seamlessly.
-      print('--- EXCEPTION FETCHING COUNTRIES: $e ---');
     } finally {
       if (mounted) setState(() => _loadingCountries = false);
     }
@@ -179,6 +172,7 @@ class _RegistrationScreenState extends State<RegistrationScreen>
       return;
     }
 
+    if (_busy) return;
     setState(() => _busy = true);
     try {
       final device = await _deviceInfo.getDeviceInfo();
@@ -207,26 +201,43 @@ class _RegistrationScreenState extends State<RegistrationScreen>
       final body = jsonDecode(res.body);
 
       if (res.statusCode == 200 && body['error'] == false) {
+        final loginMsg = body['login_msg'] is Map
+            ? Map<String, dynamic>.from(body['login_msg'] as Map)
+            : <String, dynamic>{};
+        // Newer backends auto-login on registration (contract §2).
+        final autoLogin = (loginMsg['session_token'] ?? '').toString().isNotEmpty &&
+            (loginMsg['uid'] ?? '').toString().isNotEmpty;
+        if (autoLogin) {
+          await SessionManager.instance.persistLogin(loginMsg, isDriver: false);
+        }
         if (!mounted) return;
         showToastNotification(
           context: context,
           title: 'Success',
-          message: body['login_msg']?['title_msg_body'] ?? 'Account created',
+          message: (loginMsg['title_msg_body'] ?? 'Account created').toString(),
           isSuccess: true,
         );
-        Navigator.of(context).pushReplacementNamed(AppRoutes.login);
+        Navigator.of(context).pushReplacementNamed(autoLogin ? AppRoutes.set_user_pin : AppRoutes.login);
       } else {
         if (!mounted) return;
         showBannerNotification(
           context: context,
-          title: body['login_msg']?['title_msg'] ?? 'Registration failed',
-          message: body['login_msg']?['title_msg_body'] ?? 'Please try again.',
+          title: (body['login_msg']?['title_msg'] ?? 'Registration failed').toString(),
+          message: (body['login_msg']?['title_msg_body'] ?? body['message'] ?? 'Please try again.').toString(),
           isSuccess: false,
         );
       }
-    } catch (e) {
+    } on ApiException catch (e) {
       if (!mounted) return;
-      showToastNotification(context: context, title: 'Error', message: e.toString(), isSuccess: false);
+      showBannerNotification(context: context, title: 'Registration failed', message: e.message, isSuccess: false);
+    } catch (_) {
+      if (!mounted) return;
+      showToastNotification(
+        context: context,
+        title: 'Connection Error',
+        message: 'Please check your internet connection',
+        isSuccess: false,
+      );
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -525,6 +536,8 @@ class _RegistrationScreenState extends State<RegistrationScreen>
                   SizedBox(height: ui.gap(12)),
                   _fieldWrapper(ui, isDark, cs, _buildConfirmField(ui, isDark, cs)),
                   SizedBox(height: ui.gap(16)),
+                  const LegalConsentText(prefix: 'By creating an account, you agree to our '),
+                  SizedBox(height: ui.gap(12)),
                   _primaryGradientButton(ui, isDark, cs),
                   SizedBox(height: ui.gap(16)),
                   _loginLink(ui, isDark, cs),

@@ -10,7 +10,6 @@ import '../screens/authentication/forgotpassword_screen.dart';
 import '../screens/authentication/set_pin.dart';
 import '../screens/TransactionList.dart';
 import '../screens/profile.dart';
-import '../screens/home_page.dart'; // Keep this for direct access if ever needed
 
 // NEW
 import '../screens/main_navigation_screen.dart'; // <-- IMPORT THE NEW SHELL

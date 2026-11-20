@@ -5,7 +5,6 @@ import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../themes/app_theme.dart';
@@ -16,11 +15,6 @@ import '../../routes/routes.dart';
 import '../../widgets/inner_background.dart';
 import '../../ui/ui_scale.dart';
 
-// Added imports for correct home routing after PIN creation
-import '../../driver/driver_home_page.dart';
-import '../home_page.dart';
-
-import '../../screens/main_navigation_screen.dart'; // <-- IMPORT THE NEW SHELL
 
 
 class SetPinScreen extends StatefulWidget {
@@ -40,7 +34,7 @@ class _SetPinScreenState extends State<SetPinScreen>
   int _cursor = 0;
 
   // Services/state
-  late final ApiClient _api;
+  final ApiClient _api = ApiClient();
   bool _loading = false;
 
   // Animations (match authentication.dart)
@@ -55,7 +49,6 @@ class _SetPinScreenState extends State<SetPinScreen>
   @override
   void initState() {
     super.initState();
-    _api = ApiClient(http.Client(), context);
 
     // Setup animations to mirror AuthenticationScreen
     _dotController = AnimationController(
@@ -183,6 +176,7 @@ class _SetPinScreenState extends State<SetPinScreen>
 
   // API submit
   Future<void> _submitPin() async {
+    if (_loading) return;
     setState(() => _loading = true);
     try {
       final prefs = await SharedPreferences.getInstance();
@@ -195,11 +189,10 @@ class _SetPinScreenState extends State<SetPinScreen>
       );
 
       final body = jsonDecode(res.body);
-      if (res.statusCode == 200 && body['error'] == false) {
+      if (body is Map && body['error'] == false) {
+        // Only a flag is stored locally – never the PIN itself.
         await prefs.setString('user_pin', 'available');
-
-        // Check if they are a driver so we drop them in the correct screen
-        final isDriver = prefs.getBool('user_is_driver') ?? false;
+        if (!mounted) return;
 
         showToastNotification(
           context: context,
@@ -207,30 +200,28 @@ class _SetPinScreenState extends State<SetPinScreen>
           message: (body['message'] ?? 'PIN set successfully').toString(),
           isSuccess: true,
         );
-
-        if (!mounted) return;
-
-        // Push straight to the correct dashboard based on role
-        final route = MaterialPageRoute<void>(
-          builder: (_) => isDriver ? const MainNavigationScreen() : const MainNavigationScreen(), //const DriverHomePage() : const HomePage(),
-        );
-        Navigator.of(context).pushAndRemoveUntil(route, (_) => false);
-
+        // Riders and drivers share one shell that resolves the right home.
+        Navigator.of(context).pushNamedAndRemoveUntil(AppRoutes.home, (_) => false);
       } else {
+        if (!mounted) return;
         showToastNotification(
           context: context,
           title: 'Error',
-          message:
-          (body['message'] ?? 'Failed to set PIN. Please try again.').toString(),
+          message: (body is Map ? body['message'] : null)?.toString() ?? 'Failed to set PIN. Please try again.',
           isSuccess: false,
         );
         _resetAll();
       }
-    } catch (e) {
+    } on ApiException catch (e) {
+      if (!mounted || e.isAuthError) return;
+      showToastNotification(context: context, title: 'Error', message: e.message, isSuccess: false);
+      _resetAll();
+    } catch (_) {
+      if (!mounted) return;
       showToastNotification(
         context: context,
-        title: 'Error',
-        message: e.toString(),
+        title: 'Connection Error',
+        message: 'Please check your internet connection',
         isSuccess: false,
       );
       _resetAll();

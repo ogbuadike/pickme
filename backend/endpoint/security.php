@@ -594,7 +594,7 @@ function pm_app_key_valid(string $presented): bool
     if (!$configured) {
         static $warned = false;
         if (!$warned) {
-            pm_log('warning', 'APP_KEY_SHA256 not configured; falling back to legacy app key');
+            pm_log('warning', 'APP_KEY_SHA256 not configured; falling back to legacy app key', ['env_file' => pm_env_file_path(), 'env_file_readable' => is_readable(pm_env_file_path())]);
             $warned = true;
         }
         $configured = [hash('sha256', PM_LEGACY_APP_KEY_PLAIN)];

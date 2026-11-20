@@ -18,7 +18,7 @@ ServerSignature Off
 </FilesMatch>
 
 # 2) Public API endpoints and policy pages (keep in sync with backend/README.md).
-<FilesMatch "^(account_delete|become_driver|driver_hub|drivers_nearby|drivers_poll|drivers_update_location|get_countries|help_api|kyc_upgrade|logout|privacy|reset_pwd|ride_book|ride_cancel_booking|ride_complete_trip|ride_history|ride_offers|ride_start_trip|ride_status|send_token|set_pin|terms|transaction_history|user_info|user_login|user_logistics|user_register|user_settings|validate_pin|webhook)\.php$">
+<FilesMatch "^(account_delete|delete_account|become_driver|driver_hub|drivers_nearby|drivers_poll|drivers_update_location|get_countries|help_api|kyc_upgrade|logout|privacy|reset_pwd|ride_book|ride_cancel_booking|ride_complete_trip|ride_history|ride_offers|ride_start_trip|ride_status|send_token|set_pin|terms|transaction_history|user_info|user_login|user_logistics|user_register|user_settings|validate_pin|webhook)\.php$">
     Require all granted
 </FilesMatch>
 

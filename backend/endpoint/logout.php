@@ -4,7 +4,7 @@ declare(strict_types=1);
 /**
  * POST logout.php — revokes the current session (contract §6). Session required.
  * all=1      revoke every session of the user (all devices)
- * token=...  optional FCM device token to unbind from this account (stops pushes to this device)
+ * token=... / install_id=...  optional FCM token / app install to unbind from this account
  */
 
 require_once __DIR__ . '/security.php';
@@ -23,6 +23,10 @@ if ($all) {
 }
 
 $fcmToken = pm_clean_text($in['token'] ?? ($in['fcm_token'] ?? ''), 4096);
+$installId = pm_in_str($in, 'install_id', 64);
+if ($installId !== '') {
+    pm_exec('DELETE FROM app_users WHERE uid = ? AND install_id = ?', 'ss', [$uid, $installId]);
+}
 if ($fcmToken !== '') {
     pm_exec("UPDATE app_users SET uid = '' WHERE uid = ? AND u_token = ?", 'ss', [$uid, $fcmToken]);
 } elseif ($all) {

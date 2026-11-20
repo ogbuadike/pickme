@@ -232,11 +232,11 @@ function pm_account_delete(string $uid, string $password): array
         pm_fail('NOT_FOUND', 'Account not found.', 404);
     }
     if ($password === '') {
-        pm_fail('VALIDATION', 'Please confirm your password to delete your account.', 200);
+        pm_fail('VALIDATION', 'Please confirm your password to delete your account.', 422);
     }
     [$ok] = pm_password_check($password, (string)$user['pass_code']);
     if (!$ok) {
-        pm_fail('VALIDATION', 'Password is incorrect.', 200);
+        pm_fail('FORBIDDEN', 'Password is incorrect.', 403);
     }
 
     $driver = pm_driver_for_user($uid);
@@ -253,7 +253,7 @@ function pm_account_delete(string $uid, string $password): array
         array_merge([$driverId], PM_RIDE_ACTIVE_STATUSES)
     ) : null;
     if ($activeAsRider || $activeAsDriver) {
-        pm_fail('CONFLICT', 'Please finish or cancel your active trip before deleting your account.', 200);
+        pm_fail('CONFLICT', 'Please finish or cancel your active trip before deleting your account.', 409);
     }
 
     $files = [(string)$user['b_logo']];

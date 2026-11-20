@@ -53,7 +53,7 @@ class _RideHistoryScreenState extends State<RideHistoryScreen> {
   @override
   void initState() {
     super.initState();
-    _api = ApiClient(http.Client(), context);
+    _api = ApiClient();
     _initAndLoad();
   }
 
@@ -914,10 +914,12 @@ class _PremiumRideDetailSheetState extends State<_PremiumRideDetailSheet> {
       role: widget.isDriverMode ? TripNavigationRole.driver : TripNavigationRole.rider,
       tickEvery: const Duration(seconds: 2), routeMinGap: const Duration(seconds: 3),
       arrivalMeters: 150, routeMoveThresholdMeters: 15, autoFollowCamera: true,
-      showArrivedPickupButton: const {'accepted', 'driver_assigned', 'driver_arriving', 'enroute_pickup'}.contains(status),
-      showStartTripButton: status == 'arrived_pickup',
-      showArrivedDestinationButton: status == 'in_progress' || status == 'in_ride',
-      showCompleteTripButton: status == 'arrived_destination',
+      // TripNavigationPage gates every button by its live phase; freezing
+      // them from the status at push time hid buttons as the trip advanced.
+      showArrivedPickupButton: true,
+      showStartTripButton: true,
+      showArrivedDestinationButton: true,
+      showCompleteTripButton: true,
       showCancelButton: true, showMetaCard: true, enableLivePickupTracking: false, preserveStopOrder: true, autoCloseOnCancel: true,
     );
 

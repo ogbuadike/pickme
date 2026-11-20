@@ -114,6 +114,9 @@ function pm_log(string $level, string $message, array $context = []): void
 /** Sends a JSON payload and terminates. */
 function pm_json(array $payload, int $status = 200): void
 {
+    if (isset($GLOBALS['PM_IDEM']) && $status < 300 && empty($payload['error'])) {
+        pm_idempotency_store($payload, $status);
+    }
     if (!headers_sent()) {
         http_response_code($status);
         if (isset($GLOBALS['PM_SESSION']['expires_iso'])) {
@@ -358,6 +361,80 @@ function pm_input(): array
         }
     }
     return $in;
+}
+
+/**
+ * Client idempotency key: `Idempotency-Key` / `X-Idempotency-Key` header, or the
+ * `idempotency_key` / `client_request_id` / `request_id` param. '' when absent or malformed.
+ */
+function pm_idempotency_key(): string
+{
+    $k = pm_header('Idempotency-Key');
+    if ($k === '') {
+        $k = pm_header('X-Idempotency-Key');
+    }
+    if ($k === '') {
+        $in = pm_input();
+        foreach (['idempotency_key', 'client_request_id', 'request_id'] as $p) {
+            if (isset($in[$p]) && is_scalar($in[$p]) && trim((string)$in[$p]) !== '') {
+                $k = trim((string)$in[$p]);
+                break;
+            }
+        }
+    }
+    return preg_match('/^[A-Za-z0-9_\-:.]{8,64}$/', $k) ? $k : '';
+}
+
+/**
+ * Replays the stored response if ($uid, $scope, key) was already completed successfully (24 h window);
+ * otherwise arms pm_json() to store this request's successful response.
+ */
+function pm_idempotency_begin(string $uid, string $scope): void
+{
+    $key = pm_idempotency_key();
+    if ($key === '' || $uid === '') {
+        return;
+    }
+    try {
+        $row = pm_q_one(
+            'SELECT http_status, response FROM idempotency_keys
+             WHERE u_uid = ? AND scope = ? AND idem_key = ? AND created_at > DATE_SUB(UTC_TIMESTAMP(), INTERVAL 1 DAY) LIMIT 1',
+            'sss',
+            [$uid, $scope, $key]
+        );
+    } catch (mysqli_sql_exception $e) {
+        pm_log('warning', 'idempotency store unavailable', ['msg' => $e->getMessage()]);
+        return;
+    }
+    if ($row !== null) {
+        $payload = json_decode((string)$row['response'], true);
+        if (is_array($payload)) {
+            if (!headers_sent()) {
+                header('Idempotent-Replay: true');
+            }
+            $payload['idempotent_replay'] = true;
+            pm_json($payload, (int)$row['http_status']);
+        }
+    }
+    $GLOBALS['PM_IDEM'] = ['uid' => $uid, 'scope' => $scope, 'key' => $key];
+}
+
+function pm_idempotency_store(array $payload, int $status): void
+{
+    $idem = $GLOBALS['PM_IDEM'];
+    unset($GLOBALS['PM_IDEM']);
+    try {
+        pm_exec(
+            'INSERT IGNORE INTO idempotency_keys (u_uid, scope, idem_key, http_status, response, created_at) VALUES (?, ?, ?, ?, ?, UTC_TIMESTAMP())',
+            'sssis',
+            [$idem['uid'], $idem['scope'], $idem['key'], $status, (string)json_encode($payload, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE)]
+        );
+        if (random_int(1, 200) === 1) {
+            pm_exec('DELETE FROM idempotency_keys WHERE created_at < DATE_SUB(UTC_TIMESTAMP(), INTERVAL 2 DAY) LIMIT 1000');
+        }
+    } catch (Throwable $e) {
+        pm_log('warning', 'idempotency store failed', ['msg' => $e->getMessage()]);
+    }
 }
 
 function pm_client_ip(): string

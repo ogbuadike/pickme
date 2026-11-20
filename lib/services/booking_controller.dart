@@ -1323,7 +1323,7 @@ class BookingController {
 
   Future<void> _pollOnce() async {
     final String id = _s(_rideId);
-    if (id.isEmpty || _disposed || !_polling || _pollInFlight) return;
+    if (id.isEmpty || _disposed || !_polling || _pollInFlight || _backgrounded) return;
     _pollInFlight = true;
     final int gen = _generation;
     bool rateLimited = false;

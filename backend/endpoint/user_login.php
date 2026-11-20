@@ -3,7 +3,8 @@ declare(strict_types=1);
 
 /**
  * POST user_login.php — PUBLIC (app key only). Params: email (email or phone), password.
- * Success: login_msg contains the legacy profile fields + session_token + session_expires_at (contract §2).
+ * Success: login_msg contains the legacy profile fields + session_token + session_expires_at (contract §2)
+ *          + has_pin (bool: a transaction PIN is set).
  * Passwords: argon2id/bcrypt; legacy unsalted sha256 hashes are verified once and upgraded.
  * Rate limited per IP and per identifier.
  */
@@ -57,7 +58,7 @@ pm_rate_limit('login_ip', pm_client_ip(), 30, 300, 'Too many login attempts. Ple
 pm_rate_limit('login_id', $identKey, 8, 900, 'Too many login attempts for this account. Please wait 15 minutes or reset your password.');
 
 $candidates = pm_q_all(
-    'SELECT u_uid, fname, lname, oname, email, phone, pass_code, sta, Account_Name, Account_Number, Bank_Name, user_mode, u_type
+    'SELECT u_uid, fname, lname, oname, email, phone, pass_code, sta, Account_Name, Account_Number, Bank_Name, user_mode, u_type, access
      FROM unique_user_table
      WHERE email = ? OR phone = ?
      LIMIT 3',
@@ -123,6 +124,7 @@ pm_json([
         'driver_category'    => $driverMeta['driver_category'],
         'driver_car_plate'   => $driverMeta['driver_car_plate'],
         'post_login_home'    => $driverMeta['post_login_home'],
+        'has_pin'            => trim((string)$user['access']) !== '',
         'session_token'      => $session['session_token'],
         'session_expires_at' => $session['session_expires_at'],
     ],

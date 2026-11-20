@@ -4,7 +4,7 @@ declare(strict_types=1);
 /**
  * POST ride_book.php — rider books a specific driver (session required).
  * Identity: rider = session user (rider_id/uid/user_id params must match or 403).
- * Idempotency: optional X-Idempotency-Key header / idempotency_key param; a double-tap
+ * Idempotency: Idempotency-Key header (or client_request_id / idempotency_key param); a double-tap
  * for the same driver within 15 s returns the existing request instead of creating a new one.
  */
 
@@ -31,7 +31,7 @@ $seats       = pm_in_int($in, 'seats', 0, 0, 20);
 $tripKm      = max(0.0, pm_in_float($in, 'trip_km', 0.0));
 $rideType    = pm_in_enum($in, 'ride_type', ['street_ride', 'campus_ride', 'dispatch', 'send_me'], 'street_ride');
 $instructions = pm_in_str($in, 'instructions', 1000);
-$idemKey     = pm_clean_text(pm_header('X-Idempotency-Key') ?: ($in['idempotency_key'] ?? ''), 64);
+$idemKey     = pm_idempotency_key();
 
 [$pickupLat, $pickupLng] = ride_parse_latlng($in['pickup'] ?? null, $in['pickup_lat'] ?? null, $in['pickup_lng'] ?? null);
 [$destLat, $destLng] = ride_parse_latlng($in['destination'] ?? null, $in['destination_lat'] ?? null, $in['destination_lng'] ?? null);
@@ -73,6 +73,7 @@ if (!preg_match('/^[A-Z]{3}$/', $currency)) {
     $currency = 'NGN';
 }
 
+pm_idempotency_begin($riderId, 'ride_book');
 pm_rate_limit('ride_book', $riderId, 20, 600, 'Too many booking attempts. Please wait a moment.');
 pm_ride_expire_stale();
 

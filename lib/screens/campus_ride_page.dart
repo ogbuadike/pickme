@@ -477,7 +477,7 @@ class _CampusRidePageState extends State<CampusRidePage> with WidgetsBindingObse
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    _api = ApiClient(http.Client(), context);
+    _api = ApiClient();
     _auto = AutocompleteService(logger: _log);
     _rideMarketService = RideMarketService(api: _api, debug: false);
 
@@ -804,29 +804,14 @@ class _CampusRidePageState extends State<CampusRidePage> with WidgetsBindingObse
     } catch (_) {}
   }
 
+  /// Heading-aware location dot (anchor centre, flat, rotated by heading).
+  /// The old avatar pin rotated its label with the compass.
   Future<void> _createUserPinIcon() async {
     try {
-      final avatarUrl = _safeAvatarUrl(_user?['user_logo']?.toString());
-      ui.Image? loadedAvatarImage;
-
-      if (avatarUrl != null) {
-        try {
-          final resp = await http.get(Uri.parse(avatarUrl)).timeout(const Duration(seconds: 5));
-          if (resp.statusCode == 200) {
-            final codec = await ui.instantiateImageCodec(resp.bodyBytes);
-            final frame = await codec.getNextFrame();
-            loadedAvatarImage = frame.image;
-          }
-        } catch (_) {}
-      }
-
       if (!mounted) return;
-      final theme = Theme.of(context);
-      _userPinIcon = await MapGraphicsEngine.createPremiumAvatarPin(
-        avatarImage: loadedAvatarImage,
-        isDark: theme.brightness == Brightness.dark,
-        cs: theme.colorScheme,
-      );
+      final double dpr = MediaQuery.devicePixelRatioOf(context);
+      _userPinIcon = await MapGraphicsEngine.createUserLocationDot(devicePixelRatio: dpr, withHeading: true);
+      if (!mounted) return;
 
       if (_curPos != null) {
         _updateUserMarker(
@@ -877,7 +862,7 @@ class _CampusRidePageState extends State<CampusRidePage> with WidgetsBindingObse
     _lastUserMarkerRot = _userMarkerRotation;
 
     _markers.removeWhere((m) => m.markerId == _userMarkerId);
-    _markers.add(Marker(markerId: _userMarkerId, position: pos, icon: _userPinIcon!, anchor: const Offset(0.5, 1.0), flat: true, rotation: _userMarkerRotation, zIndex: 999));
+    _markers.add(Marker(markerId: _userMarkerId, position: pos, icon: _userPinIcon!, anchor: const Offset(0.5, 0.5), flat: true, rotation: _userMarkerRotation, zIndexInt: 999));
     _pushMapState();
   }
 

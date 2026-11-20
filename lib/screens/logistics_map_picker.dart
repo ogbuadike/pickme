@@ -227,11 +227,11 @@ class _LogisticsMapPickerState extends State<LogisticsMapPicker> with TickerProv
 
   Future<void> _createUserPinIcon() async {
     if (!mounted) return;
-    _userPinIcon = await MapGraphicsEngine.createPremiumAvatarPin(
-      avatarImage: null,
-      isDark: Theme.of(context).brightness == Brightness.dark,
-      cs: Theme.of(context).colorScheme,
+    _userPinIcon = await MapGraphicsEngine.createUserLocationDot(
+      devicePixelRatio: MediaQuery.devicePixelRatioOf(context),
+      withHeading: true,
     );
+    if (!mounted) return;
     if (_currentPosition != null) {
       _updateUserMarker(LatLng(_currentPosition!.latitude, _currentPosition!.longitude));
     }
@@ -249,7 +249,7 @@ class _LogisticsMapPickerState extends State<LogisticsMapPicker> with TickerProv
       anchor: const Offset(0.5, 0.5),
       flat: true,
       rotation: _userMarkerRotation,
-      zIndex: 999,
+      zIndexInt: 999,
     ));
     _pushMapState();
   }

@@ -54,12 +54,13 @@ switch ($action) {
         if (!pm_valid_lat($pickupLat) || !pm_valid_lng($pickupLng) || !pm_valid_lat($destLat) || !pm_valid_lng($destLng)) {
             lg_fail('Pickup and destination coordinates are required.');
         }
+        pm_idempotency_begin($uid, 'logistics_book');
         pm_rate_limit('logistics_book', $uid, 20, 600, 'Too many booking attempts. Please wait a moment.');
         $payMethod = pm_in_enum($in, 'pay_method', ['cash', 'wallet', 'card', 'transfer'], 'cash');
         $pickupText = pm_in_str($in, 'pickup_text', 255);
         $destText = pm_in_str($in, 'dest_text', 255);
         $deliveryOtp = pm_random_digits(4);
-        $idemKey = pm_clean_text(pm_header('X-Idempotency-Key') ?: ($in['idempotency_key'] ?? ''), 64);
+        $idemKey = pm_idempotency_key();
 
         if ($idemKey !== '') {
             $dup = pm_q_one('SELECT id, delivery_otp, ride_type FROM ride_rides WHERE rider_id = ? AND idempotency_key = ? LIMIT 1', 'ss', [$uid, $idemKey]);

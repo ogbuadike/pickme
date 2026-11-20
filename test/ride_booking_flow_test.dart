@@ -69,6 +69,9 @@ const RideOffer _offer = RideOffer(
 String _endpoint(http.Request r) => r.url.pathSegments.last;
 
 void main() {
+  const Timeout to = Timeout(Duration(seconds: 40));
+  // ignore: unused_local_variable
+  final Timeout unusedTo = to;
   group('RideStatusCode', () {
     test('normalizes backend aliases', () {
       expect(RideStatusCode.normalize('cancelled'), RideStatusCode.canceled);
@@ -81,7 +84,7 @@ void main() {
   });
 
   group('BookingController', () {
-    testWidgets('double tap books once, then tracks until completed', (WidgetTester tester) async {
+    testWidgets('double tap books once, then tracks until completed', timeout: to, (WidgetTester tester) async {
       final List<http.Request> log = <http.Request>[];
       int statusCalls = 0;
       final ApiClient api = _client((http.Request r) {
@@ -115,15 +118,20 @@ void main() {
       expect(books.single.bodyFields['pickup_lat'], startsWith('6.45'));
       expect(books.single.bodyFields['estimated_total'], '2500.00');
 
+      print('T1 pump1');
       await tester.pump(const Duration(seconds: 1)); // first poll -> accepted
+      print('T1 pump2');
       await tester.pump(const Duration(seconds: 3)); // second poll -> completed
+      print('T1 after pump2 $seen');
       expect(seen, containsAllInOrder(<BookingStatus>[
         BookingStatus.searching,
         BookingStatus.driverAssigned,
         BookingStatus.completed,
       ]));
       final int callsAtEnd = statusCalls;
+      print('T1 pump3');
       await tester.pump(const Duration(seconds: 30));
+      print('T1 cancel');
       expect(statusCalls, callsAtEnd, reason: 'polling stops on a terminal status');
       await sub.cancel();
       c.dispose();
@@ -215,7 +223,7 @@ void main() {
   });
 
   group('RideMarketService', () {
-    testWidgets('sends PHP array origin/destination and keeps data on a failed tick', (WidgetTester tester) async {
+    testWidgets('sends PHP array origin/destination and keeps data on a failed tick', timeout: to, (WidgetTester tester) async {
       final List<http.Request> log = <http.Request>[];
       int driverCalls = 0;
       final ApiClient api = _client((http.Request r) {
@@ -235,8 +243,11 @@ void main() {
           .stream(origin: const LatLng(6.45, 3.39), destination: const LatLng(6.6, 3.35))
           .listen(snaps.add);
       await tester.pump(const Duration(milliseconds: 100));
+      print('T5 a');
       await tester.pump(const Duration(seconds: 2));
+      print('T5 b');
       await tester.pump(const Duration(seconds: 5));
+      print('T5 c');
       final http.Request offers = log.firstWhere((http.Request r) => _endpoint(r) == 'ride_offers.php');
       expect(offers.bodyFields['origin[lat]'], '6.45');
       expect(offers.bodyFields['destination[lng]'], '3.35');
@@ -244,6 +255,7 @@ void main() {
       expect(snaps.every((RideMarketSnapshot s) => s.drivers.length == 1), isTrue,
           reason: 'a failed tick must not wipe the driver list');
       await sub.cancel();
+      print('T5 d');
       svc.dispose();
     });
   });

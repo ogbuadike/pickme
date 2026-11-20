@@ -91,6 +91,33 @@ CREATE TABLE IF NOT EXISTS `payment_events` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 
 -- -----------------------------------------------------------------------------
+-- 4b. Client idempotency keys (Idempotency-Key header / request_id / client_request_id):
+--     a repeated key for the same user+scope replays the stored success response (24 h).
+-- -----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS `idempotency_keys` (
+  `u_uid`       VARCHAR(64)  NOT NULL,
+  `scope`       VARCHAR(40)  CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  `idem_key`    VARCHAR(64)  CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  `http_status` SMALLINT UNSIGNED NOT NULL DEFAULT 200,
+  `response`    MEDIUMTEXT   NOT NULL,
+  `created_at`  DATETIME     NOT NULL,   -- UTC
+  PRIMARY KEY (`u_uid`, `scope`, `idem_key`),
+  KEY `idx_idempotency_keys_created` (`created_at`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+
+-- -----------------------------------------------------------------------------
+-- 4c. Driver declines (driver_hub action=decline_ride): a declined ride is never offered to
+--     that driver again.
+-- -----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS `ride_declines` (
+  `ride_id`    BIGINT(20) NOT NULL,
+  `driver_id`  INT(11)    NOT NULL,
+  `created_at` DATETIME   NOT NULL,
+  PRIMARY KEY (`ride_id`, `driver_id`),
+  KEY `idx_ride_declines_driver` (`driver_id`, `created_at`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+
+-- -----------------------------------------------------------------------------
 -- 5. User settings (previously created at runtime by user_settings.php).
 -- -----------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS `user_settings_table` (
@@ -144,7 +171,13 @@ ALTER TABLE `unique_account_table`
 ALTER TABLE `ride_rides`
   ADD COLUMN IF NOT EXISTS `delivery_otp_attempts` TINYINT UNSIGNED NOT NULL DEFAULT 0,
   ADD COLUMN IF NOT EXISTS `delivery_otp_verified_at` DATETIME NULL DEFAULT NULL,
-  ADD COLUMN IF NOT EXISTS `idempotency_key` VARCHAR(64) NULL DEFAULT NULL;
+  ADD COLUMN IF NOT EXISTS `idempotency_key` VARCHAR(64) NULL DEFAULT NULL,
+  ADD COLUMN IF NOT EXISTS `payload_reserved` TINYINT(1) NOT NULL DEFAULT 0;  -- parcel weight held on the driver
+
+-- Rides batched by the retired scan_dispatch_batch action already hold their weight on the driver.
+UPDATE `ride_rides` SET `payload_reserved` = 1
+ WHERE `batch_group_id` IS NOT NULL AND `package_weight` > 0 AND `delivery_otp_verified_at` IS NULL AND `payload_reserved` = 0
+   AND `status` IN ('searching','accepted','enroute_pickup','arrived_pickup','in_progress','arrived_destination','driver_assigned','in_ride');
 
 ALTER TABLE `ride_rides`
   ADD UNIQUE INDEX IF NOT EXISTS `uq_rr_rider_idem` (`rider_id`, `idempotency_key`),
@@ -167,6 +200,10 @@ ALTER TABLE `ride_rides`
 --    → range on lat, lng + updated_at evaluated from the index (ICP), then PK join to ride_drivers.
 -- -----------------------------------------------------------------------------
 ALTER TABLE `ride_driver_locations`
+  ADD COLUMN IF NOT EXISTS `speed` FLOAT NULL DEFAULT NULL,      -- m/s from the driver heartbeat
+  ADD COLUMN IF NOT EXISTS `accuracy` FLOAT NULL DEFAULT NULL;   -- metres, client-reported
+
+ALTER TABLE `ride_driver_locations`
   ADD INDEX IF NOT EXISTS `idx_rdl_bbox` (`lat`, `lng`, `updated_at`);
 
 ALTER TABLE `ride_driver_locations`
@@ -187,13 +224,16 @@ ALTER TABLE `ride_drivers`
 -- -----------------------------------------------------------------------------
 -- 11. app_users (FCM device registry): device fingerprint lookup + token lookup.
 -- -----------------------------------------------------------------------------
+--     Devices are keyed by (install_id, uid) — see send_token.php.
 ALTER TABLE `app_users`
-  ADD COLUMN IF NOT EXISTS `device_hash` CHAR(64) NULL DEFAULT NULL;
+  ADD COLUMN IF NOT EXISTS `device_hash` CHAR(64) NULL DEFAULT NULL,
+  ADD COLUMN IF NOT EXISTS `install_id` VARCHAR(64) NULL DEFAULT NULL;
 
 UPDATE `app_users` SET `device_hash` = SHA2(`device_info`, 256) WHERE `device_hash` IS NULL;
 
 ALTER TABLE `app_users`
   ADD INDEX IF NOT EXISTS `idx_app_users_device_hash` (`device_hash`),
+  ADD INDEX IF NOT EXISTS `idx_app_users_install` (`install_id`, `uid`),
   ADD INDEX IF NOT EXISTS `idx_app_users_token` (`u_token`(255));
 
 -- -----------------------------------------------------------------------------

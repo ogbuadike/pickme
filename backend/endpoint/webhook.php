@@ -57,7 +57,7 @@ if ($flwKey === '') {
     pm_log('error', 'webhook: FLW_SECRET_KEY not configured');
     pm_error('SERVER', 'Verification unavailable', 503);
 }
-$ch = curl_init('https://api.flutterwave.com/v3/transactions/' . rawurlencode($txId) . '/verify');
+$ch = curl_init(rtrim(pm_env('FLW_API_BASE', 'https://api.flutterwave.com'), '/') . '/v3/transactions/' . rawurlencode($txId) . '/verify');
 curl_setopt_array($ch, [
     CURLOPT_RETURNTRANSFER => true,
     CURLOPT_CONNECTTIMEOUT => 5,

@@ -1,0 +1,23 @@
+# Secrets — never commit
+.env
+.env.*
+.required/
+*.pem
+*service-account*.json
+*firebase-adminsdk*.json
+endpoint/fcm_vendor/
+
+# Logs
+*.log
+error_log
+error_log.txt
+endpoint/error_log.txt
+
+# User uploads (live data / PII)
+endpoint/uploads/
+endpoint/img/users/
+endpoint/img/kyc/
+
+# Local tooling
+vendor/
+.DS_Store

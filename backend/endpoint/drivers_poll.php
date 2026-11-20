@@ -36,6 +36,7 @@ $sql = "SELECT d.id, d.name, d.category, d.rating, d.car_plate, l.lat, l.lng, l.
         FROM ride_driver_locations l
         JOIN ride_drivers d ON d.id = l.driver_id
         WHERE l.updated_at > ?
+          AND l.updated_at > NOW() - INTERVAL 90 SECOND
           AND d.is_online = 1
           AND l.lat <> 0 AND l.lng <> 0";
 $types = 's';

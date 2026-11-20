@@ -11,7 +11,7 @@ declare(strict_types=1);
 require_once __DIR__ . '/security.php';
 
 const OFFERS_MAX_RADIUS_KM = 50.0;
-const OFFERS_FRESH_MIN = 15;
+const OFFERS_FRESH_SEC = 90; // no ghost cars
 
 pm_require_session(['offers' => []]);
 $in = pm_input();
@@ -41,7 +41,8 @@ $rows = pm_q_all(
         FROM ride_driver_locations l
         JOIN ride_drivers d ON d.id = l.driver_id
         WHERE l.lat BETWEEN ? AND ? AND l.lng BETWEEN ? AND ?
-          AND l.updated_at >= NOW() - INTERVAL ' . OFFERS_FRESH_MIN . ' MINUTE
+          AND l.updated_at > NOW() - INTERVAL ' . OFFERS_FRESH_SEC . ' SECOND
+          AND l.lat <> 0 AND l.lng <> 0
           AND d.is_online = 1
           AND NOT EXISTS (SELECT 1 FROM ride_rides rr WHERE rr.driver_id = d.id AND rr.status IN (' . pm_in_placeholders($active) . '))
      ) x

@@ -26,12 +26,17 @@ if ((int)$driver['is_online'] !== 1) {
     ride_json(['error' => false, 'message' => 'ignored: driver offline'], 200);
 }
 
+pm_rate_limit('driver_location', (string)$driverId, 60, 60, 'Location updates are too frequent.');
+$speed = isset($in['speed']) ? min(max(pm_in_float($in, 'speed', 0.0), 0.0), 100.0) : null;
+$accuracy = isset($in['accuracy']) ? min(max(pm_in_float($in, 'accuracy', 0.0), 0.0), 10000.0) : null;
+
 pm_exec(
-    'INSERT INTO ride_driver_locations (driver_id, lat, lng, heading)
-     VALUES (?, ?, ?, ?)
-     ON DUPLICATE KEY UPDATE lat = VALUES(lat), lng = VALUES(lng), heading = VALUES(heading), updated_at = CURRENT_TIMESTAMP()',
-    'iddd',
-    [$driverId, $lat, $lng, $heading]
+    'INSERT INTO ride_driver_locations (driver_id, lat, lng, heading, speed, accuracy)
+     VALUES (?, ?, ?, ?, ?, ?)
+     ON DUPLICATE KEY UPDATE lat = VALUES(lat), lng = VALUES(lng), heading = VALUES(heading),
+                             speed = VALUES(speed), accuracy = VALUES(accuracy), updated_at = CURRENT_TIMESTAMP()',
+    'iddddd',
+    [$driverId, $lat, $lng, $heading, $speed, $accuracy]
 );
 
 ride_json(['error' => false, 'message' => 'ok'], 200);

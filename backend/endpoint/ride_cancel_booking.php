@@ -39,11 +39,12 @@ $result = pm_tx(function () use ($rideId, $uid, $asRider, $driverRow, $reason) {
     if ($t['changed']) {
         $driverId = (int)($locked['driver_id'] ?? 0);
         $weight = (float)($locked['package_weight'] ?? 0);
-        if ($driverId > 0 && $weight > 0 && !empty($locked['batch_group_id']) && empty($locked['delivery_otp_verified_at'])) {
+        // Release reserved parcel capacity exactly once (payload_reserved flag).
+        if ($driverId > 0 && $weight > 0 && pm_exec('UPDATE ride_rides SET payload_reserved = 0 WHERE id = ? AND payload_reserved = 1', 'i', [$rideId]) === 1) {
             pm_exec('UPDATE ride_drivers SET current_payload_weight = GREATEST(0, current_payload_weight - ?) WHERE id = ?', 'di', [$weight, $driverId]);
         }
         if ($driverId > 0 && in_array(ride_norm_status((string)$locked['status']), PM_RIDE_ACTIVE_STATUSES, true)) {
-            pm_exec("UPDATE ride_driver_locations SET phase = 'idle', updated_at = CURRENT_TIMESTAMP WHERE driver_id = ?", 'i', [$driverId]);
+            pm_exec("UPDATE ride_driver_locations SET phase = 'idle', updated_at = updated_at WHERE driver_id = ?", 'i', [$driverId]);
         }
     }
     return $t;

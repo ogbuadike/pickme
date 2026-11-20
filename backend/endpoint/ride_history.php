@@ -43,7 +43,7 @@ function formatRideData(array $row, string $viewRole): array
     }
     $otp = trim((string)($row['delivery_otp'] ?? ''));
     // Drivers must obtain the code from the recipient; they only learn that one is required.
-    $otpOut = $viewRole === 'rider' ? $otp : ($otp !== '' ? '****' : '');
+    $otpOut = $viewRole === 'rider' ? $otp : '';
     $isOpen = in_array($status, ['accepted', 'enroute_pickup', 'arrived_pickup', 'in_progress', 'arrived_destination'], true);
 
     return [
@@ -76,6 +76,8 @@ function formatRideData(array $row, string $viewRole): array
         'peer_rating'       => (float)($row['peer_rating'] ?? 0),
         'peer_avatar'       => $peerAvatar !== '' ? $peerAvatar : $defaultLogo,
         'delivery_otp'      => $otpOut,
+        'requires_otp'      => $otp !== '',
+        'otp_verified'      => !empty($row['delivery_otp_verified_at']),
         'instructions'      => (string)($row['instructions'] ?? ''),
         'package_size'      => (string)($row['package_size'] ?? ''),
         'package_weight'    => (float)($row['package_weight'] ?? 0),

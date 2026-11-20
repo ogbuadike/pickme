@@ -14,7 +14,7 @@ require_once __DIR__ . '/security.php';
 
 const SEARCH_RADIUS_KM = 50.0;
 const EARTH_RADIUS_KM  = 6371.0;
-const DRIVER_LOCATION_FRESH_MIN = 15;
+const DRIVER_LOCATION_FRESH_SEC = 90; // no ghost cars
 
 $uid = pm_require_session(['drivers' => []]);
 $in = pm_input();
@@ -48,7 +48,8 @@ SELECT * FROM (
     INNER JOIN ride_drivers d ON d.id = l.driver_id
     WHERE l.lat BETWEEN ? AND ?
       AND l.lng BETWEEN ? AND ?
-      AND l.updated_at >= NOW() - INTERVAL " . DRIVER_LOCATION_FRESH_MIN . " MINUTE
+      AND l.updated_at > NOW() - INTERVAL " . DRIVER_LOCATION_FRESH_SEC . " SECOND
+      AND l.lat <> 0 AND l.lng <> 0
       AND d.is_online = 1
       AND FIND_IN_SET(?, IFNULL(d.allowed_ride_types, 'street_ride')) > 0
       AND NOT EXISTS (

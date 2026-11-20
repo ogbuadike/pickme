@@ -10,7 +10,7 @@ declare(strict_types=1);
 
 require_once __DIR__ . '/ride_api_bootstrap.php';
 
-const START_TRIP_MAX_METERS = 150.0;
+const START_TRIP_MAX_METERS = 200.0;          // unified with driver_hub ARRIVAL_RADIUS_METERS
 const DRIVER_FIX_MAX_AGE_SEC = 180;
 
 pm_require_method('POST');
@@ -40,8 +40,12 @@ if ($driverId <= 0) {
 
 $clientLat = pm_in_float($in, 'lat', 0.0);
 $clientLng = pm_in_float($in, 'lng', 0.0);
-$clientAccuracy = min(max(pm_in_float($in, 'accuracy', 15.0), 0.0), 150.0);
+$clientAccuracy = min(max(pm_in_float($in, 'accuracy', 15.0), 0.0), 50.0); // capped compensation
 
+$clientSent = trim((string)($in['lat'] ?? '')) !== '' || trim((string)($in['lng'] ?? '')) !== '';
+if ($asDriver && $clientSent && (!pm_valid_lat($clientLat) || !pm_valid_lng($clientLng))) {
+    pm_error('VALIDATION', 'Latitude and longitude are invalid.', 422);
+}
 if ($asDriver && pm_valid_lat($clientLat) && pm_valid_lng($clientLng)) {
     $driverLat = $clientLat;
     $driverLng = $clientLng;
@@ -71,7 +75,7 @@ if ($metersToPickup > $effectiveRadius) {
 
 pm_tx(function () use ($rideId, $driverId) {
     pm_ride_transition($rideId, 'rider_start_trip', 'driver_id', $driverId, ', started_at = IFNULL(started_at, NOW())');
-    pm_exec("UPDATE ride_driver_locations SET phase = 'enroute_destination', updated_at = CURRENT_TIMESTAMP WHERE driver_id = ?", 'i', [$driverId]);
+    pm_exec("UPDATE ride_driver_locations SET phase = 'enroute_destination', updated_at = updated_at WHERE driver_id = ?", 'i', [$driverId]);
 });
 
 ride_json(['error' => false, 'message' => 'Trip started.', 'data' => ['distance_m' => $metersToPickup], 'status' => 'in_progress'], 200);

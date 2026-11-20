@@ -608,7 +608,18 @@ function pm_app_key_valid(string $presented): bool
 
 function pm_require_app_key(array $extra = []): void
 {
-    if (!pm_app_key_valid(pm_header('Authorization'))) {
+    $presented = pm_header('Authorization');
+    if (!pm_app_key_valid($presented)) {
+        // Diagnostics without leaking secrets: lengths + 6-char prefixes only.
+        $cfg = array_values(array_filter(array_map(static fn($k) => strtolower(trim($k)), explode(',', pm_env('APP_KEY_SHA256')))));
+        pm_log('warning', 'app key rejected', [
+            'header_present'   => $presented !== '',
+            'header_len'       => strlen($presented),
+            'header_prefix'    => substr(strtolower($presented), 0, 6),
+            'configured_count' => count($cfg),
+            'configured'       => array_map(static fn($k) => substr($k, 0, 6) . '…(' . strlen($k) . ')', $cfg),
+            'env_file'         => pm_env_file_path(),
+        ]);
         pm_error('UNAUTHORIZED', 'Unauthorized access', 401, $extra + ['data' => null]);
     }
 }

@@ -61,7 +61,13 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'OPTIONS') {
     exit;
 }
 
-require_once __DIR__ . '/../unique/unique_con.php'; // $dbconn (mysqli, strict error reporting)
+// Shared includes ship inside endpoint/unique (preferred, self-contained deploy).
+// Falls back to a sibling ../unique for older layouts. The bundled copy wins so a
+// stale legacy ../unique (used by other sites on the same host) is never loaded.
+if (!defined('PM_UNIQUE_DIR')) {
+    define('PM_UNIQUE_DIR', is_file(__DIR__ . '/unique/unique_1.php') ? __DIR__ . '/unique' : __DIR__ . '/../unique');
+}
+require_once PM_UNIQUE_DIR . '/unique_con.php'; // $dbconn (mysqli, strict error reporting)
 
 final class PmHttpError extends RuntimeException
 {

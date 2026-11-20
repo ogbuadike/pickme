@@ -79,7 +79,7 @@ For CLI/cron set `PICKME_ENV_FILE=/abs/path/.env`. Real environment variables ar
      Ufitpay key/token, the SMTP passwords that were in `unique/mail/index.php` and
      `unique/mail/_Email_sender/index.php`, the Firebase service-account key, the Flutterwave keys, and set a
      new `FLW_SECRET_HASH` in the Flutterwave dashboard.
-4. **Upload code**: replace `endpoint/` and `unique/` and include the `.htaccess` files. Make sure files deleted in
+4. **Upload code**: the endpoints look for their shared files in `endpoint/unique/` first and fall back to a sibling `unique/`. The simplest deploy is the zip layout: upload `endpoint/` with `unique/` inside it, so a legacy `public_html/unique/` used by other sites is never touched. Otherwise replace `endpoint/` and `unique/` and include the `.htaccess` files. Make sure files deleted in
    this release are removed on the server too (an rsync without `--delete` leaves them reachable):
    `endpoint/domain_ip.php`, `endpoint/3third_party_req.php`, `endpoint/fbfcm.php`, `endpoint/fbcfcm2.php`,
    `unique/unique_func.php`, `unique/unique_all_pg.php`, `unique/unique_plugin.php`, `unique/unique_code.php`,

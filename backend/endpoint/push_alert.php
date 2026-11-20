@@ -12,7 +12,7 @@ if (isset($_SERVER['SCRIPT_FILENAME']) && realpath((string)$_SERVER['SCRIPT_FILE
 }
 
 require_once __DIR__ . '/security.php';
-require_once __DIR__ . '/../unique/pm_fcm.php';
+require_once (defined('PM_UNIQUE_DIR') ? PM_UNIQUE_DIR : (is_file(__DIR__ . '/unique/unique_1.php') ? __DIR__ . '/unique' : __DIR__ . '/../unique')) . '/pm_fcm.php';
 
 /**
  * Credit alert to every device of $uid. Payload keys are unchanged from the

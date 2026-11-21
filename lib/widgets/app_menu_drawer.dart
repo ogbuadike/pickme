@@ -240,7 +240,9 @@ class _AppMenuDrawerState extends State<AppMenuDrawer>
 
     // Extract user data
     final avatarUrl = _safeAvatar(widget.user?['user_logo'] as String?);
-    final name = widget.user?['user_lname'] ?? widget.user?['user_name'] ?? 'User';
+    final name = [widget.user?['user_fname'], widget.user?['user_lname'], widget.user?['user_name']]
+        .map((v) => (v ?? '').toString().trim())
+        .firstWhere((v) => v.isNotEmpty, orElse: () => 'User');
     final email = (widget.user?['user_email'] as String?) ?? '';
 
     // Determine the balance to show (Live overridden value, or initial passed value)

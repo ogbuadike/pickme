@@ -1702,7 +1702,15 @@ class _CampusRidePageState extends State<CampusRidePage> with WidgetsBindingObse
                 _mapController = c;
                 _scheduleMapPaddingUpdate();
                 _lastCamTarget = _initialCam.target;
-                if (_routePts.isNotEmpty) Future.delayed(const Duration(milliseconds: 80), () => _fitCurrentRouteToViewportV2(waitForLayout: false));
+                if (_routePts.isNotEmpty) {
+                  Future.delayed(const Duration(milliseconds: 80), () => _fitCurrentRouteToViewportV2(waitForLayout: false));
+                } else if (_curPos != null) {
+                  // The first GPS fix often arrives before the map exists; centre on
+                  // it now instead of leaving the camera on the default campus.
+                  final here = LatLng(_curPos!.latitude, _curPos!.longitude);
+                  _lastCamTarget = here;
+                  c.moveCamera(CameraUpdate.newLatLngZoom(here, 16.5)).catchError((_) {});
+                }
               },
               onCameraMove: (pos) => _lastCamTarget = pos.target,
               onTap: (_) => _collapse(),

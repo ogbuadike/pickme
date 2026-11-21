@@ -219,8 +219,11 @@ class _HeaderBarState extends State<HeaderBar>
     final isDark = theme.brightness == Brightness.dark;
     final cs     = theme.colorScheme;
 
-    final name      = (widget.user?['user_lname'] ??
-        widget.user?['user_name'] ?? 'Rider').toString();
+    // Greet by first name; fall back to surname, then the display name.
+    String pick(Object? v) => (v ?? '').toString().trim();
+    final name = [widget.user?['user_fname'], widget.user?['user_lname'], widget.user?['user_name']]
+        .map(pick)
+        .firstWhere((v) => v.isNotEmpty, orElse: () => 'Rider');
     final avatarUrl = _safeAvatarUrl(widget.user?['user_logo'] as String?);
 
     final textColor = isDark ? cs.onSurface       : AppColors.textPrimary;

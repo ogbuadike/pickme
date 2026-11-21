@@ -210,15 +210,9 @@ class _PickMeLogo extends StatelessWidget {
     );
 
     return Image.asset(
-      'images/pickme.png',
+      'image/pickme.png',
       fit: BoxFit.contain,
-      errorBuilder: (_, __, ___) {
-        return Image.asset(
-          'image/pickme.png',
-          fit: BoxFit.contain,
-          errorBuilder: (_, __, ___) => fallbackBox(Icons.directions_car_filled_rounded),
-        );
-      },
+      errorBuilder: (_, __, ___) => fallbackBox(Icons.directions_car_filled_rounded),
       cacheWidth: (size * 2).round(),
       cacheHeight: (size * 2).round(),
       filterQuality: FilterQuality.medium,
